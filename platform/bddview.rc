@@ -1,0 +1,4 @@
+// bddview Windows resource file
+#include <windows.h>
+
+MAIN_ICON ICON "assets\\appicon.ico"

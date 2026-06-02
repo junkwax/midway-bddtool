@@ -1,12 +1,55 @@
 # midway-bddtool
 
-Viewer and editor for Midway arcade game background and sprite data.
-Loads `.BDB` object placement lists and `.BDD` image containers and renders
-the full world layout using SDL2.
+`midway-bddtool` is a cross-platform viewer, editor, and research tool for
+Midway BDB/BDD background data. It focuses on background layout, palette use,
+block-image editing, and MK2-style LOAD2 authoring checks.
 
-Tested against *Mortal Kombat* and *Mortal Kombat II* background data.
+![midway-bddtool screenshot](screenshot.jpg)
 
----
+This public repository contains code, documentation, and the README screenshot
+only. It intentionally does not include ROMs, proprietary game assets, stock
+BDB/BDD files, IMG libraries, MAME nvram/cfg state, generated stage proofs, or
+private source drops. Use your own legally obtained assets and keep local
+working material in ignored folders such as `.local-private/`, `tmp/`, or
+`reference/`.
+
+## Highlights
+
+- SDL2 background viewer with zoom, pan, game-preview layout, minimap, rulers,
+  grids, object labels, layer filters, and composite PNG export.
+- ImGui editor for BDB object placement, BDD images, palettes, module bounds,
+  notes, ordering, copy/paste, undo/redo, and safe save backups.
+- PNG and paletted TGA import/export, batch import, pixel editing with
+  contrast backdrops, palette editing, thumbnail browsing, static-background
+  placement, and unused-image cleanup.
+- Midway IMG import from user-supplied `.IMG` files, folders, or LOAD2 `.LOD`
+  lists, including frame metadata and anipoints persisted in sidecar metadata.
+- MK2 authoring helpers for LOAD2-style module validation, X-major ordering,
+  stage readiness, ROM-space budgeting, dormant asset inspection, palette
+  analysis, and over-allocation relief suggestions.
+- Headless smoke commands for BDB/BDD round-trips, generated proof stages, IMG
+  import, LOD import, and open-mode checks.
+
+## Public Asset Policy
+
+Do not commit:
+
+- ROM zips, split ROM chips, or generated program/video/sound ROM products.
+- Stock or extracted game assets: `.BDB`, `.BDD`, `.IMG`, `.LOD`, `.IRW`,
+  `.ROM`, `.SND`, `.CMP`, frame/header dumps, and similar files.
+- MAME `cfg`, `nvram`, additional screenshots, capture output, or local proof
+  bundles.
+- Private stage art, PSDs, generated composites, or experiment snapshots.
+- Decompiled/source-drop material from external game toolchains.
+
+The repo keeps `.local-private/` ignored for quarantine and local-only work.
+The `reference/` tree is also ignored except for short placeholder notes, so
+you can recreate private stage kits and captures there without publishing them.
+`screenshot.jpg` is the only checked-in JPG and exists as README/release media.
+
+Important: removing files in a new commit does not erase them from earlier Git
+history. Before pushing this repository to a public remote, publish from a
+history-scrubbed branch or a fresh export that never contained private assets.
 
 ## Building
 
@@ -19,281 +62,85 @@ cmake --build build
 ./build/bddview <file.BDB>
 ```
 
-### Windows (VS 2022)
+### macOS
 
-Run from a normal `cmd` or PowerShell window — no Developer Prompt needed:
+```bash
+brew install sdl2 cmake
+cmake -B build -DSDL2_DIR=$(brew --prefix sdl2)/cmake
+cmake --build build
+./build/bddview <file.BDB>
+```
+
+### Windows
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-The script will:
-1. Locate VS 2022 (Community, Professional, Enterprise, or BuildTools)
-2. Auto-download the latest SDL2 2.x VC dev package from GitHub
-3. Configure and build an x64 Release via CMake
-4. Copy `SDL2.dll` next to `bddview.exe`
+The Windows helper downloads SDL2 into the local build cache when needed and
+writes the release executable under `%LOCALAPPDATA%\bddview-build\`.
 
-Output: `%LOCALAPPDATA%\bddview-build\build\Release\bddview.exe`
+## Releases
 
-> **Note:** The *C++ CMake tools for Windows* component must be installed in VS,
-> or `cmake` must be on your `PATH`. If it is missing, open the VS Installer,
-> go to **Individual Components**, and install **C++ CMake tools for Windows**.
-
----
+Tagged releases are built by GitHub Actions. Pushing a `v*` tag publishes a
+GitHub release with zip packages for Linux and macOS.
 
 ## Usage
 
-```
-bddview <file.BDB>    # world layout view (auto-loads matching .BDD)
-bddview <file.BDD>    # image grid / palette browser
-```
-
-Files can also be **drag-and-dropped** onto the window to reload.
-
----
-
-## Controls
-
-### Navigation
-
-| Input | Action |
-|---|---|
-| Arrow keys | Scroll |
-| Left-drag | Scroll |
-| Scroll wheel | Zoom in / out |
-| `+` / `-` | Zoom in / out |
-| `Home` | Reset view and zoom |
-| `Esc` | Quit (or dismiss active popup/mode) |
-
-### Toggles
-
-| Key | Toggle |
-|---|---|
-| `Shift+T` | Grid overlay |
-| `Shift+B` | Sprite border highlights |
-| `Shift+O` | All objects (hide/show sprites) |
-
-### Editing
-
-| Input | Action |
-|---|---|
-| `Ctrl` + left-drag | Move the topmost object under the cursor |
-| `Z` | Toggle horizontal flip on last moved/placed object |
-| `X` | Toggle vertical flip on last moved/placed object |
-| `Ctrl` + scroll wheel | Adjust parallax layer (`wx` high byte) of last object |
-| `Ctrl+S` | Save BDB (shows confirmation popup) |
-| `Tab` | Open / close object picker |
-| `Ctrl+L` | Import a TGA file as a new sprite |
-
-When an object is dragged and released, its updated `depth` and `sy`
-coordinates are printed to stderr. `Z` / `X` also update the `wx` field so
-the flip is preserved on save.
-
-#### Save confirmation popup
-
-Pressing `Ctrl+S` opens a centered popup:
-
-```
-Save changes to:
-C:\tool\CHEMLAB.BDB
-
-Y = save    N = cancel
+```text
+bddview
+bddview <file.BDB>
+bddview <file.BDD>
+bddview --check-open-mode FILE [game-preview|image-grid]
+bddview --roundtrip-save FILE OUT_PREFIX
+bddview --import-png-smoke FILE.PNG OUT_PREFIX
+bddview --import-img-smoke FILE.IMG OUT_PREFIX
+bddview --import-img-folder-smoke DIR OUT_PREFIX
+bddview --import-lod-smoke FILE.LOD OUT_PREFIX
+bddview --write-bg-proof BGPROF
+bddview --write-checker-test CHECKER
+bddtool validate FILE.BDB [FILE.BDD]
+python tools/roundtrip_smoke.py
 ```
 
-- **`Y`** — backs up the original file as `<name>.BDB.BAK`, then overwrites it
-- **`N`** or **`Esc`** — cancels without saving
+Opening a `.BDB` automatically loads the matching `.BDD` when present. Opening
+a standalone `.BDD` shows an image-grid workflow unless a companion `.BDB`
+exists. Saves create backups before overwriting the active BDB/BDD pair.
 
-#### Object picker (Tab)
+The generated `BGPROF` and checker commands create synthetic test data. They
+are useful for validating format handling without shipping proprietary assets.
 
-Opens a scrollable panel on the right side of the screen listing every image
-loaded from the BDD file.
+## Working With User-Supplied MK2 Data
 
-- **Scroll wheel** — scroll through the list
-- **Click an image** — closes the picker; the sprite follows the cursor as a
-  semi-transparent ghost
-- **Left click in the world** — places the object at that position
-  (default layer `wx=0x4100`)
-- **Right click** or **`Esc`** — cancel placement
+Advanced MK2 workflows require an external, legally obtained local toolchain
+and data set. Keep those files outside the repo or under ignored local paths.
 
-#### TGA import (Ctrl+L)
+The MK2 workflow panels can:
 
-Imports an 8-bit paletted TGA file as a new sprite and appends it (plus its
-palette) to the BDD file.
+- import sprites from local IMG libraries or LOD manifests;
+- validate BDB module bounds using LOAD2 full-rectangle first-fit rules;
+- sort blocks into MK2-friendly X-major order;
+- estimate image payload cost and suggest sprites to trim, clear, remove, or
+  replace when a stage exceeds its allocation;
+- export handoff manifests and patch recipes that can be resumed locally.
 
-- **Windows** — opens a native file-chooser dialog filtered to `*.TGA`
-- **Linux** — uses `zenity` or `kdialog` if available; otherwise falls back
-  to a path-input text box
+The in-app tooling keeps these workflows local so private stage data and
+external toolchain material do not need to be committed.
 
-The TGA must be **8-bit paletted** with a **15-bit (BGR555) colour map**
-(the native format used by the Midway toolchain). A `.BAK` backup of the BDD
-is created before the file is rewritten. The new image is immediately
-available in the object picker.
+## Project Structure
 
-#### Parallax layer adjustment
-
-`Ctrl` + scroll wheel changes the `wx` high byte of the last touched object,
-moving it between parallax layers. The draw order updates immediately and a
-tooltip (green border) shows the current `wx` value and layer in real time.
-
-### Hover tooltip
-
-Hold the mouse still over any sprite for **1.2 seconds** to see debug info
-for every object under the cursor:
-
-```
-[42] ii=0x000C  48x57  pal=0
-  Z=138   sy=243   wx=0x4100  hfl=1 vfl=0
+```text
+bddview.c              SDL2 viewer/editor core
+platform/              ImGui bridge, shared format types, helpers, assets
+imgui/                 Dear ImGui sources
+tools/                 Headless smoke scripts
+reference/             Ignored local reference workspace plus public placeholders
+CHANGELOG.md           Release history
 ```
 
-| Field | Meaning |
-|---|---|
-| `ii` | Image index (hex) |
-| `pal` | Palette index in use |
-| `Z` | Depth / horizontal world position |
-| `sy` | Screen Y position |
-| `wx` | Raw TMS34010 DMA control word |
-| `hfl` / `vfl` | Horizontal / vertical flip |
+## Status
 
----
-
-## File formats
-
-### BDD — binary image container
-
-A mixed text/binary file.
-
-```
-<count>\n
-<idx_hex> <w> <h> <dma_bit0>\n   ← one header per image
-<w * h bytes of raw pixel data>  ← 8-bit palette-indexed pixels
-... repeat for each image ...
-<PAL_NAME> <count>\n             ← palette header
-<count * 2 bytes>                ← BGR555 colour entries (16-bit LE)
-... repeat for each palette ...
-```
-
-#### Image header fields
-
-| Field | Format | Notes |
-|---|---|---|
-| `idx` | hex | Lookup key matched by the BDB `ii` field |
-| `w`, `h` | decimal | Pixel dimensions |
-| `dma_bit0` | `0` or `1` | Bit 0 of the TMS34010 DMA control word |
-
-#### Palette entries
-
-Each entry is a **16-bit little-endian** value:
-
-```
-bit    15      unused
-bits 14-10     red   (5 bits — multiply by 8 for 8-bit)
-bits  9- 5     green (5 bits — multiply by 8 for 8-bit)
-bits  4- 0     blue  (5 bits — multiply by 8 for 8-bit)
-```
-
-Palette index 0 is always transparent.
-
----
-
-### BDB — object placement list (ASCII)
-
-```
-<world_name> <w> <h> <max_depth> <num_modules> <num_pals> <num_objects>
-<mod_name> <depth_base> <scroll_x> <sy_base> <sy_span>
-... one module line per module ...
-<wx_hex> <depth> <sy> <ii_hex> <fl>
-... one object line per object ...
-```
-
-#### World header
-
-| Field | Notes |
-|---|---|
-| `world_name` | Scene name |
-| `w`, `h` | World scroll width and height in pixels |
-| `max_depth` | Usually 255 |
-| `num_modules` | Number of module lines that follow (0 in older files) |
-| `num_pals` | Number of palettes in the matching BDD |
-| `num_objects` | Total number of object lines that follow |
-
-#### Module lines
-
-| Field | Notes |
-|---|---|
-| `mod_name` | Module name (assembly symbol `<NAME>BMOD`) |
-| `depth_base` | World depth of the module's left edge |
-| `scroll_x` | Horizontal scroll register position |
-| `sy_base` | Screen Y of the module's top edge |
-| `sy_span` | Height of the module in screen pixels |
-
-#### Object lines
-
-| Field | Format | Notes |
-|---|---|---|
-| `wx` | hex | TMS34010 DMA control word — encodes scroll layer and flip flags |
-| `depth` | decimal | Horizontal world position (X axis) |
-| `sy` | decimal | Screen Y position |
-| `ii` | hex | Image index — must match an `idx` in the BDD |
-| `fl` | decimal | Palette index |
-
----
-
-## TMS34010 DMA control word (`wx`)
-
-```
-bit  15      DGO   DMA go/halt
-bits 14-12   PIX   Pixel size (000 = 8-bit indexed)
-bit  11      TM1   Compress trail pixel multiplier bit 1
-bit  10      TM0   Compress trail pixel multiplier bit 0
-bit   9      LM1   Compress lead pixel multiplier bit 1
-bit   8      LM0   Compress lead pixel multiplier bit 0
-bit   7      CMP   Compress mode
-bit   6      CLP   Clip enable
-bit   5      VFL   Vertical flip
-bit   4      HFL   Horizontal flip
-bits  3-0    OPS   Pixel ops
-```
-
-The **high byte** (bits 15–8) encodes the parallax scroll rate.
-Objects are drawn in parallax-layer order (low high-byte first = furthest back).
-
-### Common high-byte values (Mortal Kombat backgrounds)
-
-| High byte | Typical `wx` | Layer |
-|---|---|---|
-| `0x32` | `0x3200` | Slow far background |
-| `0x3C` | `0x3C00` | Mid background |
-| `0x40` | `0x4000` | Main play layer |
-| `0x41` | `0x4100` | Main play layer (alt) |
-| `0x43` | `0x4300` | Slightly closer |
-| `0x46` | `0x4600` | Near foreground |
-
----
-
-## Coordinate system
-
-| BDB field | Viewer axis | Notes |
-|---|---|---|
-| `depth` | X (horizontal) | Increases left-to-right |
-| `sy` | Y (vertical) | Screen Y, increases downward |
-
-Draw order: objects are sorted by parallax layer (`wx` high byte) ascending,
-with original BDB file order preserved within each layer.
-
----
-
-## Palette assignment
-
-Each object's `fl` field selects a BDD palette (0-based, in file order).
-If multiple objects reference the same image index with different `fl` values,
-the **first** assignment wins.
-
----
-
-## Project structure
-
-```
-bddview.c       Main source (C99)
-CMakeLists.txt  Build system (SDL2 + comdlg32 on Windows)
-build.ps1       Windows one-shot build script (VS 2022 + SDL2 auto-download)
-```
+The editor is practical but still research-oriented. Treat save operations with
+the same caution you would use for any binary-format editor: keep backups,
+round-trip test important files, and validate generated data before packaging it
+into an emulator or hardware workflow.

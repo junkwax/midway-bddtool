@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-latest
+          - platform: macos
+            os: macos-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev zip
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install sdl2
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          platform="${{ matrix.platform }}"
+          if [ "$platform" = "macos" ]; then
+            platform="macos-$(uname -m)"
+          fi
+
+          package="midway-bddtool-${GITHUB_REF_NAME}-${platform}"
+          root="dist/${package}"
+          mkdir -p "${root}/bin"
+
+          cp build/bddview "${root}/bin/"
+          cp build/bddtool "${root}/bin/"
+          cp README.md CHANGELOG.md "${root}/"
+          if [ -d build/assets ]; then
+            cp -R build/assets "${root}/bin/"
+          fi
+          chmod +x "${root}/bin/bddview" "${root}/bin/bddtool"
+
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            mkdir -p "${root}/Frameworks"
+            sdl_lib="$(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib"
+            cp "${sdl_lib}" "${root}/Frameworks/"
+            chmod +w "${root}/bin/bddview" "${root}/Frameworks/libSDL2-2.0.0.dylib"
+            install_name_tool -id "@rpath/libSDL2-2.0.0.dylib" "${root}/Frameworks/libSDL2-2.0.0.dylib"
+            linked_sdl="$(otool -L "${root}/bin/bddview" | awk '/libSDL2-2.0.0.dylib/{print $1; exit}')"
+            if [ -n "${linked_sdl}" ]; then
+              install_name_tool -change "${linked_sdl}" "@rpath/libSDL2-2.0.0.dylib" "${root}/bin/bddview"
+            fi
+          fi
+
+          smoke="${RUNNER_TEMP}/checker"
+          "${root}/bin/bddview" --write-checker-test "${smoke}"
+          "${root}/bin/bddview" --check-open-mode "${smoke}.BDB"
+          "${root}/bin/bddtool" validate "${smoke}.BDB" "${smoke}.BDD"
+
+          (cd dist && zip -r "${package}.zip" "${package}")
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          cat > release-notes.md <<'NOTES'
+          Initial midway-bddtool release.
+
+          Packages include:
+          - `bin/bddview`
+          - `bin/bddtool`
+          - runtime assets under `bin/assets/`
+          NOTES
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release upload "${TAG_NAME}" release-assets/*.zip --clobber
+          else
+            gh release create "${TAG_NAME}" release-assets/*.zip \
+              --title "midway-bddtool ${TAG_NAME}" \
+              --notes-file release-notes.md \
+              --verify-tag
+          fi

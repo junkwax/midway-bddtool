@@ -1,4 +1,134 @@
+# Build output / CMake
 build/
-*.BAK
-*.o
-*.d
+build-*/
+out/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.vcxproj*
+*.sln
+
+# Build artifacts
+*.exe
+*.obj
+*.exp
+*.lib
+*.pdb
+*.ilk
+*.map
+tools/*.exe
+tools/*.EXE
+tools/*.com
+tools/*.COM
+tools/*.hlp
+tools/*.HLP
+tools/__pycache__/
+
+# Build scripts output dir
+bddview-build/
+imgtool-build/
+
+# Crash dump / logs
+crashdump.dmp
+crash.log
+stdout.txt
+stderr.txt
+
+# Auto-backup files
+*.autobak
+tmp/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# AI assistants local config
+.claude/
+.codex_tmp/
+.local-private/
+OUTHVN/
+
+# Local original/reference docs that are not part of the public repo.
+/doc/
+/doc/load2/
+
+# Design reference images / stray captures
+/png/
+*.jpg
+*.jpeg
+screenshot.*
+!screenshot.jpg
+
+# All .md except root README.md and CHANGELOG.md
+*.md
+!README.md
+!CHANGELOG.md
+
+# Runtime generated
+/cfg/
+/nvram/
+/snap/
+__pycache__/
+*.pyc
+bddview_layout.ini
+bddview_right_panels.cfg
+bddview_recent.txt
+bddview_settings.cfg
+bddview_layout.ver
+
+# Local refactor scratch scripts
+export_funcs.py
+extract_menu.py
+extract_palette.py
+extract_ui.py
+find_bounds.py
+fix_checkpoint.py
+fix_line.py
+fix_linkage.py
+tmp_fix.py
+
+# Generated MK2 level files
+ORNGBL.BDB
+ORNGBL.BDD
+ORNGBL_MK2/
+OrangeBlue.*
+OrangeBlue_MK2/
+BGPROF_source.png
+
+# Private/reference asset formats. Public examples should be synthetic or
+# explicitly reviewed before adding exceptions.
+*.[Bb][Dd][Bb]
+*.[Bb][Dd][Dd]
+*.[Bb][Dd][Bb].meta
+*.[Bb][Dd][Dd].meta
+*.[Ii][Mm][Gg]
+*.[Ll][Oo][Dd]
+*.[Ii][Rr][Ww]
+*.[Rr][Oo][Mm]
+*.[Ss][Nn][Dd]
+*.[Cc][Mm][Pp]
+*.[Ff][Rr][Mm]
+*.[Hh][Dd][Rr]
+*.[Bb][Ii][Nn]
+*.[Oo][Uu][Tt]
+*.[Pp][Ss][Dd]
+
+# Local reference/stage work. Keep only public placeholder notes tracked.
+/reference/**
+!/reference/
+!/reference/README.txt
+!/reference/stages/
+!/reference/stages/README.txt
+
+# tools/: the app is fully native now (renderers cooked in, MK2 ROM pipeline
+# removed), so only the BDB/BDD round-trip smoke test ships. Everything else is
+# the author's local MK2 pipeline and stays on disk but untracked.
+tools/*
+!tools/roundtrip_smoke.py
+
+# Removed MK2 tool sources kept locally for revisiting (not shipped)
+/platform/_local/
