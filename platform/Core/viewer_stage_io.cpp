@@ -179,6 +179,23 @@ int bdd_viewer_undo_move_smoke_for_path(const char *arg)
     int palette_raw_tested = 0;
     int image_index_tested = 0;
     int image_pixels_tested = 0;
+    Obj old_obj = {};
+    Obj new_obj = {};
+    int module_cap = 0;
+    char old_line[256] = "";
+    char new_line[256] = "";
+    Uint32 before_colors[256];
+    Uint16 before_rgb555[256];
+    Uint16 check_rgb555[256];
+    char before_name[64] = "";
+    int before_count = 0;
+    Uint32 old_color = 0;
+    Uint32 new_color = 0;
+    int old_idx = 0;
+    int new_idx = -1;
+    int pixel_count = 0;
+    Uint8 old_pixel = 0;
+    Uint8 new_pixel = 0;
     int rc = 1;
 
     if (!arg || !arg[0]) {
@@ -288,7 +305,7 @@ int bdd_viewer_undo_move_smoke_for_path(const char *arg)
     mask[0] = 1;
     for (int i = 0; i < g_no && i < object_cap; i++)
         before_objects[i] = g_obj[i];
-    Obj old_obj = g_obj[0];
+    old_obj = g_obj[0];
     g_obj[0].wx ^= 0x0100;
     g_obj[0].fl = (g_n_pals > 1) ? ((g_obj[0].fl + 1) % g_n_pals) : g_obj[0].fl;
     g_obj[0].hfl = g_obj[0].hfl ? 0 : 1;
@@ -297,7 +314,7 @@ int bdd_viewer_undo_move_smoke_for_path(const char *arg)
         fprintf(stderr, "undo-move-smoke: object record delta was not recorded\n");
         goto done;
     }
-    Obj new_obj = g_obj[0];
+    new_obj = g_obj[0];
     undo_restore();
     if (memcmp(&g_obj[0], &old_obj, sizeof(Obj)) != 0) {
         fprintf(stderr, "undo-move-smoke: object record undo mismatch\n");
@@ -310,7 +327,7 @@ int bdd_viewer_undo_move_smoke_for_path(const char *arg)
     }
     record_tested = 1;
 
-    int module_cap = editor_project_module_capacity();
+    module_cap = editor_project_module_capacity();
     if (g_bdb_num_modules > 0 && module_cap > 0) {
         before_modules = (char *)calloc((size_t)module_cap, 256u);
         module_mask = (unsigned char *)calloc((size_t)module_cap, sizeof(unsigned char));
@@ -320,8 +337,6 @@ int bdd_viewer_undo_move_smoke_for_path(const char *arg)
         for (int i = 0; i < g_bdb_num_modules && i < module_cap; i++)
             memcpy(before_modules + ((size_t)i * 256u), g_bdb_modules[i], 256);
         module_mask[0] = 1;
-        char old_line[256];
-        char new_line[256];
         snprintf(old_line, sizeof old_line, "%s", g_bdb_modules[0]);
         snprintf(new_line, sizeof new_line, "%s", g_bdb_modules[0]);
         strncat(new_line, " ", sizeof new_line - strlen(new_line) - 1);
@@ -345,13 +360,7 @@ int bdd_viewer_undo_move_smoke_for_path(const char *arg)
     }
 
     if (g_n_pals > 0 && g_pal_count[0] > 0) {
-        Uint32 before_colors[256];
-        Uint16 before_rgb555[256];
-        Uint16 check_rgb555[256];
-        char before_name[64];
-        int before_count = g_pal_count[0];
-        Uint32 old_color;
-        Uint32 new_color;
+        before_count = g_pal_count[0];
         if (before_count > 256) before_count = 256;
         memcpy(before_colors, g_pals[0], sizeof before_colors);
         snprintf(before_name, sizeof before_name, "%s", g_pal_name[0]);
@@ -402,8 +411,8 @@ int bdd_viewer_undo_move_smoke_for_path(const char *arg)
     }
 
     if (g_ni > 0) {
-        int old_idx = g_img[0].idx;
-        int new_idx = -1;
+        old_idx = g_img[0].idx;
+        new_idx = -1;
         for (int candidate = 0; candidate <= 0xFFFF; candidate++) {
             int used = 0;
             if (candidate == old_idx) continue;
@@ -440,9 +449,9 @@ int bdd_viewer_undo_move_smoke_for_path(const char *arg)
 
     if (g_ni > 0 && g_img[0].pix && g_img[0].w > 0 && g_img[0].h > 0 &&
         g_img[0].w <= 0x3fffffff / g_img[0].h) {
-        int pixel_count = g_img[0].w * g_img[0].h;
-        Uint8 old_pixel = g_img[0].pix[0];
-        Uint8 new_pixel = (Uint8)(old_pixel ^ 1u);
+        pixel_count = g_img[0].w * g_img[0].h;
+        old_pixel = g_img[0].pix[0];
+        new_pixel = (Uint8)(old_pixel ^ 1u);
         before_pixels = (Uint8 *)malloc((size_t)pixel_count * sizeof before_pixels[0]);
         if (!before_pixels)
             goto done;

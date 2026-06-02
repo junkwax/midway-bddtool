@@ -26,30 +26,6 @@
 #include <strings.h>
 #endif
 
-static void path_join(char *out, size_t outsz, const char *dir, const char *file)
-{
-    if (!dir || !dir[0]) {
-        snprintf(out, outsz, "%s", file ? file : "");
-        return;
-    }
-
-    size_t len = strlen(dir);
-    if (dir[len - 1] == '\\' || dir[len - 1] == '/')
-        snprintf(out, outsz, "%s%s", dir, file ? file : "");
-    else
-        snprintf(out, outsz, "%s%c%s", dir, PATH_SEP_CHAR, file ? file : "");
-}
-
-static const char *path_basename_ptr(const char *path)
-{
-    if (!path) return "";
-    const char *slash = strrchr(path, '/');
-    const char *backslash = strrchr(path, '\\');
-    const char *sep = slash;
-    if (!sep || (backslash && backslash > sep)) sep = backslash;
-    return sep ? sep + 1 : path;
-}
-
 static bool path_has_ext_ci(const char *path, const char *ext)
 {
     if (!path || !ext) return false;
