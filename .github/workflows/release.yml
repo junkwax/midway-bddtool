@@ -18,8 +18,10 @@ jobs:
         include:
           - platform: linux-x86_64
             os: ubuntu-latest
-          - platform: macos
+          - platform: macos-arm64
             os: macos-latest
+          - platform: macos-x86_64
+            os: macos-15-intel
 
     steps:
       - name: Check out source
@@ -49,10 +51,6 @@ jobs:
           set -euo pipefail
 
           platform="${{ matrix.platform }}"
-          if [ "$platform" = "macos" ]; then
-            platform="macos-$(uname -m)"
-          fi
-
           package="midway-bddtool-${GITHUB_REF_NAME}-${platform}"
           root="dist/${package}"
           mkdir -p "${root}/bin"
