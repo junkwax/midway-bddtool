@@ -7,6 +7,7 @@
 extern "C" {
 #endif
 
+void bdd_prepare_app_identity(void);
 void bdd_set_app_icon(SDL_Window *win);
 
 #ifdef __cplusplus

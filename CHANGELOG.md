@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-03
+
+### Fixed
+- Windows builds now register the bundled app icon as the SDL window icon,
+  Win32 class icon, executable resource icon, and AppUserModelID identity so the
+  taskbar no longer falls back to the generic paper icon.
+- The welcome screen's New Project actions now use the shared unsaved-action
+  flow and hide the welcome window while the modal is open, so clicking
+  "New Project..." actually opens the project dialog.
+
 ## [1.0.0] - 2026-06-02
 
 ### Added

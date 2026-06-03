@@ -31,7 +31,7 @@ static void welcome_rel_time(const char *path, char *buf, int bufsz)
 
 bool welcome_visible(void)
 {
-    return g_ni <= 0 && !g_have_bdb && !g_preview_mode && g_welcome_show;
+    return g_ni <= 0 && !g_have_bdb && !g_preview_mode && g_welcome_show && !g_show_new;
 }
 
 void draw_welcome(void)
@@ -138,7 +138,7 @@ void draw_welcome(void)
                     snprintf(g_new_name, sizeof g_new_name, "%s", g_templates[ti].name);
                     g_new_w = g_templates[ti].w; g_new_h = g_templates[ti].h;
                     g_new_depth = g_templates[ti].depth; g_new_pals = g_templates[ti].pals;
-                    new_project_apply();
+                    request_unsaved_action(UNSAVED_ACTION_APPLY_NEW_PROJECT);
                 }
             }
             if (active) ImGui::PopStyleColor();
@@ -163,7 +163,7 @@ void draw_welcome(void)
             if (ImGui::Button("Create##blank", ImVec2(card_bw, 0))) {
                 g_new_depth = 255; g_new_pals = 0;
                 snprintf(g_new_name, sizeof g_new_name, "WORLD");
-                new_project_apply();
+                request_unsaved_action(UNSAVED_ACTION_APPLY_NEW_PROJECT);
                 g_card_blank_open = false;
             }
         }
@@ -259,7 +259,7 @@ void draw_welcome(void)
 
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
         if (ImGui::Button("New Project...", ImVec2(col_right - 4, 30)))
-            g_show_new = true;
+            request_unsaved_action(UNSAVED_ACTION_SHOW_NEW_PROJECT);
         ImGui::Spacing();
 
         ImGui::TextDisabled("Templates:");
@@ -272,7 +272,7 @@ void draw_welcome(void)
                 snprintf(g_new_name, sizeof g_new_name, "%s", g_templates[ti].name);
                 g_new_w = g_templates[ti].w; g_new_h = g_templates[ti].h;
                 g_new_depth = g_templates[ti].depth; g_new_pals = g_templates[ti].pals;
-                new_project_apply();
+                request_unsaved_action(UNSAVED_ACTION_APPLY_NEW_PROJECT);
             }
             ImVec2 bmin2 = ImGui::GetItemRectMin();
             ImGui::GetWindowDrawList()->AddText(

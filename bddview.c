@@ -90,6 +90,8 @@ int main(int argc, char *argv[])
         if (wx_min == INT_MAX) { wx_min = 0; wx_max = WIN_W; wy_min = 0; wy_max = WIN_H; }
     }
 
+    bdd_prepare_app_identity();
+
     /* SDL init */
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
