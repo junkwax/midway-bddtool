@@ -441,7 +441,6 @@ void right_panel_set_next(int id);
 void right_panel_after_begin(int id);
 void right_panel_frame_begin(void);
 void right_panel_frame_end(void);
-float right_panel_canvas_right_limit(void);
 void set_left_panel_default(float y, float w, float h);
 SDL_Texture *editor_texture_at(int img_i);
 void draw_editor_texture_transparent(SDL_Texture *tex, float width, float height);
@@ -753,8 +752,13 @@ void tower_runtime_guides_init_once(void);
 void runtime_guides_clear_session(void);
 bool mk2_current_stage_is_battle(void);
 bool mk2_current_stage_has_known_runtime_extras(void);
+int mk2_runtime_autoload_stage_recipe(void);
 bool mk2_find_sibling_data_file(const char *filename, char *out, size_t outsz);
 int import_runtime_lod_sources_for_active_guides(bool save_undo);
+int import_runtime_lod_source_labels(const char *lod_token,
+                                     const char *const *labels,
+                                     int label_count,
+                                     bool save_undo);
 int delete_all_runtime_guide_objects(bool save_undo);
 int delete_runtime_guide_images_and_objects(int *out_objects, int *out_images);
 int hide_all_runtime_guides_for_session(void);
@@ -781,6 +785,11 @@ void derive_stage_pair_paths(const char *path,
                              char *bdb, size_t bdbsz);
 const char *path_basename_ptr(const char *path);
 void lod_tag_imported_range(int start, int end, const char *lod_path);
+bool runtime_actor_preview_imports_loaded(void);
+bool runtime_actor_image_is_preview_import(const Img *im);
+void runtime_actor_mark_preview_import_range(int image_base, int palette_base,
+                                            int start, int end,
+                                            const char *source_label);
 void draw_mk2_workflow(void);
 extern int g_pref_grid_sx;
 extern int g_pref_grid_sy;

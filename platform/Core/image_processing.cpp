@@ -12,6 +12,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+
+extern bool runtime_actor_image_is_preview_import(const Img *im);
+
 Uint32 palette_argb_at(int pal_idx, int color_idx)
 {
     if (pal_idx >= 0 && pal_idx < g_n_pals &&
@@ -220,6 +223,7 @@ int clear_image_edge_matte(int img_i, bool require_black, bool save_undo)
 {
     if (img_i < 0 || img_i >= g_ni) return 0;
     Img *im = &g_img[img_i];
+    if (runtime_actor_image_is_preview_import(im)) return 0;
     int edge_total = 0;
     int edge_count = 0;
     int candidate = edge_candidate_index(im, &edge_count, &edge_total);
@@ -506,9 +510,19 @@ int optimize_image_range_for_space(int start_img, int end_img, bool save_undo,
 
     bool undo_done = false;
     int changed = 0;
+    bool has_runtime_preview = false;
+    for (int i = start_img; i < end_img; i++) {
+        if (runtime_actor_image_is_preview_import(&g_img[i])) {
+            has_runtime_preview = true;
+            break;
+        }
+    }
     if (g_import_opt_trim) {
         for (int i = start_img; i < end_img; i++) {
             if (!g_img[i].pix) continue;
+            if (runtime_actor_image_is_preview_import(&g_img[i])) {
+                continue;
+            }
             int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
             if (!image_nonzero_bounds(&g_img[i], &x1, &y1, &x2, &y2)) continue;
             int save = g_img[i].w * g_img[i].h - (x2 - x1 + 1) * (y2 - y1 + 1);
@@ -527,7 +541,8 @@ int optimize_image_range_for_space(int start_img, int end_img, bool save_undo,
     }
 
     if (g_import_opt_compact_palettes) {
-        int rc = compact_palettes_for_image_range(start_img, end_img,
+        int rc = has_runtime_preview ? 0
+               : compact_palettes_for_image_range(start_img, end_img,
                                                   save_undo && !undo_done);
         if (rc > 0) {
             changed += rc;

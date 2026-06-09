@@ -1,5 +1,4 @@
 #include "bg_editor.h"
-#include "bg_editor_globals.h"
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
 #include "UI/view/canvas_scrollbars.h"
@@ -67,9 +66,6 @@ void draw_canvas_scrollbars(void)
     const float top = editor_canvas_top_y();
     const float status_h = (!g_simple_mode && g_have_bdb) ? 70.0f : 22.0f;
     float right = ds.x - 6.0f;
-    float panel_left = right_panel_canvas_right_limit();
-    if (panel_left > 0.0f && panel_left < right)
-        right = panel_left - 8.0f;
     float bottom = ds.y - status_h - 6.0f;
 
     float h_track_x = left;

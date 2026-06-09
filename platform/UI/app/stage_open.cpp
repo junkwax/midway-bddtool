@@ -25,6 +25,7 @@ static void enter_edit_layout_after_stage_load(void)
     bdd_center_game_preview_camera();
     g_anim_playing = false;
     g_anim_v_sweep = false;
+    bg_editor_autoload_lod_assets();
 }
 
 void open_stage_path_now(const char *path)

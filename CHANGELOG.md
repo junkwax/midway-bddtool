@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-06-09
+
+### Added
+- Runtime source autoload now searches the sibling Workplace MK2 source trees,
+  including `mk2-readonly/mk2-main/data`, for LOD/IMG art.
+- Living Forest preview autoloads its runtime floor and tree-face animation art
+  from the MK2 source assets.
+
+### Changed
+- Runtime-source sprites are treated as preview/read-only art while their placed
+  locations remain movable for stage preview alignment.
+- Restored the previous canvas scrollbar behavior.
+
 ## [1.0.4] - 2026-06-09
 
 ### Added

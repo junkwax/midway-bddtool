@@ -385,21 +385,6 @@ void right_panel_frame_end(void)
     }
 }
 
-float right_panel_canvas_right_limit(void)
-{
-    right_panel_layout_load();
-    float limit = ImGui::GetIO().DisplaySize.x - 6.0f;
-    for (int oi = 0; oi < RIGHT_PANEL_COUNT; oi++) {
-        int id = g_right_panel_order[oi];
-        if (id < 0 || id >= RIGHT_PANEL_COUNT) continue;
-        if (!right_panel_visible(id) || !g_right_panels[id].docked) continue;
-        float x = right_panel_dock_x(id);
-        if (x < limit)
-            limit = x;
-    }
-    return limit;
-}
-
 static void right_panel_reorder_by_y(int id, float y)
 {
     if (id < 0 || id >= RIGHT_PANEL_COUNT) return;

@@ -81,6 +81,13 @@ static bool object_menu_targeted(int idx, int active, int sel_count)
     return (sel_count > 0) ? (g_sel_flags[idx] != 0) : (idx == active);
 }
 
+static bool object_action_runtime_locked(int idx)
+{
+    if (idx < 0 || idx >= g_no) return false;
+    Img *im = img_find(g_obj[idx].ii);
+    return runtime_actor_image_is_preview_import(im);
+}
+
 static void object_actions_clear_selection(void)
 {
     int object_cap = editor_project_object_capacity();
@@ -168,12 +175,30 @@ int delete_object_targets_preserve_order(int active, const char *undo_label)
         return 0;
     }
 
+    int editable_targets = 0;
+    for (int i = 0; i < g_no; i++) {
+        if (!remove[i]) continue;
+        if (object_action_runtime_locked(i)) {
+            remove[i] = 0;
+            continue;
+        }
+        editable_targets++;
+    }
+    if (editable_targets <= 0) {
+        stage_set_toast("Runtime placements are move-only");
+        return 0;
+    }
+
     undo_save_ex(undo_label ? undo_label : "Delete");
     int removed = 0;
     for (int i = g_no - 1; i >= 0; i--) {
         if (!remove[i]) continue;
         mk2_delete_object_preserve_order(i);
         removed++;
+    }
+    if (removed <= 0) {
+        stage_set_toast("Runtime placements are move-only");
+        return 0;
     }
 
     object_actions_clear_selection();
@@ -206,11 +231,24 @@ void duplicate_object_menu_targets(int active)
     if (!editor_project_reserve_objects(needed)) return;
     int object_cap = editor_project_object_capacity();
     if (object_cap <= 0 || g_no >= object_cap) return;
+    bool has_editable_target = false;
+    for (int i = 0; i < g_no; i++) {
+        if (object_menu_targeted(i, active, sel_count) && !object_action_runtime_locked(i)) {
+            has_editable_target = true;
+            break;
+        }
+    }
+    if (!has_editable_target) {
+        stage_set_toast("Runtime placements are move-only");
+        return;
+    }
     undo_save_ex("Duplicate");
     int max_order = mk2_max_object_order();
     int original_no = g_no;
+    int added = 0;
     for (int i = 0; i < original_no && g_no < object_cap; i++) {
         if (!object_menu_targeted(i, active, sel_count)) continue;
+        if (object_action_runtime_locked(i)) continue;
         Obj *dst = editor_project_append_object_slot();
         if (!dst) break;
         int dst_i = g_no - 1;
@@ -219,6 +257,11 @@ void duplicate_object_menu_targets(int active)
         dst->sy += 8;
         dst->order = ++max_order;
         g_hl_obj = dst_i;
+        added++;
+    }
+    if (added <= 0) {
+        stage_set_toast("Runtime placements are move-only");
+        return;
     }
     sync_bdb_header_counts();
     g_dirty = 1;
@@ -236,7 +279,8 @@ int flip_object_targets_mirrored(int active, bool horizontal, const char *undo_l
     int target_count = 0;
     int bx0 = INT_MAX, by0 = INT_MAX, bx1 = INT_MIN, by1 = INT_MIN;
     for (int i = 0; i < g_no; i++) {
-        if (!object_menu_targeted(i, active, sel_count) || g_obj_lock[i]) continue;
+        if (!object_menu_targeted(i, active, sel_count) || g_obj_lock[i] ||
+            object_action_runtime_locked(i)) continue;
         Img *im = img_find(g_obj[i].ii);
         int ow = (im && im->w > 0) ? im->w : 1;
         int oh = (im && im->h > 0) ? im->h : 1;
@@ -300,6 +344,10 @@ void edit_block_for_object(int idx)
     if (idx < 0 || idx >= g_no) return;
     Img *im = img_find(g_obj[idx].ii);
     if (!im) return;
+    if (runtime_actor_image_is_preview_import(im)) {
+        stage_set_toast("Runtime source art is read-only");
+        return;
+    }
     g_block_edit_img = (int)(im - g_img);
     g_block_edit_zoom = 8;
     g_block_edit_col = 0;

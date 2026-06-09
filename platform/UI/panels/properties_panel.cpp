@@ -28,6 +28,13 @@ static void obj_prop_commit(const char *label)
     s_obj_prop_capture_active = 0;
 }
 
+static bool obj_prop_runtime_locked_object(int obj_idx)
+{
+    if (obj_idx < 0 || obj_idx >= g_no) return false;
+    Img *im = img_find(g_obj[obj_idx].ii);
+    return runtime_actor_image_is_preview_import(im);
+}
+
 static void draw_object_image_summary(Obj *o, Img *im, int ii_idx)
 {
     if (!o) return;
@@ -68,6 +75,9 @@ static void draw_object_image_summary(Obj *o, Img *im, int ii_idx)
                         mk2_bpp_for_image(im), im->pal_idx, im->flags);
     if (im->source[0])
         ImGui::TextDisabled("src %s", im->source);
+    if (runtime_actor_image_is_preview_import(im))
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f),
+                           "runtime source placement: move only");
     if (im->anix || im->aniy || im->anix2 || im->aniy2)
         ImGui::TextDisabled("anipoint %d,%d  alt %d,%d,%d",
                             im->anix, im->aniy, im->anix2, im->aniy2, im->aniz2);
@@ -108,16 +118,22 @@ static void draw_selected_image_asset_summary(void)
     ImGui::TextDisabled("uses x%d", image_use_count(im->idx));
     if (im->source[0])
         ImGui::TextDisabled("src %s", im->source);
+    bool runtime_locked_asset = runtime_actor_image_is_preview_import(im);
+    if (runtime_locked_asset)
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f),
+                           "runtime source art is read-only");
     if (im->frm || im->opals || im->pttblnum || im->anix || im->aniy)
         ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f),
                            "anim frm=%d  pttbl=%d", im->frm, im->pttblnum);
     ImGui::EndGroup();
     ImGui::Separator();
 
+    if (runtime_locked_asset) ImGui::BeginDisabled();
     if (ImGui::Button("Place Sprite", ImVec2(-1, 0))) {
         g_place_tool_img = (int)(im - g_img);
         g_cur_tool = 1;
     }
+    if (runtime_locked_asset) ImGui::EndDisabled();
     if (image_use_count(im->idx) > 0 && ImGui::Button("Select All Uses", ImVec2(-1, 0)))
         select_all_with_image_ii(im->idx);
 }
@@ -135,11 +151,20 @@ void draw_obj_properties_contents(void)
     Obj *o = &g_obj[g_hl_obj];
     Img *im = img_find(o->ii);
     int ii_idx = im ? (int)(im - g_img) : -1;
+    bool runtime_locked = runtime_actor_image_is_preview_import(im);
 
     if (sel_count >= 2) {
+        int runtime_locked_count = 0;
+        for (int i = 0; i < g_no; i++)
+            if (g_sel_flags[i] && obj_prop_runtime_locked_object(i))
+                runtime_locked_count++;
         ImGui::TextColored(ImVec4(0.7f,0.9f,1.0f,1.0f), "%d objects selected", sel_count);
+        if (runtime_locked_count > 0)
+            ImGui::TextColored(ImVec4(1.0f,0.75f,0.25f,1.0f),
+                               "%d runtime placement(s): move-only", runtime_locked_count);
         ImGui::Separator();
 
+        if (runtime_locked_count > 0) ImGui::BeginDisabled();
         int layer_vals[] = { 0x32, 0x3C, 0x40, 0x41, 0x43, 0x46 };
         const char *layer_labels[] = { "Sky/back","Mid","Floor/play","Floor alt","Near FG","Front FG" };
         int cur_layer = (o->wx >> 8) & 0xFF;
@@ -184,6 +209,7 @@ void draw_obj_properties_contents(void)
         if (ImGui::Button("Delete all selected", ImVec2(-1, 0))) {
             delete_object_targets_preserve_order(-1, "Delete");
         }
+        if (runtime_locked_count > 0) ImGui::EndDisabled();
         ImGui::Separator();
         ImGui::TextDisabled("(showing lead object below)");
         ImGui::Spacing();
@@ -191,6 +217,7 @@ void draw_obj_properties_contents(void)
 
     draw_object_image_summary(o, im, ii_idx);
 
+    if (runtime_locked) ImGui::BeginDisabled();
     {
         int cur = o->ii;
         char ii_preview[64];
@@ -225,7 +252,9 @@ void draw_obj_properties_contents(void)
             ImGui::EndCombo();
         }
     }
+    if (runtime_locked) ImGui::EndDisabled();
 
+    if (runtime_locked) ImGui::BeginDisabled();
     if (!g_simple_mode) {
         int wx_val = o->wx;
         bool wx_changed = ImGui::InputInt("wx (hex)", &wx_val, 16, 256, ImGuiInputTextFlags_CharsHexadecimal);
@@ -282,6 +311,7 @@ void draw_obj_properties_contents(void)
             }
         }
     }
+    if (runtime_locked) ImGui::EndDisabled();
 
     if (ImGui::BeginTable("obj_prop_position", 2, ImGuiTableFlags_SizingStretchProp)) {
         int depth_val = o->depth;
@@ -322,6 +352,7 @@ void draw_obj_properties_contents(void)
         ImGui::EndTable();
     }
 
+    if (runtime_locked) ImGui::BeginDisabled();
     if (g_n_pals > 0) {
         char pal_preview[80];
         snprintf(pal_preview, sizeof pal_preview, "pal %d: %s", o->fl, g_pal_name[o->fl]);
@@ -381,6 +412,7 @@ void draw_obj_properties_contents(void)
             delete_object_menu_targets(g_hl_obj);
         ImGui::EndTable();
     }
+    if (runtime_locked) ImGui::EndDisabled();
 
 }
 

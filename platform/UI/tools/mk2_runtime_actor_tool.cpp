@@ -93,6 +93,9 @@ static char g_runtime_actor_status[512] = "";
 static int  g_runtime_actor_preview_base_images = -1;
 static int  g_runtime_actor_preview_base_pals = -1;
 static int runtime_actor_frame_ticks_at(const RuntimeStageActor *actor, int frame);
+static void runtime_actor_init_default(RuntimeStageActor *actor);
+static void runtime_actor_select(int idx);
+bool runtime_actor_preview_imports_loaded(void);
 
 static const char *const k_runtime_actor_preview_source_prefix = "RTPREVIEW:";
 
@@ -581,10 +584,41 @@ static void runtime_actor_default_sidecar_path(char *out, size_t outsz)
     snprintf(out, outsz, "stage_runtime.json");
 }
 
-static bool runtime_actor_image_is_preview_import(const Img *im)
+bool runtime_actor_image_is_preview_import(const Img *im)
 {
     size_t prefix_len = strlen(k_runtime_actor_preview_source_prefix);
     return im && strncmp(im->source, k_runtime_actor_preview_source_prefix, prefix_len) == 0;
+}
+
+void runtime_actor_mark_preview_import_range(int image_base, int palette_base,
+                                             int start, int end,
+                                             const char *source_label)
+{
+    if (start < 0) start = 0;
+    if (end > g_ni) end = g_ni;
+    if (end <= start) return;
+
+    if (!runtime_actor_preview_imports_loaded()) {
+        g_runtime_actor_preview_base_images = image_base >= 0 ? image_base : start;
+        g_runtime_actor_preview_base_pals = palette_base >= 0 ? palette_base : g_n_pals;
+    }
+
+    for (int i = start; i < end && i < g_ni; i++) {
+        Img *im = &g_img[i];
+        if (runtime_actor_image_is_preview_import(im))
+            continue;
+
+        char label[64];
+        if (source_label && source_label[0]) {
+            snprintf(label, sizeof label, "%s", path_basename_ptr(source_label));
+        } else if (im->source[0]) {
+            snprintf(label, sizeof label, "%s", im->source);
+        } else {
+            snprintf(label, sizeof label, "runtime");
+        }
+        snprintf(im->source, sizeof im->source, "%s%.52s",
+                 k_runtime_actor_preview_source_prefix, label);
+    }
 }
 
 int runtime_actor_preview_import_count(void)
@@ -647,6 +681,125 @@ static bool runtime_actor_stage_dir(char *out, size_t outsz)
     }
     *sep = '\0';
     return out[0] != '\0';
+}
+
+static bool runtime_actor_contains_ci(const char *haystack, const char *needle)
+{
+    if (!haystack || !needle || !needle[0]) return false;
+    size_t nlen = strlen(needle);
+    for (const char *h = haystack; *h; h++) {
+        size_t i = 0;
+        while (i < nlen && h[i]) {
+            char a = h[i];
+            char b = needle[i];
+            if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+            if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+            if (a != b) break;
+            i++;
+        }
+        if (i == nlen) return true;
+    }
+    return false;
+}
+
+static bool runtime_actor_stage_is_forest(void)
+{
+    if (runtime_actor_contains_ci(g_name, "FOREST")) return true;
+    if (runtime_actor_contains_ci(g_stage_internal_name, "FOREST")) return true;
+    if (runtime_actor_contains_ci(g_bdb_path, "FOREST")) return true;
+    if (runtime_actor_contains_ci(g_bdd_path, "FOREST")) return true;
+    return false;
+}
+
+static int runtime_actor_import_stage_runtime_art(void)
+{
+    int imported = 0;
+    int old_dirty = g_dirty;
+    int old_need_rebuild = g_need_rebuild;
+    bool old_palette_dirty = g_mk2_palette_sync_dirty;
+
+    if (runtime_actor_stage_is_forest()) {
+        const char *forest_labels[] = {
+            "TREEANI1", "TREEANI2", "TREEANI3", "TREEANI4",
+            "TREEANI5", "TREEANI6", "TREEANI7",
+            "NJSMOKEHIDE", "JADEHIDDEN"
+        };
+        imported += import_runtime_lod_source_labels("MK6MIL.LOD",
+                                                     forest_labels,
+                                                     (int)(sizeof forest_labels / sizeof forest_labels[0]),
+                                                     false);
+    }
+
+    g_dirty = old_dirty;
+    g_mk2_palette_sync_dirty = old_palette_dirty;
+    if (imported > 0)
+        g_need_rebuild = 1;
+    else
+        g_need_rebuild = old_need_rebuild;
+    return imported;
+}
+
+static bool runtime_actor_all_labels_available(const char *const *labels, int count)
+{
+    for (int i = 0; i < count; i++)
+        if (find_img_by_label_casefold(labels[i]) < 0)
+            return false;
+    return true;
+}
+
+static int runtime_actor_add_forest_tree_actors(void)
+{
+    if (!runtime_actor_stage_is_forest())
+        return 0;
+
+    const char *seq[] = {
+        "TREEANI1", "TREEANI2", "TREEANI3", "TREEANI4", "TREEANI5", "TREEANI6", "TREEANI7",
+        "TREEANI6", "TREEANI7", "TREEANI6", "TREEANI7", "TREEANI6", "TREEANI7", "TREEANI6", "TREEANI7",
+        "TREEANI5", "TREEANI4", "TREEANI3", "TREEANI2", "TREEANI1"
+    };
+    const char *required[] = {
+        "TREEANI1", "TREEANI2", "TREEANI3", "TREEANI4",
+        "TREEANI5", "TREEANI6", "TREEANI7"
+    };
+    if (!runtime_actor_all_labels_available(required, (int)(sizeof required / sizeof required[0])))
+        return 0;
+
+    int first_img_i = find_img_by_label_casefold("TREEANI1");
+    Img *first_im = (first_img_i >= 0 && first_img_i < g_ni) ? &g_img[first_img_i] : NULL;
+    int ax = first_im ? img_anim_offset_x(first_im, 0) : 0;
+    int ay = first_im ? img_anim_offset_y(first_im, 0) : 0;
+
+    const int packed_x[] = { 0x0148, 0x0270, 0x0391 };
+    const int packed_y = 0x0049;
+    int added = 0;
+    for (int i = 0; i < 3 && g_runtime_actor_count < MAX_RUNTIME_ACTORS; i++) {
+        RuntimeStageActor actor;
+        runtime_actor_init_default(&actor);
+        snprintf(actor.name, sizeof actor.name, "forest_tree_face_%d", i + 1);
+        runtime_actor_make_code_label(actor.name, actor.code_label, sizeof actor.code_label);
+        snprintf(actor.trigger, sizeof actor.trigger, "stage");
+        snprintf(actor.insert_list, sizeof actor.insert_list, "baklst1");
+        snprintf(actor.scroll_symbol, sizeof actor.scroll_symbol, "worldtlx");
+        snprintf(actor.frame_driver, sizeof actor.frame_driver, "triple_framew");
+        actor.x = packed_x[i] - ax;
+        actor.y = packed_y - ay;
+        actor.layer = 0x40;
+        actor.scroll = 1.0f;
+        actor.frame_ticks = 5;
+        actor.frame_count = (int)(sizeof seq / sizeof seq[0]);
+        for (int fi = 0; fi < actor.frame_count; fi++)
+            snprintf(actor.frames[fi], sizeof actor.frames[fi], "%s", seq[fi]);
+        g_runtime_actors[g_runtime_actor_count++] = actor;
+        added++;
+    }
+
+    if (added > 0) {
+        runtime_actor_select(0);
+        g_runtime_actor_preview = true;
+        snprintf(g_runtime_actor_status, sizeof g_runtime_actor_status,
+                 "Loaded Forest tree face runtime animation (%d actors)", added);
+    }
+    return added;
 }
 
 static void runtime_actor_import_deadpool_imgs(void)
@@ -1479,8 +1632,12 @@ void runtime_actor_autoload_for_stage(void)
     g_runtime_actor_count = 0;
     g_runtime_actor_selected = -1;
     g_runtime_actor_preview = false;
-    if (!runtime_actor_sidecar_load())
-        runtime_actor_import_inferred_level_animations();
+    runtime_actor_import_stage_runtime_art();
+    if (!runtime_actor_sidecar_load()) {
+        int known = runtime_actor_add_forest_tree_actors();
+        if (known <= 0)
+            runtime_actor_import_inferred_level_animations();
+    }
 }
 
 void draw_mk2_runtime_actor_overlay(void)

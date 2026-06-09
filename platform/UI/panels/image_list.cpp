@@ -42,7 +42,10 @@ static void image_list_draw_details_tooltip(const Img *im, const ImageModuleInfo
     if (im->frm || im->opals || im->pttblnum)
         ImGui::TextDisabled("frm=%d  opals=%d  pttbl=%d",
                             im->frm, im->opals, im->pttblnum);
-    ImGui::TextDisabled("Click preview/name to arm placement. Right-click for actions.");
+    if (runtime_actor_image_is_preview_import(im))
+        ImGui::TextDisabled("Runtime source: selects existing uses; art edits are locked.");
+    else
+        ImGui::TextDisabled("Click preview/name to arm placement. Right-click for actions.");
     ImGui::EndTooltip();
 }
 
@@ -50,6 +53,7 @@ static void image_list_draw_action_menu(int i, bool *delete_this_image)
 {
     if (i < 0 || i >= g_ni) return;
     Img *im = &g_img[i];
+    bool runtime_locked = runtime_actor_image_is_preview_import(im);
 
     if (im->label[0])
         ImGui::Text("%s", im->label);
@@ -64,8 +68,12 @@ static void image_list_draw_action_menu(int i, bool *delete_this_image)
                             im->frm, im->opals, im->pttblnum);
     if (im->lod_ref)
         ImGui::TextColored(ImVec4(0.5f,0.9f,1.0f,1.0f), "Imported or referenced by LOD");
+    if (runtime_locked)
+        ImGui::TextColored(ImVec4(1.0f,0.75f,0.25f,1.0f),
+                           "Runtime preview source: art is read-only");
     ImGui::Separator();
 
+    if (runtime_locked) ImGui::BeginDisabled();
     if (ImGui::MenuItem("Arm Place Tool")) {
         g_place_tool_img = i;
         g_cur_tool = 1;
@@ -91,8 +99,10 @@ static void image_list_draw_action_menu(int i, bool *delete_this_image)
         int pal = (im->pal_idx >= 0) ? im->pal_idx : 0;
         chop_image_to_map(i, x, y, 0x4100, pal, false, false, -1, true);
     }
+    if (runtime_locked) ImGui::EndDisabled();
 
     ImGui::Separator();
+    if (runtime_locked) ImGui::BeginDisabled();
     if (ImGui::MenuItem("Clear Edge Matte")) {
         int changed = clear_image_edge_matte(i, false, true);
         char msg[128];
@@ -105,16 +115,16 @@ static void image_list_draw_action_menu(int i, bool *delete_this_image)
         snprintf(msg, sizeof msg, changed > 0 ? "Cleared %d black matte pixel(s)" : "No black matte found", changed);
         stage_set_toast(msg);
     }
+    if (runtime_locked) ImGui::EndDisabled();
 
     ImGui::Separator();
+    if (runtime_locked) ImGui::BeginDisabled();
     if (ImGui::MenuItem("Edit Image ID...")) {
         snprintf(g_img_edit_buf, sizeof g_img_edit_buf, "%X", im->idx);
         g_img_edit_idx = i;
     }
     if (ImGui::MenuItem("Resize Sprite..."))
         open_sprite_resize(i, false);
-    if (ImGui::MenuItem("Select All Uses"))
-        select_all_with_image_ii(im->idx);
     if (ImGui::MenuItem("Replace from PNG...")) {
         char path[512] = "";
         if (file_dialog_open("Replace from PNG",
@@ -124,13 +134,18 @@ static void image_list_draw_action_menu(int i, bool *delete_this_image)
             reimport_image(i, path);
         }
     }
+    if (runtime_locked) ImGui::EndDisabled();
+    if (ImGui::MenuItem("Select All Uses"))
+        select_all_with_image_ii(im->idx);
     if (ImGui::MenuItem("Export as TGA"))
         export_image_tga(im);
     if (ImGui::MenuItem("Export as PNG"))
         export_image_png(im);
     ImGui::Separator();
+    if (runtime_locked) ImGui::BeginDisabled();
     if (ImGui::MenuItem("Delete image") && delete_this_image)
         *delete_this_image = true;
+    if (runtime_locked) ImGui::EndDisabled();
 }
 
 static void image_list_select_asset(int i)
@@ -139,7 +154,8 @@ static void image_list_select_asset(int i)
     Img *im = &g_img[i];
 
     g_place_tool_img = i;
-    g_cur_tool = 1;
+    if (!runtime_actor_image_is_preview_import(im))
+        g_cur_tool = 1;
     if (im->pal_idx >= 0 && im->pal_idx < g_n_pals)
         g_sel_pal = im->pal_idx;
 
@@ -191,7 +207,8 @@ void draw_image_list(void)
             if (g_obj[oi].ii == g_img[ii].idx) { used = 1; break; }
         if (!used) {
             unused_imgs++;
-            if (image_is_imported_asset(&g_img[ii])) {
+            if (image_is_imported_asset(&g_img[ii]) &&
+                !runtime_actor_image_is_preview_import(&g_img[ii])) {
                 unused_imported_imgs++;
                 unused_imported_pixels += g_img[ii].w * g_img[ii].h;
             }
@@ -239,6 +256,7 @@ void draw_image_list(void)
         int fixed_pixels = 0;
         for (int i = 0; i < g_ni; i++) {
             if (!image_is_imported_asset(&g_img[i])) continue;
+            if (runtime_actor_image_is_preview_import(&g_img[i])) continue;
             int changed = clear_image_edge_matte(i, true, !undo_done);
             if (changed > 0) {
                 undo_done = true;
@@ -420,6 +438,8 @@ void draw_image_list(void)
     }
 
     if (img_sort != 0) {
+        bool runtime_preview_loaded = runtime_actor_preview_imports_loaded();
+        if (runtime_preview_loaded) ImGui::BeginDisabled();
         if (ImGui::SmallButton("Apply Sort to BDD Order")) {
             undo_save_ex("Sort Images");
             const int image_cap = editor_project_image_capacity();
@@ -441,9 +461,14 @@ void draw_image_list(void)
             }
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Reorders image records only; object image IDs stay the same.");
+            ImGui::SetTooltip(runtime_preview_loaded
+                ? "Discard runtime preview imports before changing BDD image order."
+                : "Reorders image records only; object image IDs stay the same.");
+        if (runtime_preview_loaded) ImGui::EndDisabled();
         ImGui::SameLine();
     }
+    bool runtime_preview_loaded_for_ids = runtime_actor_preview_imports_loaded();
+    if (runtime_preview_loaded_for_ids) ImGui::BeginDisabled();
     if (ImGui::SmallButton("Compact Image IDs")) {
         undo_save_ex("Compact Image Indices");
         for (int i = 0; i < g_ni; i++) {
@@ -458,7 +483,10 @@ void draw_image_list(void)
         stage_set_toast("Image IDs compacted");
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Renumbers BDD image IDs to match current list order.");
+        ImGui::SetTooltip(runtime_preview_loaded_for_ids
+            ? "Discard runtime preview imports before compacting image IDs."
+            : "Renumbers BDD image IDs to match current list order.");
+    if (runtime_preview_loaded_for_ids) ImGui::EndDisabled();
 
     int shown_images = 0;
     for (int i = 0; i < g_ni; i++)
@@ -494,6 +522,7 @@ void draw_image_list(void)
             if (!image_passes_list_filter(im, img_filter, img_search, search_idx)) continue;
             const ImageModuleInfo *module_info = &image_modules[(size_t)i];
             int use_count = module_info->use_count;
+            bool runtime_locked = runtime_actor_image_is_preview_import(im);
 
             if (img_sort == 9) {
                 int bucket = module_info->bucket;
@@ -549,7 +578,7 @@ void draw_image_list(void)
                 if (g_place_tool_img == i)
                     ImGui::GetWindowDrawList()->AddRect(im_min, im_max,
                         IM_COL32(0, 220, 255, 255), 0, 0, 2.0f);
-                if (ImGui::BeginDragDropSource()) {
+                if (!runtime_locked && ImGui::BeginDragDropSource()) {
                     ImGui::SetDragDropPayload("IMG_REORDER", &i, sizeof(int));
                     ImGui::Text("Move img %d", i);
                     ImGui::EndDragDropSource();
@@ -557,7 +586,9 @@ void draw_image_list(void)
                 if (ImGui::BeginDragDropTarget()) {
                     if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("IMG_REORDER")) {
                         int src = *(int*)pl->Data;
-                        if (src >= 0 && src < g_ni && src != i) {
+                        if (src >= 0 && src < g_ni && src != i &&
+                            !runtime_actor_image_is_preview_import(&g_img[src]) &&
+                            !runtime_locked) {
                             undo_save();
                             if (editor_project_swap_image_slots(src, i)) {
                                 g_need_rebuild = 1;
@@ -623,6 +654,7 @@ void draw_image_list(void)
                 ImGui::PopStyleColor();
             }
 
+            if (runtime_locked) ImGui::BeginDisabled();
             if (ImGui::SmallButton("+")) {
                 add_image_to_view_center(i);
             }
@@ -633,6 +665,7 @@ void draw_image_list(void)
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Resize this sprite image");
             ImGui::SameLine(0, 4);
+            if (runtime_locked) ImGui::EndDisabled();
             if (ImGui::SmallButton("..."))
                 ImGui::OpenPopup("img_actions");
             if (ImGui::BeginPopup("img_actions")) {

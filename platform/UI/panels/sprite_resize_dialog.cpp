@@ -22,6 +22,10 @@ void open_sprite_resize(int img_idx, bool selected_only_default)
     if (img_idx < 0 || img_idx >= g_ni) return;
     Img *im = &g_img[img_idx];
     if (!im->pix || im->w <= 0 || im->h <= 0) return;
+    if (runtime_actor_image_is_preview_import(im)) {
+        stage_set_toast("Runtime source art is read-only");
+        return;
+    }
     g_resize_img = img_idx;
     g_resize_orig_w = im->w;
     g_resize_orig_h = im->h;

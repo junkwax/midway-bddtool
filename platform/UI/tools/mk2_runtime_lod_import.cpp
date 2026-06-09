@@ -331,6 +331,55 @@ static bool runtime_lod_ref_line_needs_import(const std::vector<std::string> &wa
     return false;
 }
 
+static bool resolve_lod_asm_img_path(const char *lod_dir, const char *raw_token,
+                                     char *out, size_t outsz)
+{
+    char token[512];
+    snprintf(token, sizeof token, "%s", raw_token ? raw_token : "");
+    trim_import_token(token);
+    if (!token[0]) return false;
+    char *dot = strrchr(token, '.');
+    if (dot)
+        snprintf(dot, sizeof token - (size_t)(dot - token), ".IMG");
+    else
+        strncat(token, ".IMG", sizeof token - strlen(token) - 1);
+    return resolve_lod_img_path(lod_dir, token, out, outsz);
+}
+
+static int runtime_lod_import_current_source(const char *source_img,
+                                             const char *source_tag,
+                                             const char *refs,
+                                             const std::vector<std::string> &wanted,
+                                             std::vector<std::string> &imported_paths,
+                                             int *matched_labels)
+{
+    if (!source_img || !source_img[0] ||
+        !runtime_lod_ref_line_needs_import(wanted, refs))
+        return 0;
+
+    bool already = false;
+    for (size_t i = 0; i < imported_paths.size(); i++) {
+        if (strcasecmp(imported_paths[i].c_str(), source_img) == 0) {
+            already = true;
+            break;
+        }
+    }
+    if (already) return 0;
+
+    int start = g_ni;
+    int pal_start = g_n_pals;
+    int n = import_img_file(source_img, false);
+    if (n <= 0) return 0;
+
+    imported_paths.push_back(source_img);
+    lod_tag_imported_range(start, g_ni, source_tag && source_tag[0] ? source_tag : source_img);
+    runtime_actor_mark_preview_import_range(start, pal_start,
+                                            start, g_ni,
+                                            source_tag && source_tag[0] ? source_tag : source_img);
+    lod_mark_reference_line(start, g_ni, refs, matched_labels);
+    return n;
+}
+
 static int import_runtime_lod_sources_from_lod(const char *lod_path, const std::vector<std::string> &wanted)
 {
     FILE *f = fopen(lod_path, "r");
@@ -353,26 +402,32 @@ static int import_runtime_lod_sources_from_lod(const char *lod_path, const std::
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
         if (strncmp(p, "--->", 4) == 0) {
-            if (last_img[0] && runtime_lod_ref_line_needs_import(wanted, p + 4)) {
+            int n = runtime_lod_import_current_source(last_img, lod_path, p + 4,
+                                                      wanted, imported_paths,
+                                                      &matched_labels);
+            if (n > 0) {
+                imported += n;
                 matched_lines++;
-                bool already = false;
-                for (size_t i = 0; i < imported_paths.size(); i++) {
-                    if (strcasecmp(imported_paths[i].c_str(), last_img) == 0) {
-                        already = true;
-                        break;
-                    }
-                }
-                if (!already) {
-                    int start = g_ni;
-                    int n = import_img_file(last_img, false);
-                    if (n > 0) {
-                        imported += n;
-                        imported_paths.push_back(last_img);
-                        lod_tag_imported_range(start, g_ni, lod_path);
-                        lod_mark_reference_line(start, g_ni, p + 4, &matched_labels);
-                    }
-                }
             }
+            continue;
+        }
+        if (strncmp(p, "FRM>", 4) == 0) {
+            int n = runtime_lod_import_current_source(last_img, lod_path, p + 4,
+                                                      wanted, imported_paths,
+                                                      &matched_labels);
+            if (n > 0) {
+                imported += n;
+                matched_lines++;
+            }
+            continue;
+        }
+        if (strncmp(p, "ASM>", 4) == 0) {
+            char asm_token[512];
+            snprintf(asm_token, sizeof asm_token, "%s", p + 4);
+            trim_import_token(asm_token);
+            if (resolve_lod_asm_img_path(lod_dir, asm_token, last_img, sizeof last_img))
+                continue;
+            last_img[0] = '\0';
             continue;
         }
 
@@ -458,6 +513,46 @@ int import_runtime_lod_sources_for_active_guides(bool save_undo)
     return imported;
 }
 
+int import_runtime_lod_source_labels(const char *lod_token,
+                                     const char *const *labels,
+                                     int label_count,
+                                     bool save_undo)
+{
+    if (!lod_token || !lod_token[0] || !labels || label_count <= 0)
+        return 0;
+
+    std::vector<std::string> wanted;
+    wanted.reserve((size_t)label_count);
+    for (int i = 0; i < label_count; i++) {
+        char label[64];
+        snprintf(label, sizeof label, "%s", labels[i] ? labels[i] : "");
+        trim_import_token(label);
+        uppercase_ascii_inplace(label);
+        if (!label[0] || img_label_exists_ci(label))
+            continue;
+        bool seen = false;
+        for (size_t j = 0; j < wanted.size(); j++)
+            if (strcasecmp(wanted[j].c_str(), label) == 0) { seen = true; break; }
+        if (!seen)
+            wanted.push_back(label);
+    }
+    if (wanted.empty())
+        return 0;
+
+    char lod_path[1024];
+    if (!runtime_resolve_lod_path(lod_token, lod_path, sizeof lod_path))
+        return 0;
+
+    if (save_undo) undo_save_ex("Import Runtime LOD Sources");
+    int imported = import_runtime_lod_sources_from_lod(lod_path, wanted);
+    if (imported > 0) {
+        g_show_images = true;
+        g_dirty = 1;
+        g_need_rebuild = 1;
+    }
+    return imported;
+}
+
 static bool runtime_guides_have_any_source_image(void)
 {
     tower_runtime_guides_init_once();
@@ -491,21 +586,28 @@ static int mark_runtime_guide_images_as_lod_refs(void)
 
 extern "C" int bg_editor_autoload_lod_assets(void)
 {
-    if (!g_have_bdb || !mk2_current_stage_has_known_runtime_extras())
+    if (!g_have_bdb)
         return 0;
-    settings_load_runtime_autoload_pref_once();
-    if (!g_pref_autoload_runtime_extras)
+    mk2_runtime_autoload_stage_recipe();
+    if (!mk2_current_stage_has_known_runtime_extras())
         return 0;
 
+    int old_dirty = g_dirty;
+    int old_need_rebuild = g_need_rebuild;
+    bool old_palette_dirty = g_mk2_palette_sync_dirty;
     int imported = import_runtime_lod_sources_for_active_guides(false);
 
     if (imported <= 0 && mk2_current_stage_is_battle() && !runtime_guides_have_any_source_image()) {
         char battle_img_path[512];
         if (mk2_find_sibling_data_file("BATTLE.IMG", battle_img_path, sizeof battle_img_path)) {
             int start = g_ni;
+            int pal_start = g_n_pals;
             int n = import_img_file(battle_img_path, false);
             if (n > 0) {
                 lod_tag_imported_range(start, g_ni, "MK7MIL.LOD");
+                runtime_actor_mark_preview_import_range(start, pal_start,
+                                                        start, g_ni,
+                                                        "BATTLE.IMG");
                 imported += n;
             }
         }
@@ -528,6 +630,12 @@ extern "C" int bg_editor_autoload_lod_assets(void)
         fprintf(stderr, "autoload-lod: imported=%d baked=%d marked=%d\n",
                 imported, baked, marked);
     }
+    g_dirty = old_dirty;
+    g_mk2_palette_sync_dirty = old_palette_dirty;
+    if (imported > 0 || baked > 0 || marked > 0)
+        g_need_rebuild = 1;
+    else
+        g_need_rebuild = old_need_rebuild;
     return imported + baked + marked;
 }
 

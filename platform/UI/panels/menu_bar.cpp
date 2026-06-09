@@ -458,7 +458,8 @@ void MenuBarPanel::render()
                 snprintf(msg, sizeof msg, removed ? "Deleted %d unused palette(s)" : "No unused palettes", removed);
                 stage_set_toast(msg);
             }
-            if (ImGui::MenuItem("Compact Image Indices", NULL, false, g_ni > 0)) {
+            bool can_compact_ids = g_ni > 0 && !runtime_actor_preview_imports_loaded();
+            if (ImGui::MenuItem("Compact Image Indices", NULL, false, can_compact_ids)) {
                 /* Renumber image indices to 0, 1, 2, … and fix all object references */
                 undo_save_ex("Compact Indices");
                 for (int i = 0; i < g_ni; i++) {

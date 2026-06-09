@@ -10,6 +10,9 @@ bool runtime_actor_preview_hides_object(int obj_i);
 bool runtime_actor_preview_imports_loaded(void);
 int runtime_actor_preview_import_count(void);
 void runtime_actor_preview_import_status(char *out, size_t outsz);
+void runtime_actor_mark_preview_import_range(int image_base, int palette_base,
+                                            int start, int end,
+                                            const char *source_label);
 bool runtime_actor_sidecar_load(void);
 bool runtime_actor_sidecar_save(void);
 int runtime_actor_import_inferred_level_animations(void);

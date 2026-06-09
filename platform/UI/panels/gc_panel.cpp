@@ -37,11 +37,14 @@ void GarbageCollectPanel::render()
 
     if (ImGui::SmallButton("Select All"))
         for (int i = 0; i < g_ni; i++)
-            gc_sel[i] = image_use_count(g_img[i].idx) == 0 ? 1 : 0;
+            gc_sel[i] = (image_use_count(g_img[i].idx) == 0 &&
+                         !runtime_actor_image_is_preview_import(&g_img[i])) ? 1 : 0;
     ImGui::SameLine();
     if (ImGui::SmallButton("Select Imported"))
         for (int i = 0; i < g_ni; i++)
-            gc_sel[i] = (image_use_count(g_img[i].idx) == 0 && image_is_imported_asset(&g_img[i])) ? 1 : 0;
+            gc_sel[i] = (image_use_count(g_img[i].idx) == 0 &&
+                         image_is_imported_asset(&g_img[i]) &&
+                         !runtime_actor_image_is_preview_import(&g_img[i])) ? 1 : 0;
     ImGui::SameLine();
     if (ImGui::SmallButton("Deselect All"))
         std::fill(gc_sel.begin(), gc_sel.end(), 0);
@@ -87,7 +90,8 @@ void GarbageCollectPanel::render()
     if (ImGui::Button("Delete Selected")) {
         undo_save_ex("GC Delete");
         for (int i = g_ni - 1; i >= 0; i--) {
-            if (image_use_count(g_img[i].idx) == 0 && gc_sel[i]) {
+            if (image_use_count(g_img[i].idx) == 0 && gc_sel[i] &&
+                !runtime_actor_image_is_preview_import(&g_img[i])) {
                 editor_project_delete_image_slot(i);
             }
         }

@@ -29,6 +29,16 @@ bool mk2_current_stage_is_battle(void)
            strstr(g_bdd_path, "BATTLE") || strstr(g_bdd_path, "battle");
 }
 
+static bool mk2_current_stage_is_forest(void)
+{
+    if (g_name[0] && (strcasecmp(g_name, "FOREST") == 0 || strcasecmp(g_name, "FOREST2") == 0)) return true;
+    if (g_stage_internal_name[0] &&
+        (strcasecmp(g_stage_internal_name, "FOREST") == 0 || strcasecmp(g_stage_internal_name, "FOREST2") == 0))
+        return true;
+    return strstr(g_bdb_path, "FOREST") || strstr(g_bdb_path, "forest") ||
+           strstr(g_bdd_path, "FOREST") || strstr(g_bdd_path, "forest");
+}
+
 static bool mk2_current_stage_looks_like_tower_runtime(void)
 {
     if (mk2_current_stage_is_tower2()) return true;
@@ -44,6 +54,7 @@ static int mk2_runtime_suggested_preset_for_stage(void)
 {
     if (mk2_current_stage_looks_like_tower_runtime()) return 1;
     if (mk2_current_stage_is_battle()) return 2;
+    if (mk2_current_stage_is_forest()) return 4;
     return 0;
 }
 
@@ -51,6 +62,8 @@ static int mk2_runtime_stage_kind(void)
 {
     return g_runtime_recipe_kind;
 }
+
+static void runtime_guides_load_preset(int kind);
 
 bool mk2_current_stage_has_known_runtime_extras(void)
 {
@@ -85,6 +98,12 @@ const RuntimeExtraGuide g_battle_runtime_guide_defaults[] = {
 const int g_battle_runtime_guide_defaults_count =
     (int)(sizeof(g_battle_runtime_guide_defaults) / sizeof(g_battle_runtime_guide_defaults[0]));
 
+const RuntimeExtraGuide g_forest_runtime_guide_defaults[] = {
+    { "FL_FORST", "FL_FORST floor", "MK7MIL.LOD", 0, 0xD7, 664, 39, 1.0f, 0x40, 0, IM_COL32(110, 210, 125, 95) },
+};
+const int g_forest_runtime_guide_defaults_count =
+    (int)(sizeof(g_forest_runtime_guide_defaults) / sizeof(g_forest_runtime_guide_defaults[0]));
+
 RuntimeExtraGuide g_tower_runtime_guides[MAX_RUNTIME_EXTRA_GUIDES];
 bool g_tower_runtime_guides_init = false;
 bool g_tower_runtime_guides_dirty = false;
@@ -104,6 +123,10 @@ static const RuntimeExtraGuide *runtime_guide_defaults_for_stage(int kind, int *
         if (count) *count = g_battle_runtime_guide_defaults_count;
         return g_battle_runtime_guide_defaults;
     }
+    if (kind == 4) {
+        if (count) *count = g_forest_runtime_guide_defaults_count;
+        return g_forest_runtime_guide_defaults;
+    }
     if (kind == 1) {
         if (count) *count = g_tower_runtime_guide_defaults_count;
         return g_tower_runtime_guide_defaults;
@@ -115,8 +138,19 @@ static const char *runtime_stage_display_name(int kind)
 {
     if (kind == 2) return "Wasteland/BATTLE";
     if (kind == 1) return "TOWER2/TWGCLOUD";
+    if (kind == 4) return "Living Forest";
     if (kind == 3) return "Custom";
     return "Unknown";
+}
+
+int mk2_runtime_autoload_stage_recipe(void)
+{
+    if (g_runtime_recipe_kind == 0) {
+        int suggested = mk2_runtime_suggested_preset_for_stage();
+        if (suggested)
+            runtime_guides_load_preset(suggested);
+    }
+    return g_runtime_recipe_kind;
 }
 
 void tower_runtime_guides_init_once(void)
@@ -191,21 +225,76 @@ static void mk2_runtime_extra_table_row(const char *kind, const char *asset, con
     ImGui::TableNextColumn(); ImGui::TextUnformatted(source);
 }
 
+static bool mk2_try_data_file(const char *dir, const char *filename, char *out, size_t outsz)
+{
+    if (!dir || !dir[0] || !filename || !filename[0]) return false;
+    path_join(out, outsz, dir, filename);
+    return stage_file_exists(out);
+}
+
+static bool mk2_try_root_data_file(const char *root, const char *filename, char *out, size_t outsz)
+{
+    if (!root || !root[0]) return false;
+    char data_dir[512];
+    path_join(data_dir, sizeof data_dir, root, "data");
+    return mk2_try_data_file(data_dir, filename, out, outsz);
+}
+
+static bool mk2_derive_workplace_root(const char *path, char *out, size_t outsz)
+{
+    if (!path || !path[0] || !out || outsz == 0) return false;
+    char clean[512];
+    snprintf(clean, sizeof clean, "%s", path);
+    for (char *p = clean; *p; p++)
+        if (*p == '/') *p = '\\';
+    const char *needle = "\\Workplace\\";
+    char *hit = strstr(clean, needle);
+    if (!hit) return false;
+    size_t n = (size_t)(hit - clean) + strlen("\\Workplace");
+    if (n >= outsz) n = outsz - 1;
+    memcpy(out, clean, n);
+    out[n] = '\0';
+    return out[0] != '\0';
+}
+
+static bool mk2_try_workplace_data_file(const char *workplace,
+                                        const char *relative_root,
+                                        const char *filename,
+                                        char *out,
+                                        size_t outsz)
+{
+    char root[512];
+    path_join(root, sizeof root, workplace, relative_root);
+    return mk2_try_root_data_file(root, filename, out, outsz);
+}
+
 bool mk2_find_sibling_data_file(const char *filename, char *out, size_t outsz)
 {
     if (!filename || !out || outsz == 0) return false;
     out[0] = '\0';
     const char *base_path = g_bdb_path[0] ? g_bdb_path : g_bdd_path;
-    if (!base_path || !base_path[0]) return false;
-    snprintf(out, outsz, "%s", base_path);
-    char *sep = strrchr(out, '\\');
-    char *slash = strrchr(out, '/');
-    if (!sep || (slash && slash > sep)) sep = slash;
-    if (sep) sep[1] = '\0';
-    else out[0] = '\0';
-    size_t n = strlen(out);
-    snprintf(out + n, outsz - n, "%s", filename);
-    return stage_file_exists(out);
+    if (base_path && base_path[0]) {
+        char stage_dir[512];
+        stage_dirname(base_path, stage_dir, sizeof stage_dir);
+        if (mk2_try_data_file(stage_dir, filename, out, outsz))
+            return true;
+    }
+
+    if (mk2_try_root_data_file(g_stage_mk2_root, filename, out, outsz))
+        return true;
+
+    char workspace[512];
+    if (base_path && mk2_derive_workplace_root(base_path, workspace, sizeof workspace)) {
+        if (mk2_try_workplace_data_file(workspace, "mk2-readonly\\mk2-main", filename, out, outsz))
+            return true;
+        if (mk2_try_workplace_data_file(workspace, "mk2-main", filename, out, outsz))
+            return true;
+        if (mk2_try_workplace_data_file(workspace, "mk2-rebuild-main", filename, out, outsz))
+            return true;
+    }
+
+    out[0] = '\0';
+    return false;
 }
 
 static void mk2_append_runtime_tradeoff_notes(char *out, size_t outsz)
@@ -283,7 +372,11 @@ static void draw_tower_runtime_guide_editor(void)
         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f),
                            "This filename looks like %s, but no runtime recipe is loaded.",
                            runtime_stage_display_name(suggested));
-        if (ImGui::Button(suggested == 1 ? "Use Tower2 Runtime Recipe" : "Use Wasteland Runtime Recipe", ImVec2(-1, 0))) {
+        const char *btn_label = suggested == 1 ? "Use Tower2 Runtime Recipe"
+                              : suggested == 2 ? "Use Wasteland Runtime Recipe"
+                              : suggested == 4 ? "Use Forest Runtime Recipe"
+                              : "Use Runtime Recipe";
+        if (ImGui::Button(btn_label, ImVec2(-1, 0))) {
             runtime_guides_load_preset(suggested);
             stage_set_toast("Loaded suggested runtime recipe");
         }
@@ -492,9 +585,13 @@ void draw_mk2_runtime_extras_tool(void)
             img_path, sizeof img_path))
         {
             int start = g_ni;
+            int pal_start = g_n_pals;
             int n = import_img_file(img_path);
             if (n > 0) {
                 lod_tag_imported_range(start, g_ni, path_basename_ptr(img_path));
+                runtime_actor_mark_preview_import_range(start, pal_start,
+                                                        start, g_ni,
+                                                        img_path);
                 g_show_images = true;
             }
             char msg[160];
@@ -518,6 +615,9 @@ void draw_mk2_runtime_extras_tool(void)
         ImGui::TextDisabled("Review every source path before import. You can browse per-guide sources below.");
     } else if (runtime_kind == 1) {
         ImGui::TextColored(ImVec4(0.45f, 0.8f, 1.0f, 1.0f), "Tower2 preset loaded.");
+        ImGui::TextDisabled("Review every source path before import. You can browse per-guide sources below.");
+    } else if (runtime_kind == 4) {
+        ImGui::TextColored(ImVec4(0.45f, 0.8f, 1.0f, 1.0f), "Living Forest preset loaded.");
         ImGui::TextDisabled("Review every source path before import. You can browse per-guide sources below.");
     } else {
         ImGui::TextColored(ImVec4(0.45f, 0.8f, 1.0f, 1.0f), "Custom runtime recipe loaded.");

@@ -139,6 +139,14 @@ int delete_matching_imported_images_and_uses(int img_filter, const char *img_sea
     int delete_uses = 0;
     int delete_images = collect_matching_imported_images(img_filter, img_search, search_idx,
                                                          del_img.data(), &delete_pixels, &delete_uses);
+    for (int i = 0; i < g_ni; i++) {
+        if (!del_img[(size_t)i] || !runtime_actor_image_is_preview_import(&g_img[i]))
+            continue;
+        del_img[(size_t)i] = 0;
+        delete_images--;
+        delete_pixels -= g_img[i].w * g_img[i].h;
+        delete_uses -= image_object_ref_count(g_img[i].idx);
+    }
     if (delete_images <= 0) return 0;
 
     undo_save_ex("Delete Imported Source Group");
@@ -184,6 +192,7 @@ int delete_unused_images_impl(bool imported_only, const char *undo_label)
     int delete_pixels = 0;
     for (int i = 0; i < g_ni; i++) {
         if (image_object_ref_count(g_img[i].idx) != 0) continue;
+        if (runtime_actor_image_is_preview_import(&g_img[i])) continue;
         if (imported_only && !image_is_imported_asset(&g_img[i])) continue;
         delete_count++;
         delete_pixels += g_img[i].w * g_img[i].h;
@@ -196,6 +205,8 @@ int delete_unused_images_impl(bool imported_only, const char *undo_label)
         std::vector<unsigned char> del_img((size_t)image_cap, 0);
         for (int i = 0; i < g_ni; i++) {
             bool del = image_object_ref_count(g_img[i].idx) == 0;
+            if (del && runtime_actor_image_is_preview_import(&g_img[i]))
+                del = false;
             if (del && imported_only && !image_is_imported_asset(&g_img[i]))
                 del = false;
             if (del) del_img[(size_t)i] = 1;
