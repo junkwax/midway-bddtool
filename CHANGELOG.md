@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-06-09
+
+### Changed
+- Release builds now derive the app version from the pushed `v*` tag, keeping
+  the window title, About dialog, and Windows resource metadata in sync.
+- GitHub releases now include an explicit source archive and generated release
+  notes instead of the old fixed "Initial release" text.
+
 ## [1.0.1] - 2026-06-03
 
 ### Fixed

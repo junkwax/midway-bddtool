@@ -50,7 +50,7 @@
 #include "UI/assets/texture_cache.h"
 
 #ifndef BDDVIEW_VERSION
-#define BDDVIEW_VERSION "1.0"
+#define BDDVIEW_VERSION "0.0.0-dev"
 #endif
 
 static int           g_last_obj = -1;   /* g_obj[] index of last dragged/placed object */

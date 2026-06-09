@@ -1,13 +1,14 @@
 // bddview Windows resource file
 #include <windows.h>
+#include "Core/app_version_resource.h"
 
 #define IDI_APP_ICON 1
 
 IDI_APP_ICON ICON "assets\\appicon.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,1,0
- PRODUCTVERSION 1,0,1,0
+ FILEVERSION BDDVIEW_RC_VERSION
+ PRODUCTVERSION BDDVIEW_RC_VERSION
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -24,11 +25,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "junkwax"
             VALUE "FileDescription", "bddview"
-            VALUE "FileVersion", "1.0.1"
+            VALUE "FileVersion", BDDVIEW_RC_VERSION_STRING
             VALUE "InternalName", "bddview"
             VALUE "OriginalFilename", "bddview.exe"
             VALUE "ProductName", "midway-bddtool"
-            VALUE "ProductVersion", "1.0.1"
+            VALUE "ProductVersion", BDDVIEW_RC_VERSION_STRING
         END
     END
     BLOCK "VarFileInfo"

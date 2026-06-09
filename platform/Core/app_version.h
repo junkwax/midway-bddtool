@@ -1,6 +1,10 @@
 #ifndef APP_VERSION_H
 #define APP_VERSION_H
 
-#define BDDVIEW_APP_VERSION "1.0.1"
+#ifndef BDDVIEW_VERSION
+#define BDDVIEW_VERSION "0.0.0-dev"
+#endif
+
+#define BDDVIEW_APP_VERSION BDDVIEW_VERSION
 
 #endif

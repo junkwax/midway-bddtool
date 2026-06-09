@@ -27,6 +27,19 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Resolve release version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "Release tags must look like v1.0.2 or v1.0.2.0" >&2
+            exit 1
+          fi
+
+          echo "BDDVIEW_RELEASE_VERSION=${version}" >> "${GITHUB_ENV}"
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -40,7 +53,7 @@ jobs:
           brew install sdl2
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBDDVIEW_RELEASE_VERSION="${BDDVIEW_RELEASE_VERSION}"
 
       - name: Build
         run: cmake --build build --config Release --parallel 2
@@ -89,9 +102,35 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  source:
+    name: Package source
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Package source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package="midway-bddtool-${GITHUB_REF_NAME}-source"
+          mkdir -p dist
+          git archive --format=zip --prefix="${package}/" -o "dist/${package}.zip" "${GITHUB_SHA}"
+
+      - name: Upload source package
+        uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: dist/*.zip
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
-    needs: build
+    needs:
+      - build
+      - source
     runs-on: ubuntu-latest
 
     steps:
@@ -107,20 +146,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          cat > release-notes.md <<'NOTES'
-          Initial midway-bddtool release.
-
-          Packages include:
-          - `bin/bddview`
-          - `bin/bddtool`
-          - runtime assets under `bin/assets/`
-          NOTES
-
           if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
             gh release upload "${TAG_NAME}" release-assets/*.zip --clobber
           else
             gh release create "${TAG_NAME}" release-assets/*.zip \
               --title "midway-bddtool ${TAG_NAME}" \
-              --notes-file release-notes.md \
+              --generate-notes \
               --verify-tag
           fi

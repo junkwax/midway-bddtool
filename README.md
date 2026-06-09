@@ -83,7 +83,9 @@ writes the release executable under `%LOCALAPPDATA%\bddview-build\`.
 ## Releases
 
 Tagged releases are built by GitHub Actions. Pushing a `v*` tag publishes a
-GitHub release with zip packages for Linux and macOS.
+GitHub release with zip packages for Linux, macOS, and a checked-out source
+archive. The tag version is passed into CMake, so `BDD Viewer vX.Y.Z`, the
+About dialog, and Windows executable metadata match the release tag.
 
 ## Usage
 

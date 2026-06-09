@@ -1,5 +1,18 @@
 cmake_minimum_required(VERSION 3.16)
-project(bddview VERSION 1.0.1 LANGUAGES C CXX)
+
+set(BDDVIEW_DEFAULT_VERSION "1.0.2")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" BDDVIEW_DEFAULT_VERSION LIMIT_COUNT 1)
+endif()
+string(STRIP "${BDDVIEW_DEFAULT_VERSION}" BDDVIEW_DEFAULT_VERSION)
+
+set(BDDVIEW_RELEASE_VERSION "${BDDVIEW_DEFAULT_VERSION}" CACHE STRING "bddview application version")
+string(STRIP "${BDDVIEW_RELEASE_VERSION}" BDDVIEW_RELEASE_VERSION)
+if(NOT BDDVIEW_RELEASE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+(\\.[0-9]+)?$")
+    message(FATAL_ERROR "BDDVIEW_RELEASE_VERSION must be numeric semver, for example 1.0.2")
+endif()
+
+project(bddview VERSION "${BDDVIEW_RELEASE_VERSION}" LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -7,6 +20,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(SDL2 REQUIRED)
+
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/Core")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/platform/Core/app_version_resource.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/Core/app_version_resource.h"
+    @ONLY
+)
 
 if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/platform/bddview.rc")
     set(BDDVIEW_RC platform/bddview.rc)
@@ -200,6 +220,7 @@ add_executable(bddview
 )
 
 target_include_directories(bddview PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
     platform
     imgui
     imgui/backends
