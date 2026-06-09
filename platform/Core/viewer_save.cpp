@@ -1,11 +1,20 @@
-#include "bg_editor_globals.h"
+#include "Core/viewer_save.h"
 
+#include "Core/app_diagnostics.h"
+#include "Core/bdd_core.h"
 #include "Core/bdd_metadata.h"
+#include "Core/editor_project_globals.h"
+#include "Core/editor_project_storage.h"
+#include "UI/mk2_runtime_actor_tool.h"
+#include "UI/toast_notifications.h"
 
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <new>
+#include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -231,7 +240,7 @@ int bdb_save(const char *path)
                            objects, g_no, &save_result)) {
         fprintf(stderr, "bdb: failed while writing %s\n", tmp);
         bdd_save_logf("BDB save failed: temp=\"%s\" target=\"%s\" error=\"%s\" objects=%d modules=%d ferror_errno=%d (%s) fclose_errno=%d (%s)",
-                      tmp, path, save_result.error[0] ? save_result.error : "unknown",
+                      tmp, path, !save_result.error.empty() ? save_result.error.c_str() : "unknown",
                       g_no, g_bdb_num_modules,
                       save_result.ferror_errno,
                       save_result.ferror_errno ? strerror(save_result.ferror_errno) : "none",
@@ -253,8 +262,8 @@ bdb_save_done:
 
 int bdd_save(void)
 {
-    BddCoreImage *images = NULL;
-    BddCorePalette *palettes = NULL;
+    std::vector<BddCoreImage> images;
+    std::vector<BddCorePalette> palettes;
     BddCoreSaveResult save_result;
     int image_cap;
     int pal_cap;
@@ -276,10 +285,19 @@ int bdd_save(void)
                       g_ni, image_cap, g_n_pals, pal_cap);
         return 0;
     }
+    if (runtime_actor_preview_imports_loaded()) {
+        char msg[256];
+        runtime_actor_preview_import_status(msg, sizeof msg);
+        fprintf(stderr, "bdd: save blocked, runtime preview imports loaded: %s\n", msg);
+        bdd_save_logf("BDD save blocked: %s Save Runtime Sidecar or Discard Preview IMG Imports first.", msg);
+        stage_set_toast("BDD save blocked: discard runtime preview sprites first");
+        return 0;
+    }
 
-    images = (BddCoreImage *)calloc((size_t)image_cap, sizeof(*images));
-    palettes = (BddCorePalette *)calloc((size_t)pal_cap, sizeof(*palettes));
-    if (!images || !palettes) {
+    try {
+        images.reserve((size_t)g_ni);
+        palettes.reserve((size_t)g_n_pals);
+    } catch (const std::bad_alloc &) {
         bdd_save_logf("BDD save failed: temporary save allocation failed");
         goto bdd_save_done;
     }
@@ -287,31 +305,48 @@ int bdd_save(void)
     char tmp[560];
     make_save_temp_path(g_bdd_path, tmp, sizeof tmp);
 
-    for (int i = 0; i < g_ni; i++) {
-        Img *im = &g_img[i];
-        images[i].idx = im->idx;
-        images[i].w = im->w;
-        images[i].h = im->h;
-        images[i].flags = im->flags;
-        images[i].pix = im->pix;
-    }
-    for (int i = 0; i < g_n_pals; i++) {
-        int copy_count = g_pal_count[i];
-        if (copy_count < 0) copy_count = 0;
-        if (copy_count > 256) copy_count = 256;
-        memset(&palettes[i], 0, sizeof palettes[i]);
-        snprintf(palettes[i].name, sizeof palettes[i].name, "%s", g_pal_name[i]);
-        palettes[i].count = g_pal_count[i];
-        for (int j = 0; j < copy_count; j++) {
-            palettes[i].argb[j] = g_pals[i][j];
+    try {
+        for (int i = 0; i < g_ni; i++) {
+            Img *im = &g_img[i];
+            BddCoreImage image{};
+            image.idx = im->idx;
+            image.w = im->w;
+            image.h = im->h;
+            image.flags = im->flags;
+            if (im->pix) {
+                image.pix.assign(im->pix, im->pix + (size_t)im->w * im->h);
+            } else {
+                image.pix.clear();
+            }
+            images.push_back(std::move(image));
         }
-        editor_project_get_palette_rgb555_cache(i, palettes[i].rgb555, copy_count);
+        for (int i = 0; i < g_n_pals; i++) {
+            int copy_count = g_pal_count[i];
+            if (copy_count < 0) copy_count = 0;
+            if (copy_count > 256) copy_count = 256;
+            BddCorePalette palette{};
+            snprintf(palette.name, sizeof palette.name, "%s", g_pal_name[i]);
+            palette.count = copy_count;
+            for (int j = 0; j < copy_count; j++) {
+                palette.argb[j] = g_pals[i][j];
+            }
+            editor_project_get_palette_rgb555_cache(i, palette.rgb555, copy_count);
+            palettes.push_back(palette);
+        }
+    } catch (const std::bad_alloc &) {
+        bdd_save_logf("BDD save failed: temporary save allocation failed");
+        goto bdd_save_done;
     }
 
-    if (!bdd_core_save_bdd(tmp, images, g_ni, palettes, g_n_pals, &save_result)) {
+    if (!bdd_core_save_bdd(tmp,
+                           images.empty() ? NULL : images.data(),
+                           (int)images.size(),
+                           palettes.empty() ? NULL : palettes.data(),
+                           (int)palettes.size(),
+                           &save_result)) {
         fprintf(stderr, "bdd: failed while writing %s\n", tmp);
         bdd_save_logf("BDD save failed: temp=\"%s\" target=\"%s\" error=\"%s\" images=%d palettes=%d ferror_errno=%d (%s) fclose_errno=%d (%s)",
-                      tmp, g_bdd_path, save_result.error[0] ? save_result.error : "unknown",
+                      tmp, g_bdd_path, !save_result.error.empty() ? save_result.error.c_str() : "unknown",
                       g_ni, g_n_pals,
                       save_result.ferror_errno,
                       save_result.ferror_errno ? strerror(save_result.ferror_errno) : "none",
@@ -328,7 +363,5 @@ int bdd_save(void)
     ok = 1;
 
 bdd_save_done:
-    free(palettes);
-    free(images);
     return ok;
 }

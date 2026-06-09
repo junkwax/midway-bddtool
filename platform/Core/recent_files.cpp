@@ -1,4 +1,5 @@
-#include "bg_editor_globals.h"
+#include "Core/recent_files.h"
+
 #include <cstdio>
 #include <cstring>
 

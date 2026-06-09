@@ -1,17 +1,27 @@
 #ifndef BG_EDITOR_GLOBALS_H
 #define BG_EDITOR_GLOBALS_H
 
+#include "app_version.h"
 #include "bdd_format.h"
 #include "Core/app_diagnostics.h"
 #include "Core/bdd_core.h"
 #include "Core/editor_project_storage.h"
 #include "Core/image_lookup.h"
+#include "Core/image_processing.h"
+#include "Core/mk2_shared_paths.h"
+#include "Core/project_header.h"
 #include "Core/project_snapshot.h"
+#include "Core/recent_files.h"
+#include "Core/tga_import.h"
+#include "Core/viewer_load.h"
+#include "Core/viewer_save.h"
+#include "Core/world_module_utils.h"
+#include "UI/mk2_runtime_actor_tool.h"
+#include "UI/toast_notifications.h"
 #include <SDL.h>
 #include <stddef.h>
 #include <stdio.h>
 
-#define BDDVIEW_APP_VERSION "0.6.0-dev"
 #define MK2_LOAD2_MAX_STAGE_PALETTES BDD_CORE_MK2_LOAD2_MAX_STAGE_PALETTES
 #define MK2_LOAD2_MAX_MODULES BDD_CORE_MK2_LOAD2_MAX_MODULES
 #define MK2_LOAD2_MAX_BLOCKS BDD_CORE_MK2_LOAD2_MAX_BLOCKS
@@ -100,12 +110,6 @@ struct Document {
 extern "C" {
 #endif
 
-int bdd_import_tga(const char *path);
-int bdd_load(const char *path);
-int bdb_load(const char *path);
-int bdb_save(const char *path);
-int bdd_save(void);
-
 extern Img *g_img;
 extern int  g_ni;
 extern Obj *g_obj;
@@ -114,7 +118,6 @@ extern char g_name[64];
 extern int  g_have_bdb;
 extern char g_bdb_path[512];
 extern char g_bdd_path[512];
-extern char g_mame_output[512];
 extern char g_stage_internal_name[32];
 extern char g_stage_config_path[512];
 extern char g_stage_dir[512];
@@ -297,8 +300,6 @@ extern int  g_cam_bookmark_x[8];
 extern char g_cam_bookmark_name[8][32];
 extern int  g_cam_new_x;
 extern char g_cam_new_name[32];
-extern char g_runtime_palette_asm[512];
-extern char g_runtime_bgnd[512];
 extern char g_bdb_header[256];
 extern char (*g_bdb_modules)[256];
 extern int  g_bdb_num_modules;
@@ -380,15 +381,6 @@ enum RightPanelId {
     RIGHT_PANEL_COUNT
 };
 
-struct ImageModuleInfo {
-    int primary_module;
-    int bucket;
-    int use_count;
-    int group_count;
-    bool mixed;
-    bool outside;
-};
-
 struct PanCoverageSummary {
     float full;
     float top;
@@ -419,11 +411,6 @@ void merge_duplicate_palettes(void);
 extern bool g_canvas_scrollbar_mouse_capture;
 void batch_palette_rebuild(void);
 int remove_unused_palettes_impl(bool do_remove);
-void stage_set_toast(const char *msg);
-extern float g_toast_timer;
-extern char g_toast_msg[128];
-void draw_stage_toast_overlay(void);
-void draw_toasts(void);
 void capacity_warn_check(void);
 extern bool g_show_new;
 extern int  g_new_template;
@@ -448,7 +435,6 @@ void build_blended_palette(int dst_count, int a, int b, int pct,
                            bool reverse, Uint32 *out);
 int apply_palette_blend_tool(void);
 int apply_palette_union_merge_tool(void);
-Uint32 palette_argb_at(int pal_idx, int color_idx);
 int object_palette_for_image(const Obj *o, const Img *im);
 int group_bpp_color_index(const Uint32 *pal, int count, Uint32 color);
 void right_panel_set_next(int id);
@@ -540,18 +526,9 @@ const char *stage_overlay_mode_name(void);
 void mk2_preview_diff_use_source_and_rom(const char *source_preview, const char *rom_preview);
 void mk2_preview_diff_use_composite_and_rom(const char *composite, const char *rom_preview);
 void mk2_preview_diff_use_rom_and_mame(const char *rom_preview, const char *mame_output);
-int assign_module(int depth, int sy, int width, int height);
-int parse_module_bounds(int m, char *name, int *x1, int *x2, int *y1, int *y2);
 int mk2_include_object_in_nearest_module(int obj_idx);
-void simple_ensure_module(int obj_idx);
-void sync_bdb_header_counts(void);
-int get_world_size(int *out_w, int *out_h);
-int image_max_pixel(const Img *im);
-int image_nonzero_bounds(const Img *im, int *x1, int *y1, int *x2, int *y2);
-void image_palette_usage_stats(const Img *im, int *used_count, int *max_idx);
 int active_image_index(void);
 int image_use_count(int ii);
-int image_object_ref_count(int image_idx);
 int first_unused_image_index(void);
 int mk2_max_object_order(void);
 int mk2_find_first_fit_for_image(const Img *im, int *out_x, int *out_y);
@@ -566,14 +543,10 @@ Uint32 danger_tint_color(Uint32 c, float strength, float keep_blue);
 Uint32 image_pixel_hash(const Img *im, bool hflip);
 bool image_pixels_match(const Img *a, const Img *b, bool mirror);
 bool image_is_imported_asset(const Img *im);
-ImageModuleInfo image_module_info(const Img *im);
-void image_module_group_label(int bucket, char *out, size_t out_sz);
-void image_module_badge_label(const ImageModuleInfo *info, char *out, size_t out_sz);
 int next_free_image_index(int preferred);
 extern int g_chop_tile_w;
 extern int g_chop_tile_h;
 extern bool g_chop_trim_tiles;
-int compact_palettes_for_image_range(int start_img, int end_img, bool save_undo);
 int chop_image_to_map(int img_i, int base_x, int base_y, int wx, int pal_idx,
                       bool hfl, bool vfl, int replace_obj, bool save_undo);
 const char *layer_friendly_name(int layer_byte);
@@ -589,7 +562,6 @@ void doc_save(int idx);
 void doc_restore(int idx);
 void doc_add(void);
 void doc_close(int idx);
-void draw_doc_tab_strip(void);
 float editor_canvas_top_y(void);
 float gv_scroll_factor(int layer_byte);
 void gv_object_origin(int obj_index, int *x, int *y);
@@ -670,11 +642,6 @@ void execute_unsaved_action(int action);
 void open_stage_path_now(const char *path);
 void draw_unsaved_action_prompt(void);
 bool file_dialog_open(const char *title, const char *filter, char *out, int outsz);
-extern int g_recent_count;
-extern char g_recent_files[8][512];
-void recent_add(const char *path);
-void recent_save(void);
-void recent_load(void);
 extern bool g_show_images;
 extern bool g_png_import_force_8bpp;
 extern bool g_import_optimize_after_import;
@@ -694,9 +661,6 @@ extern char g_mk2_palette_sync_status[512];
 extern char g_mk2_palette_sync_output[2048];
 extern int  g_mk2_palette_sync_last_rc;
 extern int g_last_import_img;
-int optimize_image_range_for_space(int start_img, int end_img, bool save_undo,
-                                   int *trimmed_images, int *trimmed_pixels,
-                                   int *compacted_palettes);
 void import_png(const char *path, bool save_undo = true);
 int import_img_file(const char *path, bool save_undo = true);
 int import_img_file_filtered(const char *path, bool save_undo,
@@ -761,10 +725,8 @@ const char *mk2_layer_label(int wx);
 int mk2_layer_preset_count(void);
 const char *mk2_layer_preset_label(int index);
 int mk2_layer_preset_wx(int index);
-void fit_tile_to_world(void);
 int tile_fill_apply(void);
 void draw_tile_fill(void);
-void assign_selected_layer(int wx_layer);
 void draw_mk2_quick_tile_tools(void);
 void draw_mk2_level_start_helper_tool(void);
 void draw_mk2_stage_kit_controls(void);
@@ -841,17 +803,8 @@ int collect_matching_imported_images(int img_filter, const char *img_search,
                                      int *out_pixels, int *out_uses);
 int select_matching_imported_image_uses(int img_filter, const char *img_search, int search_idx);
 int delete_matching_imported_images_and_uses(int img_filter, const char *img_search, int search_idx);
-int clear_image_edge_matte(int img_i, bool require_black, bool save_undo);
-int edge_candidate_index(const Img *im, int *out_count, int *out_total);
-int replace_image_index_with_zero(Img *im, int idx);
-int trim_image_transparent_border(int img_i, bool save_undo);
-int compress_active_image_palette(int img_i, int target, bool save_undo);
 int mk2_set_image_as_static_background(int img_i);
 void reimport_image(int img_idx, const char *path);
-int block_match_candidate_count(int ref_obj, bool used_only);
-int block_match_image_to_object_style(int img_i, int ref_obj, bool used_only,
-                                      bool all_uses, float shade_weight,
-                                      int *out_candidates);
 int active_object_index(void);
 void open_object_properties(int idx);
 bool obj_properties_take_focus_request(void);
@@ -887,8 +840,6 @@ extern bool g_hint_import;
 extern bool g_hint_save;
 bool hint_badge(bool *flag, const char *id);
 void add_image_to_view_center(int img_i);
-void draw_toolbar(void);
-void draw_toolbox(void);
 extern int g_block_edit_img;
 extern int g_block_edit_zoom;
 extern int g_block_edit_col;
@@ -939,13 +890,9 @@ extern bool g_show_undo_history;
 void draw_undo_history(void);
 extern bool g_show_level_stats;
 extern bool g_show_bpp_preview;
-void draw_level_stats_panel(void);
-void draw_bpp_preview_panel(void);
 extern bool g_show_gc;
-void draw_gc_panel(void);
 void draw_mk2_small_artifact_finder(void);
 extern bool g_show_checkpoints;
-void draw_checkpoints_panel(void);
 void open_mk2_tool(int tool);
 void zoom_to_fit(void);
 void zoom_to_selection(void);

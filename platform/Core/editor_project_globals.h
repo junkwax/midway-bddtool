@@ -2,7 +2,6 @@
 #define EDITOR_PROJECT_GLOBALS_H
 
 #include "bdd_format.h"
-#include <SDL.h>
 #ifndef __cplusplus
 #include <stdbool.h>
 #endif

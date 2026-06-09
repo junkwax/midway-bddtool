@@ -1,5 +1,5 @@
 #include "Core/editor_project_storage.h"
-#include "bg_editor_globals.h"
+#include "Core/editor_project_globals.h"
 
 #include <limits.h>
 #include <stdio.h>

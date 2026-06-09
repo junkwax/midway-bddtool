@@ -1,6 +1,7 @@
 #include "bg_editor.h"
-#include "bg_editor_globals.h"
 
+#include "Core/bdd_core.h"
+#include "Core/editor_project_globals.h"
 #include "Core/image_lookup.h"
 
 #include <climits>

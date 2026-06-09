@@ -1,8 +1,8 @@
 #include "Core/viewer_cli_commands.h"
 
+#include "Core/editor_project_globals.h"
 #include "Core/viewer_stage_io.h"
 #include "Core/viewer_test_levels.h"
-#include "bg_editor_globals.h"
 
 #include <cstdio>
 #include <cstring>

@@ -1,8 +1,17 @@
 #include "bg_editor.h"
-#include "bg_editor_globals.h"
 #include "compat.h"
+#include "Core/editor_app_globals.h"
+#include "Core/editor_project_globals.h"
+#include "Core/editor_project_storage.h"
+#include "Core/image_lookup.h"
+#include "Core/image_processing.h"
+#include "Core/import_export.h"
 #include "Core/img_format.h"
-#include "imgui.h"
+#include "Core/path_utils.h"
+#include "Core/stage_paths.h"
+#include "UI/mk2_palette_sync_prompt.h"
+#include "UI/native_file_dialogs.h"
+#include "UI/toast_notifications.h"
 #include "stb_image.h"
 #include "stb_image_write.h"
 #include "undo_manager.h"
@@ -18,8 +27,6 @@
 #include <vector>
 
 #ifdef _WIN32
-#include <commdlg.h>
-#include <shlobj.h>
 #define strcasecmp _stricmp
 #else
 #include <dirent.h>
@@ -360,7 +367,7 @@ int import_img_file_filtered(const char *path, bool save_undo,
             path, imported_imgs, imported_pals, shifted_pals, visible_zero_remaps, skipped_imgs,
             opt_trim_pixels, opt_pals, g_img_import_index0_transparent ? 1 : 0);
     if (save_undo && g_mk2_palette_prompt_after_img_import)
-        mk2_palette_sync_request_prompt("IMG import added BDD palettes");
+        mk2_palette_sync_request_prompt("IMG import added BDD palettes", false);
     return imported_imgs;
 }
 
@@ -467,7 +474,7 @@ int batch_import_img(const char *dir)
         fprintf(stderr, "batch-img: imported %d IMG files, %d sprites from %s (%d failed)\n",
                 libraries, sprites, dir, failed);
         if (g_mk2_palette_prompt_after_img_import)
-            mk2_palette_sync_request_prompt("IMG folder import added BDD palettes");
+            mk2_palette_sync_request_prompt("IMG folder import added BDD palettes", false);
     } else {
         stage_set_toast("No IMG sprites imported");
     }
@@ -805,7 +812,7 @@ int import_lod_file(const char *path, bool save_undo)
                  libraries, sprites, lod_matched);
         stage_set_toast(toast);
         if (g_mk2_palette_prompt_after_img_import)
-            mk2_palette_sync_request_prompt("LOD import added BDD palettes");
+            mk2_palette_sync_request_prompt("LOD import added BDD palettes", false);
     } else {
         stage_set_toast("LOD import found no IMG sprites");
     }
@@ -971,121 +978,6 @@ int bg_editor_import_lod(const char *path)
     return import_lod_file(path);
 }
 
-bool file_dialog_open(const char *title, const char *filter,
-                      char *out, int outsz)
-{
-#ifdef _WIN32
-    OPENFILENAMEA ofn;
-    memset(&ofn, 0, sizeof ofn);
-    out[0] = '\0';
-    ofn.lStructSize = sizeof ofn;
-    ofn.lpstrFilter = filter;
-    ofn.lpstrFile   = out;
-    ofn.nMaxFile    = (DWORD)outsz;
-    ofn.lpstrTitle  = title;
-    ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    return GetOpenFileNameA(&ofn) ? true : false;
-#else
-    (void)filter;
-    char cmd[512];
-    snprintf(cmd, sizeof cmd, "zenity --file-selection --title='%s' 2>/dev/null", title ? title : "Open");
-    FILE *p = popen(cmd, "r");
-    if (!p) {
-        snprintf(cmd, sizeof cmd, "kdialog --getopenfilename . 2>/dev/null");
-        p = popen(cmd, "r");
-    }
-    if (p) {
-        if (fgets(out, outsz, p)) {
-            out[strcspn(out, "\r\n")] = '\0';
-            int ok = out[0] != '\0';
-            pclose(p);
-            return ok;
-        }
-        pclose(p);
-    }
-    out[0] = '\0';
-    return false;
-#endif
-}
-
-bool file_dialog_save(const char *title, const char *filter,
-                      char *out, int outsz)
-{
-#ifdef _WIN32
-    OPENFILENAMEA ofn;
-    memset(&ofn, 0, sizeof ofn);
-    out[0] = '\0';
-    ofn.lStructSize = sizeof ofn;
-    ofn.lpstrFilter = filter;
-    ofn.lpstrFile   = out;
-    ofn.nMaxFile    = (DWORD)outsz;
-    ofn.lpstrTitle  = title;
-    ofn.Flags       = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
-    return GetSaveFileNameA(&ofn) ? true : false;
-#else
-    (void)filter;
-    char cmd[512];
-    snprintf(cmd, sizeof cmd, "zenity --file-selection --save --confirm-overwrite --title='%s' 2>/dev/null",
-             title ? title : "Save");
-    FILE *p = popen(cmd, "r");
-    if (!p) {
-        snprintf(cmd, sizeof cmd, "kdialog --getsavefilename . 2>/dev/null");
-        p = popen(cmd, "r");
-    }
-    if (p) {
-        if (fgets(out, outsz, p)) {
-            out[strcspn(out, "\r\n")] = '\0';
-            int ok = out[0] != '\0';
-            pclose(p);
-            return ok;
-        }
-        pclose(p);
-    }
-    out[0] = '\0';
-    return false;
-#endif
-}
-
-bool folder_dialog_open(const char *title, char *out, int outsz)
-{
-#ifdef _WIN32
-    char sel[1024] = {0};
-    BROWSEINFOA bi = {0};
-    bi.lpszTitle = title ? title : "Select folder";
-    LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
-    if (pidl) {
-        bool ok = SHGetPathFromIDListA(pidl, sel) ? true : false;
-        CoTaskMemFree(pidl);
-        if (ok) {
-            snprintf(out, (size_t)outsz, "%s", sel);
-            return true;
-        }
-    }
-    out[0] = '\0';
-    return false;
-#else
-    char cmd[512];
-    snprintf(cmd, sizeof cmd, "zenity --file-selection --directory --title='%s' 2>/dev/null",
-             title ? title : "Select folder");
-    FILE *p = popen(cmd, "r");
-    if (!p) {
-        snprintf(cmd, sizeof cmd, "kdialog --getexistingdirectory . 2>/dev/null");
-        p = popen(cmd, "r");
-    }
-    if (p) {
-        if (fgets(out, outsz, p)) {
-            out[strcspn(out, "\r\n")] = '\0';
-            int ok = out[0] != '\0';
-            pclose(p);
-            return ok;
-        }
-        pclose(p);
-    }
-    out[0] = '\0';
-    return false;
-#endif
-}
-
 static bool export_composite_to(const char *dest_path)
 {
     if (!g_have_bdb || g_no == 0 || !dest_path) return false;
@@ -1230,50 +1122,6 @@ void stage_export_bundle(void)
     char toast[128];
     snprintf(toast, sizeof toast, "Package exported: %d file(s) -> %s", files_written, out_dir);
     stage_set_toast(toast);
-}
-
-void export_viewport_png(void)
-{
-    if (!g_have_bdb || g_no == 0) return;
-    ImVec2 ds = ImGui::GetIO().DisplaySize;
-    int vw = (int)(ds.x / g_zoom), vh = (int)(ds.y / g_zoom);
-    if (vw <= 0 || vh <= 0 || vw > 8192 || vh > 8192) return;
-
-    unsigned char *buf = (unsigned char *)calloc((size_t)vw * vh, 4);
-    if (!buf) return;
-
-    for (int i = 0; i < g_no; i++) {
-        Obj *o = &g_obj[i];
-        Img *im = img_find(o->ii);
-        if (!im || !im->pix) continue;
-        const Uint32 *pal = (im->pal_idx >= 0 && im->pal_idx < g_n_pals) ? g_pals[im->pal_idx] : NULL;
-        if (!pal) continue;
-        int ox = o->depth - g_view_x, oy = o->sy - g_view_y;
-        for (int y = 0; y < im->h; y++) {
-            for (int x = 0; x < im->w; x++) {
-                int sx = o->hfl ? (im->w - 1 - x) : x;
-                int sy2 = (o->vfl ? (im->h - 1 - y) : y) * im->w;
-                Uint8 v = im->pix[sy2 + sx];
-                if (!v) continue;
-                int px = ox + x, py = oy + y;
-                if (px < 0 || px >= vw || py < 0 || py >= vh) continue;
-                Uint32 c = pal[v];
-                size_t off = ((size_t)py * vw + px) * 4;
-                buf[off+0] = (c>>16)&0xFF; buf[off+1] = (c>>8)&0xFF;
-                buf[off+2] = c&0xFF;       buf[off+3] = (c>>24)&0xFF;
-            }
-        }
-    }
-
-    char path[512] = "";
-    if (file_dialog_save("Export Viewport",
-            "PNG Files\0*.png\0All Files\0*.*\0", path, (int)sizeof path)) {
-        size_t pl = strlen(path);
-        if (pl < 4 || strcasecmp(path + pl - 4, ".png") != 0)
-            strncat(path, ".png", sizeof path - pl - 1);
-        stbi_write_png(path, vw, vh, 4, buf, vw * 4);
-    }
-    free(buf);
 }
 
 void export_sprite_sheet_png(void)

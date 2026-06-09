@@ -1,7 +1,8 @@
 #include "Core/viewer_test_levels.h"
 
 #include "Core/bdd_core.h"
-#include "bg_editor_globals.h"
+#include "Core/editor_project_globals.h"
+#include "Core/viewer_load.h"
 
 #include <cstdio>
 #include <cstdlib>

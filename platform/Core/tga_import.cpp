@@ -1,6 +1,10 @@
+#include "Core/tga_import.h"
+
 #include "bg_editor.h"
-#include "bg_editor_globals.h"
-#include "UI/sdl_object_picker.h"
+#include "Core/bdd_core.h"
+#include "Core/editor_project_globals.h"
+#include "Core/editor_project_storage.h"
+#include "Core/viewer_save.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -174,7 +178,6 @@ int bdd_import_tga(const char *tga_path)
     im->pix = pix;
 
     bdd_save();
-    bdd_object_picker_free_labels();
 
     fprintf(stderr, "tga: imported %s as idx=0x%02X  pal=%d  %dx%d\n",
             tga_path, new_idx, pi, w, h);

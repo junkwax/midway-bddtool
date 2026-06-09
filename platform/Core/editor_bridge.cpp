@@ -1,5 +1,10 @@
 #include "bg_editor.h"
-#include "bg_editor_globals.h"
+#include "Core/editor_app_globals.h"
+#include "Core/editor_project_globals.h"
+#include "Core/editor_project_storage.h"
+#include "Core/image_lookup.h"
+#include "Core/image_processing.h"
+#include "Core/world_module_utils.h"
 #include "undo_manager.h"
 
 #include <cstdlib>

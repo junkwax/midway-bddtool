@@ -1,4 +1,7 @@
+#include "UI/panels/ToolboxPanel.h"
+#include "UI/panels/ToolbarPanel.h"
 #include "bg_editor_globals.h"
+#include "Core/editor_commands.h"
 #include "UI/object_position_undo.h"
 #include "undo_manager.h"
 
@@ -36,7 +39,7 @@ static void tb_sep(void)
     ImGui::SameLine(0, 6);
 }
 
-void draw_toolbar(void)
+void ToolbarPanel::render()
 {
     /* full-width toolbar strip — sits as a fixed window just below the menu bar */
     ImVec2 ds = ImGui::GetIO().DisplaySize;
@@ -69,21 +72,22 @@ void draw_toolbar(void)
 
     /* ── File ─────────────────────────────────────── */
     if (tb_button("New",  false, "New stage  (Ctrl+N)"))
-        request_unsaved_action(UNSAVED_ACTION_SHOW_NEW_PROJECT);
+        editor_emit_unsaved_action(UNSAVED_ACTION_SHOW_NEW_PROJECT);
     ImGui::SameLine(0, 3);
     if (tb_button("Open", false, "Open stage  (Ctrl+O)")) {
         char p[512] = "";
         if (file_dialog_open("Open Stage",
             "Stage Files\0*.BDB;*.bdb;*.BDD;*.bdd\0All Files\0*.*\0", p, sizeof p))
         {
-            request_unsaved_action(UNSAVED_ACTION_OPEN_STAGE, p);
+            editor_emit_unsaved_action(UNSAVED_ACTION_OPEN_STAGE, p);
         }
     }
     ImGui::SameLine(0, 3);
     {
         bool can_save = (g_have_bdb || g_no > 0 || g_ni > 0) && (g_bdb_path[0] || g_bdd_path[0]);
         if (tb_button("Save", false, "Save BDB + BDD  (Ctrl+S)", !can_save)) {
-            save_all_project(); g_hint_save = false;
+            editor_emit_save_all();
+            g_hint_save = false;
         }
         hint_badge(&g_hint_save, "hint_save");
     }
@@ -371,9 +375,9 @@ void draw_toolbar(void)
 
 /* ---- left toolbox ------------------------------------------------- */
 
-void draw_toolbox(void)
+void ToolboxPanel::render()
 {
-    /* Tool buttons are now in draw_toolbar(); only show the image picker
+    /* Tool buttons are now in ToolbarPanel; only show the image picker
        sub-panel when Place or Brush tool is active. */
     if (g_preview_mode) return;
     if (g_cur_tool != 1 && g_cur_tool != 4) return;  /* hide when not needed */

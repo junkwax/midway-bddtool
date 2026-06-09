@@ -1,11 +1,15 @@
-#include "bg_editor_globals.h"
+#include "Core/viewer_load.h"
 
 #include "Core/app_diagnostics.h"
+#include "Core/bdd_core.h"
 #include "Core/bdd_metadata.h"
+#include "Core/editor_project_globals.h"
+#include "Core/editor_project_storage.h"
 #include "Core/image_lookup.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 int bdd_load(const char *path)
 {
@@ -16,19 +20,19 @@ int bdd_load(const char *path)
     image_cap = editor_project_image_capacity();
     pal_cap = editor_project_palette_capacity();
     if (image_cap <= 0 || pal_cap <= 0) return 0;
-    bdd_core_stage_init(&stage);
+    stage.init();
     if (!bdd_core_stage_load_bdd(&stage, path)) {
-        fprintf(stderr, "bdd: %s\n", stage.error[0] ? stage.error : "load failed");
+        fprintf(stderr, "bdd: %s\n", !stage.error.empty() ? stage.error.c_str() : "load failed");
         bdd_diag_write("ERROR: BDD file not found\n");
-        bdd_core_stage_free(&stage);
+        stage.init();
         return 0;
     }
     BddCoreBdd *bdd = &stage.bdd;
-    if (!editor_project_reserve_images(bdd->image_count) ||
-        !editor_project_reserve_palettes(bdd->palette_count)) {
+    if (!editor_project_reserve_images((int)bdd->images.size()) ||
+        !editor_project_reserve_palettes((int)bdd->palettes.size())) {
         fprintf(stderr, "bdd: could not reserve project storage for %d image(s), %d palette(s)\n",
-                bdd->image_count, bdd->palette_count);
-        bdd_core_stage_free(&stage);
+                (int)bdd->images.size(), (int)bdd->palettes.size());
+        stage.init();
         return 0;
     }
     image_cap = editor_project_image_capacity();
@@ -39,13 +43,13 @@ int bdd_load(const char *path)
 
     editor_project_clear_images();
     editor_project_clear_palettes();
-    for (int rec = 0; rec < bdd->image_count; rec++) {
+    for (int rec = 0; rec < (int)bdd->images.size(); rec++) {
         BddCoreImage *src = &bdd->images[rec];
         Img *dst = editor_project_append_image_slot();
         if (!dst) {
             fprintf(stderr, "bdd: image append failed\n");
             editor_project_clear_images();
-            bdd_core_stage_free(&stage);
+            stage.init();
             return 0;
         }
         dst->idx = src->idx;
@@ -53,11 +57,21 @@ int bdd_load(const char *path)
         dst->h = src->h;
         dst->flags = src->flags;
         dst->pal_idx = -1;
-        dst->pix = src->pix;
-        src->pix = NULL;
+        size_t pixel_count = src->pix.size();
+        dst->pix = NULL;
+        if (pixel_count > 0) {
+            dst->pix = (Uint8 *)malloc(pixel_count);
+            if (!dst->pix) {
+                fprintf(stderr, "bdd: out of memory while copying image pixels\n");
+                editor_project_clear_images();
+                stage.init();
+                return 0;
+            }
+            memcpy(dst->pix, src->pix.data(), pixel_count);
+        }
     }
 
-    for (int p = 0; p < bdd->palette_count; p++) {
+    for (int p = 0; p < (int)bdd->palettes.size(); p++) {
         BddCorePalette *src = &bdd->palettes[p];
         int pi = editor_project_append_palette_slot(src->name, src->count, src->argb);
         if (pi < 0) {
@@ -68,7 +82,7 @@ int bdd_load(const char *path)
         fprintf(stderr, "bdd: palette[%d] = %s (%d entries)\n", pi, src->name, src->count);
     }
 
-    bdd_core_stage_free(&stage);
+    stage.init();
     if (g_ni == 0) {
         fprintf(stderr, "bdd: no images loaded from %s\n", path);
         return 0;
@@ -82,34 +96,34 @@ int bdb_load(const char *path)
 {
     BddCoreStage stage;
     if (!editor_project_storage_init()) return 0;
-    bdd_core_stage_init(&stage);
+    stage.init();
     if (!bdd_core_stage_load_bdb(&stage, path)) {
-        fprintf(stderr, "bdb: %s\n", stage.error[0] ? stage.error : "load failed");
+        fprintf(stderr, "bdb: %s\n", !stage.error.empty() ? stage.error.c_str() : "load failed");
         bdd_diag_write("ERROR: BDB file not found\n");
-        bdd_core_stage_free(&stage);
+        stage.init();
         return 0;
     }
     BddCoreBdb *bdb = &stage.bdb;
-    if (!editor_project_reserve_modules(bdb->module_count) ||
-        !editor_project_reserve_objects(bdb->object_count)) {
+    if (!editor_project_reserve_modules((int)bdb->modules.size()) ||
+        !editor_project_reserve_objects((int)bdb->objects.size())) {
         fprintf(stderr, "bdb: could not reserve project storage for %d module(s), %d object(s)\n",
-                bdb->module_count, bdb->object_count);
-        bdd_core_stage_free(&stage);
+                (int)bdb->modules.size(), (int)bdb->objects.size());
+        stage.init();
         return 0;
     }
 
     snprintf(g_bdb_path, sizeof g_bdb_path, "%s", path);
-    snprintf(g_bdb_header, sizeof g_bdb_header, "%s", bdb->header);
+    snprintf(g_bdb_header, sizeof g_bdb_header, "%s", bdb->header.c_str());
     if (bdb->name[0])
         snprintf(g_name, sizeof g_name, "%s", bdb->name);
 
     editor_project_clear_modules();
     editor_project_clear_objects();
-    for (int m = 0; m < bdb->module_count; m++) {
+    for (int m = 0; m < (int)bdb->modules.size(); m++) {
         editor_project_append_module_line(bdb->modules[m].line);
     }
 
-    for (int i = 0; i < bdb->object_count; i++) {
+    for (int i = 0; i < (int)bdb->objects.size(); i++) {
         const BddCoreObject *src = &bdb->objects[i];
         Obj *dst = editor_project_append_object_slot();
         if (!dst) break;
@@ -122,7 +136,7 @@ int bdb_load(const char *path)
         dst->vfl = (src->wx & 0x20) != 0;
         dst->order = src->order;
     }
-    bdd_core_stage_free(&stage);
+    stage.init();
 
     editor_project_sort_objects_by_layer_order();
 

@@ -1,4 +1,6 @@
+#include "UI/panels/DocumentTabsPanel.h"
 #include "bg_editor_globals.h"
+#include "Core/editor_commands.h"
 
 #include "imgui.h"
 
@@ -140,7 +142,7 @@ static void doc_tabs(void)
     if (close_idx >= 0) {
         bool close_dirty = (close_idx == g_cur_doc) ? (g_dirty != 0) : g_docs[close_idx].dirty;
         if (close_dirty)
-            request_unsaved_action(UNSAVED_ACTION_CLOSE_DOC, NULL, close_idx);
+            editor_emit_unsaved_action(UNSAVED_ACTION_CLOSE_DOC, nullptr, close_idx);
         else
             doc_close(close_idx);
     } else if (switch_to >= 0 && switch_to != g_cur_doc && switch_to < g_num_docs) {
@@ -149,7 +151,7 @@ static void doc_tabs(void)
         doc_restore(switch_to);
     }
     if (new_doc_requested) {
-        request_unsaved_action(UNSAVED_ACTION_SHOW_NEW_PROJECT);
+        editor_emit_unsaved_action(UNSAVED_ACTION_SHOW_NEW_PROJECT);
     }
 }
 
@@ -200,7 +202,7 @@ static void draw_doc_strip_summary(void)
     }
 }
 
-void draw_doc_tab_strip(void)
+void DocumentTabsPanel::render()
 {
     if (g_num_docs < 1) return;
 

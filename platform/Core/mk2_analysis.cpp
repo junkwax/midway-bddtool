@@ -1,6 +1,23 @@
 #include "bg_editor.h"
-#include "bg_editor_globals.h"
+#include "Core/app_diagnostics.h"
 #include "Core/bdd_core.h"
+#include "Core/editor_app_globals.h"
+#include "Core/editor_project_globals.h"
+#include "Core/editor_project_storage.h"
+#include "Core/image_lookup.h"
+#include "Core/image_processing.h"
+#include "Core/mk2_analysis.h"
+#include "Core/path_utils.h"
+#include "Core/project_header.h"
+#include "Core/stage_paths.h"
+#include "Core/world_module_utils.h"
+#include "UI/mk2_budget_relief_suggestions.h"
+#include "UI/mk2_stage_config.h"
+#include "UI/mk2_stage_fx_builder_tool.h"
+#include "UI/object_actions.h"
+#include "UI/selection_helpers.h"
+#include "UI/toast_notifications.h"
+#include "UI/world_view_helpers.h"
 #include "undo_manager.h"
 
 #include <cerrno>
@@ -746,7 +763,7 @@ void mk2_toast_outside_delete_result(int removed)
 }
 
 int mk2_add_object_for_image(int img_i, int x, int y, int layer, int pal, int hfl, int vfl,
-                             bool save_undo = true)
+                             bool save_undo)
 {
     if (img_i < 0 || img_i >= g_ni || !editor_project_reserve_objects(g_no + 1)) return 0;
     Img *im = &g_img[img_i];

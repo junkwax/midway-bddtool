@@ -1,3 +1,4 @@
+#include "UI/panels/StatsPanels.h"
 #include "bg_editor_globals.h"
 #include "imgui.h"
 
@@ -5,7 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-void draw_level_stats_panel(void)
+void LevelStatsPanel::render()
 {
     if (!g_show_level_stats) return;
     set_left_panel_default(92.0f, 400.0f, 0.0f);
@@ -72,7 +73,7 @@ void draw_level_stats_panel(void)
     ImGui::End();
 }
 
-void draw_bpp_preview_panel(void)
+void BppPreviewPanel::render()
 {
     if (!g_show_bpp_preview) return;
     static int          s_bpp      = 8;

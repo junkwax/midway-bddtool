@@ -87,8 +87,8 @@ struct Stage {
     CoreSlice<Image> images;
     CoreSlice<Palette> palettes;
 
-    Stage() { bdd_core_stage_init(&core); }
-    ~Stage() { bdd_core_stage_free(&core); }
+    Stage() { core.init(); }
+    ~Stage() { core.init(); }
     Stage(const Stage &) = delete;
     Stage &operator=(const Stage &) = delete;
 
@@ -99,14 +99,14 @@ struct Stage {
         world_h = core.bdb.world_h;
         max_depth = core.bdb.max_depth;
         pal_count_field = core.bdb.palette_count_field;
-        modules = CoreSlice<Module>{core.bdb.modules, core.bdb.module_count};
-        objects = CoreSlice<Object>{core.bdb.objects, core.bdb.object_count};
+        modules = CoreSlice<Module>{core.bdb.modules.data(), (int)core.bdb.modules.size()};
+        objects = CoreSlice<Object>{core.bdb.objects.data(), (int)core.bdb.objects.size()};
     }
 
     void refresh_bdd()
     {
-        images = CoreSlice<Image>{core.bdd.images, core.bdd.image_count};
-        palettes = CoreSlice<Palette>{core.bdd.palettes, core.bdd.palette_count};
+        images = CoreSlice<Image>{core.bdd.images.data(), (int)core.bdd.images.size()};
+        palettes = CoreSlice<Palette>{core.bdd.palettes.data(), (int)core.bdd.palettes.size()};
     }
 };
 
@@ -118,7 +118,7 @@ static bool parse_bdb(const char *path, Stage &st)
 {
     if (!bdd_core_stage_load_bdb(&st.core, path)) {
         fprintf(stderr, "bddtool: %s\n",
-                st.core.error[0] ? st.core.error : "BDB load failed");
+                st.core.error.c_str()[0] ? st.core.error.c_str() : "BDB load failed");
         return false;
     }
     st.refresh_bdb();
@@ -139,7 +139,7 @@ static bool parse_bdd(const char *path, Stage &st)
 {
     if (!bdd_core_stage_load_bdd(&st.core, path)) {
         fprintf(stderr, "bddtool: %s\n",
-                st.core.error[0] ? st.core.error : "BDD load failed");
+                st.core.error.c_str()[0] ? st.core.error.c_str() : "BDD load failed");
         return false;
     }
     st.refresh_bdd();
@@ -180,7 +180,7 @@ static Image *find_image(Stage &st, int idx)
 static int load2_estimated_block_bytes(const Image &im, int *out_bpp)
 {
     size_t bytes = bdd_core_load2_estimated_block_bytes(
-        im.pix, im.w, im.h, out_bpp);
+        im.pix.data(), im.w, im.h, out_bpp);
     return bytes > (size_t)INT_MAX ? INT_MAX : (int)bytes;
 }
 
@@ -286,7 +286,7 @@ static bool write_image_png(const Image &im, const Palette &pal,
                              const char *path)
 {
     std::vector<uint8_t> rgba((size_t)im.w * im.h * 4, 0);
-    if (!bdd_core_indexed_to_rgba(im.pix,
+    if (!bdd_core_indexed_to_rgba(im.pix.data(),
                                   im.w, im.h,
                                   pal.argb,
                                   256,
@@ -897,7 +897,7 @@ static int cmd_sheet(int argc, char **argv)
         int oy  = row * stride_h;
 
         std::vector<uint8_t> rgba((size_t)im.w * im.h * 4, 0);
-        if (!bdd_core_indexed_to_rgba(im.pix,
+        if (!bdd_core_indexed_to_rgba(im.pix.data(),
                                       im.w, im.h,
                                       pal.argb,
                                       256,
@@ -1069,11 +1069,11 @@ static int cmd_render(int argc, char **argv)
     for (size_t i = 0; i < st.objects.size(); i++) {
         const Object &o = st.objects.data()[i];
         const Image *im = find_image(st, o.ii);
-        if (!im || !im->pix || im->w <= 0 || im->h <= 0) continue;
+        if (!im || im->pix.empty() || im->w <= 0 || im->h <= 0) continue;
         if (o.fl < 0 || o.fl >= (int)st.palettes.size()) continue;
         const Palette &pal = st.palettes.data()[o.fl];
         tmp.assign((size_t)im->w * im->h * 4, 0);
-        if (!bdd_core_indexed_to_rgba(im->pix, im->w, im->h, pal.argb, 256,
+        if (!bdd_core_indexed_to_rgba(im->pix.data(), im->w, im->h, pal.argb, 256,
                                       tmp.data(), tmp.size()))
             continue;
         bool hfl = (o.wx & 0x10) != 0;

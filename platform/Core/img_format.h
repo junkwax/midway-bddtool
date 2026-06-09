@@ -1,9 +1,9 @@
 #ifndef IMG_FORMAT_H
 #define IMG_FORMAT_H
 
-#include <SDL.h>
-#include <stdio.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
 
 #define IMG_NUM_DEFAULT_PALS 3
 
@@ -64,8 +64,8 @@ int img_s16(unsigned short v);
 void img_basename_no_ext_upper(const char *path, char *out, size_t outsz);
 void img_raw_name_to_upper(const char *raw, int raw_len, const char *fallback,
                            char *out, size_t outsz);
-Uint32 img_pal_word_to_argb_opaque(unsigned short c);
-Uint32 img_pal_word_to_argb(unsigned short c, int index);
+uint32_t img_pal_word_to_argb_opaque(unsigned short c);
+uint32_t img_pal_word_to_argb(unsigned short c, int index);
 int img_decode_pixels(FILE *f, long file_sz, const ImgImageDisk *id,
                       int w, int h, unsigned char *dst,
                       const unsigned char *pix_map,

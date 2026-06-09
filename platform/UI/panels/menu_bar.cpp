@@ -1,5 +1,8 @@
+#include "UI/panels/MenuBarPanel.h"
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
+#include "Core/editor_commands.h"
+#include "UI/sdl_object_picker.h"
 #include "UI/object_position_undo.h"
 #include "imgui.h"
 #include "undo_manager.h"
@@ -8,33 +11,33 @@
 #include <limits.h>
 #include <vector>
 
-void draw_menu(void)
+void MenuBarPanel::render()
 {
     const int object_cap = editor_project_object_capacity();
     const int module_cap = editor_project_module_capacity();
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New Project...", NULL))
-                request_unsaved_action(UNSAVED_ACTION_SHOW_NEW_PROJECT);
+                editor_emit_unsaved_action(UNSAVED_ACTION_SHOW_NEW_PROJECT);
             if (ImGui::MenuItem("New Simple MK2 Level...", NULL))
-                request_unsaved_action(UNSAVED_ACTION_NEW_SIMPLE_MK2);
+                editor_emit_unsaved_action(UNSAVED_ACTION_NEW_SIMPLE_MK2);
             if (ImGui::MenuItem("New Full-Screen Proof Level", NULL))
-                request_unsaved_action(UNSAVED_ACTION_NEW_BG_PROOF);
+                editor_emit_unsaved_action(UNSAVED_ACTION_NEW_BG_PROOF);
             if (ImGui::MenuItem("New Checker Test Level", NULL))
-                request_unsaved_action(UNSAVED_ACTION_NEW_CHECKER);
+                editor_emit_unsaved_action(UNSAVED_ACTION_NEW_CHECKER);
             if (ImGui::MenuItem("Open...", "Ctrl+O")) {
                 char path[512] = "";
                 if (file_dialog_open("Open BDB/BDD",
                     "Midway Background Files\0*.BDB;*.bdb;*.BDD;*.bdd\0All Files\0*.*\0",
                     path, sizeof path))
                 {
-                    request_unsaved_action(UNSAVED_ACTION_OPEN_STAGE, path);
+                    editor_emit_unsaved_action(UNSAVED_ACTION_OPEN_STAGE, path);
                 }
             }
             if (g_recent_count > 0 && ImGui::BeginMenu("Open Recent")) {
                 for (int i = 0; i < g_recent_count; i++) {
                     if (ImGui::MenuItem(g_recent_files[i])) {
-                        request_unsaved_action(UNSAVED_ACTION_OPEN_STAGE, g_recent_files[i]);
+                        editor_emit_unsaved_action(UNSAVED_ACTION_OPEN_STAGE, g_recent_files[i]);
                     }
                 }
                 ImGui::EndMenu();
@@ -46,6 +49,7 @@ void draw_menu(void)
                     if (file_dialog_open("Import TGA", "TGA Files\0*.TGA;*.tga\0All Files\0*.*\0", path, sizeof path)) {
                         int old_ni = g_ni;
                         if (bdd_import_tga(path) && g_ni > old_ni) {
+                            bdd_object_picker_free_labels();
                             g_need_rebuild = 1;
                             g_show_images = true;
                             g_dirty = 1;
@@ -112,7 +116,7 @@ void draw_menu(void)
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Validate...", NULL, false, g_have_bdb || g_ni > 0))
-                g_show_verify = true;
+                editor_emit_show_verify();
             ImGui::Separator();
             if (ImGui::MenuItem("Tile Fill...", NULL, false, g_have_bdb && g_ni > 0))
                 g_show_tile = true;
@@ -128,20 +132,20 @@ void draw_menu(void)
             if (ImGui::MenuItem(g_simple_mode ? "Save" : "Save All", "Ctrl+S",
                                 false, (g_have_bdb || g_no > 0 || g_ni > 0) &&
                                        (g_bdb_path[0] || g_bdd_path[0]))) {
-                save_all_project();
+                editor_emit_save_all();
             }
             if (!g_simple_mode) {
                 if (ImGui::MenuItem("Save BDB + BDD", NULL, false,
                                     (g_have_bdb || g_no > 0 || g_ni > 0) &&
                                     (g_bdb_path[0] || g_bdd_path[0])))
-                    save_all_project();
+                    editor_emit_save_all();
             }
             if (ImGui::MenuItem("Save As...", NULL, false, g_have_bdb || g_no > 0 || g_ni > 0)) {
                 char path[512] = "";
                 if (file_dialog_save("Save As", "Midway Background Files\0*.BDB;*.bdb;*.BDD;*.bdd\0All Files\0*.*\0", path, sizeof path)) {
                     set_project_save_paths_from_any(path);
                     ensure_bdb_header_for_save();
-                    save_all_project();
+                    editor_emit_save_all();
                 }
             }
             ImGui::Separator();
@@ -149,10 +153,10 @@ void draw_menu(void)
                 stage_export_bundle();
             ImGui::Separator();
             if (ImGui::MenuItem("Preferences..."))
-                g_show_prefs = true;
+                editor_emit_show_preferences();
             ImGui::Separator();
             if (ImGui::MenuItem("Quit", "Esc"))
-                request_unsaved_action(UNSAVED_ACTION_CLOSE_APP);
+                editor_emit_unsaved_action(UNSAVED_ACTION_CLOSE_APP);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit")) {
@@ -573,7 +577,7 @@ void draw_menu(void)
             if (!g_simple_mode) {
                 ImGui::MenuItem("MK2 Workflow", NULL, &g_show_mk2_workflow);
                 if (ImGui::MenuItem("MK2 Stage Kit", NULL, false))
-                    open_mk2_tool(1);
+                    editor_emit_open_mk2_tool(1);
                 ImGui::Separator();
             }
             if (ImGui::MenuItem("Zoom to Fit", "Ctrl+0", false, g_have_bdb && g_no > 0))
@@ -604,32 +608,32 @@ void draw_menu(void)
         }
         if (ImGui::BeginMenu("MK2")) {
             if (ImGui::MenuItem("Simple Four-Image Level...", NULL, false))
-                request_unsaved_action(UNSAVED_ACTION_NEW_SIMPLE_MK2);
+                editor_emit_unsaved_action(UNSAVED_ACTION_NEW_SIMPLE_MK2);
             ImGui::Separator();
             if (ImGui::MenuItem("Workflow", NULL, false))
-                open_mk2_tool(0);
+                editor_emit_open_mk2_tool(0);
             if (ImGui::MenuItem("Stage Kit", NULL, false))
-                open_mk2_tool(1);
+                editor_emit_open_mk2_tool(1);
             if (ImGui::MenuItem("Level Start Helper", NULL, false))
-                open_mk2_tool(10);
+                editor_emit_open_mk2_tool(10);
             ImGui::Separator();
             if (ImGui::MenuItem("Import Existing Stage", NULL, false))
-                open_mk2_tool(2);
+                editor_emit_open_mk2_tool(2);
             if (ImGui::MenuItem("Clustered PNG Stage Import", NULL, false))
-                open_mk2_tool(3);
+                editor_emit_open_mk2_tool(3);
             ImGui::Separator();
             if (ImGui::MenuItem("Authoring Tools", NULL, false, g_have_bdb && g_no > 0))
-                open_mk2_tool(4);
+                editor_emit_open_mk2_tool(4);
             if (ImGui::MenuItem("Stage Readiness Gate", NULL, false, g_have_bdb && g_no > 0))
-                open_mk2_tool(5);
+                editor_emit_open_mk2_tool(5);
             if (ImGui::MenuItem("Finish-Line Gate", NULL, false))
-                open_mk2_tool(6);
+                editor_emit_open_mk2_tool(6);
             if (ImGui::MenuItem("LOAD2 / Runtime Preview", NULL, false))
-                open_mk2_tool(7);
+                editor_emit_open_mk2_tool(7);
             if (ImGui::MenuItem("Live MAME Preview Gate", NULL, false, g_have_bdb && g_no > 0))
-                open_mk2_tool(8);
+                editor_emit_open_mk2_tool(8);
             if (ImGui::MenuItem("ROM Preview Diff", NULL, false, g_have_bdb && g_no > 0))
-                open_mk2_tool(9);
+                editor_emit_open_mk2_tool(9);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Help")) {

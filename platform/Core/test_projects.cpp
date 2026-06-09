@@ -1,6 +1,8 @@
-#include "bg_editor_globals.h"
+#include "Core/editor_app_globals.h"
+#include "Core/editor_project_globals.h"
+#include "Core/editor_project_storage.h"
+#include "UI/toast_notifications.h"
 #include "undo_manager.h"
-#include <SDL.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

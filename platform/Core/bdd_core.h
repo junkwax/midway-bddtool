@@ -3,10 +3,11 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <cstring>
+#include <vector>
+#include <string>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+
 
 enum {
     BDD_CORE_MAX_IMAGES = 2048,
@@ -24,86 +25,105 @@ enum {
     BDD_CORE_MK2_BG_DYNAMIC_PALETTE_SLOTS = 35
 };
 
-typedef struct BddCoreModule {
+struct BddCoreModule {
     char line[256];
     char name[64];
     int x1, x2, y1, y2;
     int parsed;
-} BddCoreModule;
+};
 
-typedef struct BddCoreObject {
+struct BddCoreObject {
     int wx;
     int depth;
     int sy;
     int ii;
     int fl;
     int order;
-} BddCoreObject;
+};
 
-typedef struct BddCoreBdb {
-    char path[512];
-    char header[256];
-    char name[64];
-    int world_w;
-    int world_h;
-    int max_depth;
-    int module_count_field;
-    int palette_count_field;
-    int object_count_field;
-    int header_field_count;
-    BddCoreModule *modules;
-    int module_count;
-    BddCoreObject *objects;
-    int object_count;
-    char error[256];
-} BddCoreBdb;
+struct BddCoreBdb {
+    std::string path;
+    std::string header;
+    char name[64] = {0};
+    int world_w = 0;
+    int world_h = 0;
+    int max_depth = 255;
+    int module_count_field = 0;
+    int palette_count_field = 0;
+    int object_count_field = -1;
+    int header_field_count = 0;
+    std::vector<BddCoreModule> modules;
+    std::vector<BddCoreObject> objects;
+    std::string error;
 
-typedef struct BddCoreImage {
+    void init() {
+        path.clear();
+        header.clear();
+        memset(name, 0, sizeof(name));
+        world_w = world_h = 0;
+        max_depth = 255;
+        module_count_field = palette_count_field = 0;
+        object_count_field = -1;
+        header_field_count = 0;
+        modules.clear();
+        objects.clear();
+        error.clear();
+    }
+};
+
+struct BddCoreImage {
     int idx;
     int w, h;
     int flags;
-    uint8_t *pix;
-} BddCoreImage;
+    std::vector<uint8_t> pix;
+};
 
-typedef struct BddCorePalette {
+struct BddCorePalette {
     char name[64];
     int count;
     uint32_t argb[256];
     uint16_t rgb555[256];
-} BddCorePalette;
+};
 
-typedef struct BddCoreBdd {
-    char path[512];
-    BddCoreImage *images;
-    int image_count;
-    BddCorePalette *palettes;
-    int palette_count;
-    char error[256];
-} BddCoreBdd;
+struct BddCoreBdd {
+    std::string path;
+    std::vector<BddCoreImage> images;
+    std::vector<BddCorePalette> palettes;
+    std::string error;
 
-typedef struct BddCoreStage {
+    void init() {
+        path.clear();
+        images.clear();
+        palettes.clear();
+        error.clear();
+    }
+};
+
+struct BddCoreStage {
     BddCoreBdb bdb;
     BddCoreBdd bdd;
-    int has_bdb;
-    int has_bdd;
-    char error[256];
-} BddCoreStage;
+    int has_bdb = 0;
+    int has_bdd = 0;
+    std::string error;
 
-typedef struct BddCoreSaveResult {
-    char error[256];
-    int ferror_errno;
-    int fclose_errno;
-} BddCoreSaveResult;
+    void init() {
+        bdb.init();
+        bdd.init();
+        has_bdb = 0;
+        has_bdd = 0;
+        error.clear();
+    }
+};
 
-void bdd_core_bdb_init(BddCoreBdb *bdb);
-void bdd_core_bdb_free(BddCoreBdb *bdb);
+struct BddCoreSaveResult {
+    std::string error;
+    int ferror_errno = 0;
+    int fclose_errno = 0;
+};
+
 int bdd_core_load_bdb(const char *path, BddCoreBdb *out);
 int bdd_core_parse_module_line(const char *line, BddCoreModule *out);
-void bdd_core_bdd_init(BddCoreBdd *bdd);
-void bdd_core_bdd_free(BddCoreBdd *bdd);
 int bdd_core_load_bdd(const char *path, BddCoreBdd *out);
-void bdd_core_stage_init(BddCoreStage *stage);
-void bdd_core_stage_free(BddCoreStage *stage);
 int bdd_core_stage_load_bdb(BddCoreStage *stage, const char *path);
 int bdd_core_stage_load_bdd(BddCoreStage *stage, const char *path);
 int bdd_core_load_stage(const char *bdb_path,
@@ -190,8 +210,6 @@ int bdd_core_save_bdd(const char *path,
                       int palette_count,
                       BddCoreSaveResult *result);
 
-#ifdef __cplusplus
-}
-#endif
+
 
 #endif
