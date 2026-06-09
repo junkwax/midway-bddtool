@@ -1,8 +1,8 @@
-#include "UI/sdl_object_drag_autopan.h"
+#include "UI/sdl/sdl_object_drag_autopan.h"
 
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
-#include "UI/sdl_tooltip.h"
+#include "UI/sdl/sdl_tooltip.h"
 
 #include <cstdlib>
 

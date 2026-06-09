@@ -1,7 +1,7 @@
 #ifndef EDITOR_PROJECT_STORAGE_H
 #define EDITOR_PROJECT_STORAGE_H
 
-#include "bdd_format.h"
+#include "Core/bdd_format.h"
 
 #ifdef __cplusplus
 extern "C" {

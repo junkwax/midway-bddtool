@@ -2,7 +2,7 @@
 #include "bg_editor_globals.h"
 #include "Core/editor_commands.h"
 #include "undo_manager.h"
-#include "UI/PanelManager.h"
+#include "UI/app/PanelManager.h"
 #include "UI/panels/DocumentTabsPanel.h"
 #include "UI/panels/MenuBarPanel.h"
 #include "UI/panels/RightRailPanels.h"

@@ -1,8 +1,8 @@
-#include "UI/sdl_object_picker.h"
+#include "UI/sdl/sdl_object_picker.h"
 
 #include "Core/editor_project_storage.h"
-#include "UI/sdl_bitmap_font.h"
-#include "UI/texture_cache.h"
+#include "UI/sdl/sdl_bitmap_font.h"
+#include "UI/assets/texture_cache.h"
 #include "bg_editor_globals.h"
 
 #include <cstdlib>

@@ -1,7 +1,7 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
-#include "bdd_format.h"
-#include "compat.h"
+#include "Core/bdd_format.h"
+#include "utils/compat.h"
 #include <cstdio>
 #include <cstring>
 #ifdef _WIN32

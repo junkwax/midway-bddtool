@@ -2,7 +2,7 @@
 #define MK2_ANALYSIS_H
 
 #include "Core/bdd_core.h"
-#include "bdd_format.h"
+#include "Core/bdd_format.h"
 
 #include <stddef.h>
 

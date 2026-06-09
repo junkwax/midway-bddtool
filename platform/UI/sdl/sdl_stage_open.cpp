@@ -1,10 +1,10 @@
-#include "UI/sdl_stage_open.h"
+#include "UI/sdl/sdl_stage_open.h"
 
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/viewer_stage_io.h"
-#include "UI/sdl_object_picker.h"
-#include "UI/texture_cache.h"
+#include "UI/sdl/sdl_object_picker.h"
+#include "UI/assets/texture_cache.h"
 
 #include <climits>
 #include <cstdio>

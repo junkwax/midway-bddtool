@@ -1,6 +1,6 @@
-#include "UI/sdl_world_grid_overlay.h"
+#include "UI/overlays/sdl_world_grid_overlay.h"
 
-#include "UI/sdl_bitmap_font.h"
+#include "UI/sdl/sdl_bitmap_font.h"
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 

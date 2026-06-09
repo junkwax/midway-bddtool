@@ -1,13 +1,13 @@
-#include "UI/sdl_mouse_interaction.h"
+#include "UI/sdl/sdl_mouse_interaction.h"
 
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/editor_project_storage.h"
 #include "Core/image_lookup.h"
-#include "UI/sdl_object_drag_autopan.h"
-#include "UI/sdl_object_picker.h"
-#include "UI/sdl_selection_rect.h"
-#include "UI/sdl_tooltip.h"
+#include "UI/sdl/sdl_object_drag_autopan.h"
+#include "UI/sdl/sdl_object_picker.h"
+#include "UI/sdl/sdl_selection_rect.h"
+#include "UI/sdl/sdl_tooltip.h"
 #include "undo_manager.h"
 
 #include <cstdlib>

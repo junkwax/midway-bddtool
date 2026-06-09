@@ -1,7 +1,7 @@
 #ifndef PROJECT_SNAPSHOT_H
 #define PROJECT_SNAPSHOT_H
 
-#include "../bdd_format.h"
+#include "Core/bdd_format.h"
 
 #ifndef __cplusplus
 #include <stdbool.h>

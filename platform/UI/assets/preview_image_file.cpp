@@ -1,8 +1,8 @@
 #include "Core/path_utils.h"
-#include "UI/preview_image_file.h"
-#include "UI/sdl_context.h"
+#include "UI/assets/preview_image_file.h"
+#include "UI/sdl/sdl_context.h"
 #include "imgui.h"
-#include "stb_image.h"
+#include "libs/stb_image.h"
 
 #include <cstdio>
 #include <cstring>

@@ -1,7 +1,7 @@
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
-#include "UI/grid_settings.h"
-#include "UI/right_panel_layout.h"
+#include "UI/dialogs/grid_settings.h"
+#include "UI/view/right_panel_layout.h"
 #include "imgui.h"
 
 void draw_grid_settings(void)

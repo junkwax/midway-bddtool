@@ -1,14 +1,14 @@
-#include "UI/sdl_keyboard_actions.h"
+#include "UI/sdl/sdl_keyboard_actions.h"
 
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
-#include "UI/sdl_object_picker.h"
-#include "UI/object_position_undo.h"
-#include "UI/sdl_path_input.h"
-#include "UI/sdl_save_popup.h"
-#include "UI/sdl_tga_file_dialog.h"
-#include "UI/sdl_tooltip.h"
-#include "UI/texture_cache.h"
+#include "UI/sdl/sdl_object_picker.h"
+#include "UI/actions/object_position_undo.h"
+#include "UI/sdl/sdl_path_input.h"
+#include "UI/sdl/sdl_save_popup.h"
+#include "UI/sdl/sdl_tga_file_dialog.h"
+#include "UI/sdl/sdl_tooltip.h"
+#include "UI/assets/texture_cache.h"
 
 #include <cstdio>
 

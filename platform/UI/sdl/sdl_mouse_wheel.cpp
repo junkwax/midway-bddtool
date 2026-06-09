@@ -1,11 +1,11 @@
-#include "UI/sdl_mouse_wheel.h"
+#include "UI/sdl/sdl_mouse_wheel.h"
 
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/editor_project_storage.h"
-#include "UI/sdl_object_picker.h"
-#include "UI/sdl_tooltip.h"
-#include "UI/texture_cache.h"
+#include "UI/sdl/sdl_object_picker.h"
+#include "UI/sdl/sdl_tooltip.h"
+#include "UI/assets/texture_cache.h"
 
 void bdd_sdl_mouse_wheel_handle(const SDL_MouseWheelEvent *wheel,
                                 SDL_Renderer *rend,

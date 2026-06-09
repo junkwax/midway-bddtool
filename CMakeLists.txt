@@ -36,7 +36,7 @@ add_executable(bddview
     platform/Core/project_snapshot.cpp
     platform/Core/recent_files.cpp
     platform/Core/stage_path_utils.cpp
-    platform/Core/utils/stb_impl.cpp
+    platform/libs/stb_impl.cpp
     platform/Core/test_projects.cpp
     platform/Core/tga_import.cpp
     platform/Core/viewer_test_levels.cpp

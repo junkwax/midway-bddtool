@@ -1,7 +1,7 @@
-#include "UI/sdl_drop_file.h"
+#include "UI/sdl/sdl_drop_file.h"
 
 #include "bg_editor.h"
-#include "UI/sdl_stage_open.h"
+#include "UI/sdl/sdl_stage_open.h"
 
 #include <cstring>
 

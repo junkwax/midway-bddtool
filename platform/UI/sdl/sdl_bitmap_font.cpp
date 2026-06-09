@@ -1,4 +1,4 @@
-#include "UI/sdl_bitmap_font.h"
+#include "UI/sdl/sdl_bitmap_font.h"
 
 /* 8x8 bitmap font, ASCII 32-127. Each byte is one row. */
 static const Uint8 g_font8[96][8] = {

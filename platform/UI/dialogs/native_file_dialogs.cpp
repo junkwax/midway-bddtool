@@ -1,5 +1,5 @@
-#include "compat.h"
-#include "UI/native_file_dialogs.h"
+#include "utils/compat.h"
+#include "UI/dialogs/native_file_dialogs.h"
 
 #include <cstdio>
 #include <cstring>

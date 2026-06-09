@@ -1,5 +1,5 @@
 #include "Core/editor_project_globals.h"
-#include "UI/selection_helpers.h"
+#include "UI/actions/selection_helpers.h"
 
 int selected_count(void)
 {

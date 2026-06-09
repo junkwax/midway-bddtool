@@ -5,8 +5,8 @@
 #include "Core/bdd_metadata.h"
 #include "Core/editor_project_globals.h"
 #include "Core/editor_project_storage.h"
-#include "UI/mk2_runtime_actor_tool.h"
-#include "UI/toast_notifications.h"
+#include "UI/tools/mk2_runtime_actor_tool.h"
+#include "UI/view/toast_notifications.h"
 
 #include <errno.h>
 #include <stdio.h>

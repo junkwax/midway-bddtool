@@ -1,6 +1,6 @@
-#include "UI/sdl_path_input.h"
+#include "UI/sdl/sdl_path_input.h"
 
-#include "UI/sdl_bitmap_font.h"
+#include "UI/sdl/sdl_bitmap_font.h"
 #include <cstdio>
 #include <cstring>
 

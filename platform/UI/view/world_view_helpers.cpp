@@ -3,7 +3,7 @@
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
 #include "Core/image_lookup.h"
-#include "UI/world_view_helpers.h"
+#include "UI/view/world_view_helpers.h"
 
 float gv_scroll_factor(int layer_byte)
 {

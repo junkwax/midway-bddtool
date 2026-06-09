@@ -1,5 +1,5 @@
 #include "bg_editor.h"
-#include "compat.h"
+#include "utils/compat.h"
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
 #include "Core/editor_project_storage.h"
@@ -9,11 +9,11 @@
 #include "Core/img_format.h"
 #include "Core/path_utils.h"
 #include "Core/stage_paths.h"
-#include "UI/mk2_palette_sync_prompt.h"
-#include "UI/native_file_dialogs.h"
-#include "UI/toast_notifications.h"
-#include "stb_image.h"
-#include "stb_image_write.h"
+#include "UI/tools/mk2_palette_sync_prompt.h"
+#include "UI/dialogs/native_file_dialogs.h"
+#include "UI/view/toast_notifications.h"
+#include "libs/stb_image.h"
+#include "libs/stb_image_write.h"
 #include "undo_manager.h"
 
 #include <algorithm>

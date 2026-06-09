@@ -1,5 +1,5 @@
 #include "bg_editor_globals.h"
-#include "stb_image.h"
+#include "libs/stb_image.h"
 #include "undo_manager.h"
 
 #include <algorithm>

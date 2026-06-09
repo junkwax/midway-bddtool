@@ -1,7 +1,7 @@
 #include "bg_editor.h"
 #include "Core/editor_project_globals.h"
 #include "Core/image_lookup.h"
-#include "UI/navigation.h"
+#include "UI/view/navigation.h"
 
 #include <imgui.h>
 #include <climits>

@@ -3,7 +3,7 @@
 #include "Core/path_utils.h"
 #include "Core/stage_paths.h"
 #include "Core/viewer_save.h"
-#include "UI/autosave.h"
+#include "UI/app/autosave.h"
 
 #include <cstdio>
 #include <cstring>

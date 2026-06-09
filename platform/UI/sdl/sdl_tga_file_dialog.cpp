@@ -1,4 +1,4 @@
-#include "UI/sdl_tga_file_dialog.h"
+#include "UI/sdl/sdl_tga_file_dialog.h"
 
 #include <cstdio>
 #include <cstring>

@@ -1,8 +1,8 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
-#include "UI/object_position_undo.h"
+#include "UI/actions/object_position_undo.h"
 #include "undo_manager.h"
-#include "stb_image_write.h"
+#include "libs/stb_image_write.h"
 
 #include <imgui.h>
 #include <climits>

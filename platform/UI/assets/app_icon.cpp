@@ -1,6 +1,6 @@
-#include "UI/app_icon.h"
+#include "UI/assets/app_icon.h"
 
-#include "stb_image.h"
+#include "libs/stb_image.h"
 #include <cstdio>
 
 #ifdef _WIN32

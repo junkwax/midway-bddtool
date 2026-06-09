@@ -1,6 +1,6 @@
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
-#include "UI/image_index_editor.h"
+#include "UI/dialogs/image_index_editor.h"
 #include "imgui.h"
 #include "undo_manager.h"
 

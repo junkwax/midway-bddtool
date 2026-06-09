@@ -2,8 +2,8 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/editor_commands.h"
-#include "UI/sdl_object_picker.h"
-#include "UI/object_position_undo.h"
+#include "UI/sdl/sdl_object_picker.h"
+#include "UI/actions/object_position_undo.h"
 #include "imgui.h"
 #include "undo_manager.h"
 #include <stdio.h>

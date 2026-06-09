@@ -2,7 +2,7 @@
 #include "UI/panels/ToolbarPanel.h"
 #include "bg_editor_globals.h"
 #include "Core/editor_commands.h"
-#include "UI/object_position_undo.h"
+#include "UI/actions/object_position_undo.h"
 #include "undo_manager.h"
 
 #include "imgui.h"

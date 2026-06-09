@@ -1,5 +1,5 @@
 #include "Core/editor_app_globals.h"
-#include "UI/onboarding_hints.h"
+#include "UI/view/onboarding_hints.h"
 
 #include "imgui.h"
 

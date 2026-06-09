@@ -1,7 +1,7 @@
-#include "app_version.h"
+#include "Core/app_version.h"
 #include "Core/editor_app_globals.h"
-#include "UI/info_dialogs.h"
-#include "UI/right_panel_layout.h"
+#include "UI/dialogs/info_dialogs.h"
+#include "UI/view/right_panel_layout.h"
 #include "imgui.h"
 
 void draw_help(void)

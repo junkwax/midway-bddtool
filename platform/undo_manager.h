@@ -1,7 +1,7 @@
 #ifndef UNDO_MANAGER_H
 #define UNDO_MANAGER_H
 
-#include "bdd_format.h"
+#include "Core/bdd_format.h"
 
 #ifdef __cplusplus
 extern "C" {

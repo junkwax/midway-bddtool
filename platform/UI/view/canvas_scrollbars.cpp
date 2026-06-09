@@ -1,9 +1,9 @@
 #include "bg_editor.h"
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
-#include "UI/canvas_scrollbars.h"
-#include "UI/editor_lifecycle.h"
-#include "UI/welcome_screen.h"
+#include "UI/view/canvas_scrollbars.h"
+#include "UI/app/editor_lifecycle.h"
+#include "UI/view/welcome_screen.h"
 #include "imgui.h"
 
 #include <limits.h>

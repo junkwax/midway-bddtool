@@ -1,7 +1,7 @@
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
 #include "Core/editor_project_storage.h"
-#include "UI/toast_notifications.h"
+#include "UI/view/toast_notifications.h"
 #include "imgui.h"
 
 #include <stdio.h>

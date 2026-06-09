@@ -1,4 +1,4 @@
-#include "UI/sdl_selection_rect.h"
+#include "UI/sdl/sdl_selection_rect.h"
 
 #include "bg_editor.h"
 #include "bg_editor_globals.h"

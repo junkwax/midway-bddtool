@@ -1,7 +1,7 @@
 #ifndef IMAGE_PROCESSING_H
 #define IMAGE_PROCESSING_H
 
-#include "bdd_format.h"
+#include "Core/bdd_format.h"
 
 #include <stddef.h>
 

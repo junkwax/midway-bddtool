@@ -1,6 +1,6 @@
-#include "UI/sdl_view_hud.h"
+#include "UI/overlays/sdl_view_hud.h"
 
-#include "UI/sdl_bitmap_font.h"
+#include "UI/sdl/sdl_bitmap_font.h"
 #include "bg_editor_globals.h"
 
 #include <cstdio>

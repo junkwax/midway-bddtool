@@ -1,7 +1,7 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/editor_commands.h"
-#include "UI/PanelManager.h"
+#include "UI/app/PanelManager.h"
 
 #include "imgui.h"
 #include "imgui_impl_sdlrenderer2.h"

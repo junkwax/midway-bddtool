@@ -1,6 +1,6 @@
-#include "UI/sdl_save_popup.h"
+#include "UI/sdl/sdl_save_popup.h"
 
-#include "UI/sdl_bitmap_font.h"
+#include "UI/sdl/sdl_bitmap_font.h"
 #include <cstring>
 
 extern "C" {

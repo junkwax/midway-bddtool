@@ -1,6 +1,6 @@
 #pragma once
 
-#include "IEditorPanel.h"
+#include "UI/widgets/IEditorPanel.h"
 #include <vector>
 #include <memory>
 

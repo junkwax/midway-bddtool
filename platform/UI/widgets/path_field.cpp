@@ -1,5 +1,5 @@
-#include "UI/native_file_dialogs.h"
-#include "UI/path_field.h"
+#include "UI/dialogs/native_file_dialogs.h"
+#include "UI/widgets/path_field.h"
 
 #include "imgui.h"
 

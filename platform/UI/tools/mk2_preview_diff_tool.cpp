@@ -1,7 +1,7 @@
 #include "bg_editor_globals.h"
 #include "imgui.h"
-#include "stb_image.h"
-#include "stb_image_write.h"
+#include "libs/stb_image.h"
+#include "libs/stb_image_write.h"
 
 #include <cstdio>
 #include <cstdlib>

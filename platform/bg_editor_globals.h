@@ -1,8 +1,8 @@
 #ifndef BG_EDITOR_GLOBALS_H
 #define BG_EDITOR_GLOBALS_H
 
-#include "app_version.h"
-#include "bdd_format.h"
+#include "Core/app_version.h"
+#include "Core/bdd_format.h"
 #include "Core/app_diagnostics.h"
 #include "Core/bdd_core.h"
 #include "Core/editor_project_storage.h"
@@ -16,8 +16,8 @@
 #include "Core/viewer_load.h"
 #include "Core/viewer_save.h"
 #include "Core/world_module_utils.h"
-#include "UI/mk2_runtime_actor_tool.h"
-#include "UI/toast_notifications.h"
+#include "UI/tools/mk2_runtime_actor_tool.h"
+#include "UI/view/toast_notifications.h"
 #include <SDL.h>
 #include <stddef.h>
 #include <stdio.h>

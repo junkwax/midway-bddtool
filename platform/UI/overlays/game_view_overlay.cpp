@@ -1,7 +1,7 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "undo_manager.h"
-#include "stb_image_write.h"
+#include "libs/stb_image_write.h"
 #include <imgui.h>
 #include <climits>
 #include <cmath>

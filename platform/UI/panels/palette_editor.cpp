@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "imgui.h"
-#include "bdd_format.h"
+#include "Core/bdd_format.h"
 
 struct PaletteSlotUndoCapture {
     int active;

@@ -1,7 +1,7 @@
 #ifndef IMAGE_LOOKUP_H
 #define IMAGE_LOOKUP_H
 
-#include "bdd_format.h"
+#include "Core/bdd_format.h"
 
 #ifdef __cplusplus
 extern "C" {

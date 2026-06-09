@@ -1,6 +1,6 @@
-#include "UI/sdl_image_grid_view.h"
+#include "UI/sdl/sdl_image_grid_view.h"
 
-#include "UI/texture_cache.h"
+#include "UI/assets/texture_cache.h"
 #include "bg_editor_globals.h"
 
 void bdd_image_grid_view_draw(SDL_Renderer *rend, int win_w,

@@ -2,10 +2,10 @@
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
 #include "Core/image_lookup.h"
-#include "UI/game_view_controls.h"
-#include "UI/navigation.h"
-#include "UI/object_position_undo.h"
-#include "UI/world_view_helpers.h"
+#include "UI/view/game_view_controls.h"
+#include "UI/view/navigation.h"
+#include "UI/actions/object_position_undo.h"
+#include "UI/view/world_view_helpers.h"
 #include <imgui.h>
 #include <cstdio>
 

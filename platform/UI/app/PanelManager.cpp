@@ -1,4 +1,4 @@
-#include "UI/PanelManager.h"
+#include "UI/app/PanelManager.h"
 
 #include <utility>
 

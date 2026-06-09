@@ -1,6 +1,6 @@
 #pragma once
 
-#include "UI/IEditorPanel.h"
+#include "UI/widgets/IEditorPanel.h"
 
 class ToolbarPanel : public IEditorPanel {
 public:

@@ -1,6 +1,6 @@
 #include "Core/editor_app_globals.h"
-#include "UI/mk2_stage_config.h"
-#include "UI/toast_notifications.h"
+#include "UI/tools/mk2_stage_config.h"
+#include "UI/view/toast_notifications.h"
 
 #include <imgui.h>
 

@@ -4,7 +4,7 @@
 #include "Core/editor_project_storage.h"
 #include "Core/image_lookup.h"
 #include "Core/world_module_utils.h"
-#include "UI/status_bar.h"
+#include "UI/view/status_bar.h"
 #include "imgui.h"
 
 #include <limits.h>

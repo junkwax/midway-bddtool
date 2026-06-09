@@ -1,7 +1,7 @@
 #ifndef WORLD_VIEW_HELPERS_H
 #define WORLD_VIEW_HELPERS_H
 
-#include "bdd_format.h"
+#include "Core/bdd_format.h"
 
 float gv_scroll_factor(int layer_byte);
 void gv_object_origin(int obj_index, int *x, int *y);

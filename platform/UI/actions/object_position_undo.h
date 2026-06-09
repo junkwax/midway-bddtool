@@ -3,7 +3,7 @@
 
 #include <vector>
 
-#include "bdd_format.h"
+#include "Core/bdd_format.h"
 
 struct ObjectPositionUndoCapture {
     int capacity = 0;

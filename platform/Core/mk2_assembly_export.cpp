@@ -4,8 +4,8 @@
 #include "Core/project_header.h"
 #include "Core/viewer_save.h"
 #include "Core/world_module_utils.h"
-#include "UI/toast_notifications.h"
-#include "compat.h"
+#include "UI/view/toast_notifications.h"
+#include "utils/compat.h"
 #include "undo_manager.h"
 
 #include <limits.h>

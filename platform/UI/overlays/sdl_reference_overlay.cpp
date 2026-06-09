@@ -1,4 +1,4 @@
-#include "UI/sdl_reference_overlay.h"
+#include "UI/overlays/sdl_reference_overlay.h"
 
 #include "bg_editor.h"
 #include "bg_editor_globals.h"

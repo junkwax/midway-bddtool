@@ -1,8 +1,8 @@
-#include "UI/sdl_world_objects.h"
+#include "UI/sdl/sdl_world_objects.h"
 
 #include "Core/image_lookup.h"
-#include "UI/sdl_selection_rect.h"
-#include "UI/texture_cache.h"
+#include "UI/sdl/sdl_selection_rect.h"
+#include "UI/assets/texture_cache.h"
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 

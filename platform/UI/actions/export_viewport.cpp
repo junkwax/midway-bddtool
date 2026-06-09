@@ -1,8 +1,8 @@
 #include "Core/editor_project_globals.h"
 #include "Core/image_lookup.h"
-#include "UI/export_viewport.h"
-#include "UI/native_file_dialogs.h"
-#include "stb_image_write.h"
+#include "UI/actions/export_viewport.h"
+#include "UI/dialogs/native_file_dialogs.h"
+#include "libs/stb_image_write.h"
 
 #include <imgui.h>
 #include <cstdlib>

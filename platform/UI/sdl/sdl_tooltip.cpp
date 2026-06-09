@@ -1,7 +1,7 @@
-#include "UI/sdl_tooltip.h"
+#include "UI/sdl/sdl_tooltip.h"
 
 #include "Core/image_lookup.h"
-#include "UI/sdl_bitmap_font.h"
+#include "UI/sdl/sdl_bitmap_font.h"
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 

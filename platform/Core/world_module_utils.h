@@ -1,7 +1,7 @@
 #ifndef WORLD_MODULE_UTILS_H
 #define WORLD_MODULE_UTILS_H
 
-#include "bdd_format.h"
+#include "Core/bdd_format.h"
 
 int get_world_size(int *out_w, int *out_h);
 void fit_tile_to_world(void);

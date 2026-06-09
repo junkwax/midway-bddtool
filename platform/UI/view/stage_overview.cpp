@@ -1,7 +1,7 @@
 #include "Core/editor_project_globals.h"
 #include "Core/image_lookup.h"
-#include "UI/sdl_context.h"
-#include "UI/stage_overview.h"
+#include "UI/sdl/sdl_context.h"
+#include "UI/view/stage_overview.h"
 #include "imgui.h"
 
 #include <cstdio>

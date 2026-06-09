@@ -1,7 +1,7 @@
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
 #include "Core/viewer_save.h"
-#include "UI/quit_dialog.h"
+#include "UI/dialogs/quit_dialog.h"
 #include "imgui.h"
 
 #include <stdlib.h>

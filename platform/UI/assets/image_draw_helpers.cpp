@@ -1,5 +1,5 @@
-#include "UI/image_draw_helpers.h"
-#include "UI/texture_cache.h"
+#include "UI/assets/image_draw_helpers.h"
+#include "UI/assets/texture_cache.h"
 
 #include "imgui.h"
 

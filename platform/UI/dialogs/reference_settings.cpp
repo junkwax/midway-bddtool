@@ -1,11 +1,11 @@
 #include "Core/editor_project_globals.h"
 #include "Core/editor_app_globals.h"
-#include "UI/native_file_dialogs.h"
-#include "UI/reference_settings.h"
-#include "UI/right_panel_layout.h"
-#include "UI/sdl_context.h"
+#include "UI/dialogs/native_file_dialogs.h"
+#include "UI/dialogs/reference_settings.h"
+#include "UI/view/right_panel_layout.h"
+#include "UI/sdl/sdl_context.h"
 #include "imgui.h"
-#include "stb_image.h"
+#include "libs/stb_image.h"
 
 #include <stddef.h>
 

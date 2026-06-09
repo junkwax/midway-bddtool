@@ -1,7 +1,7 @@
 #ifndef IMPORT_EXPORT_H
 #define IMPORT_EXPORT_H
 
-#include "bdd_format.h"
+#include "Core/bdd_format.h"
 
 void import_png(const char *path, bool save_undo = true);
 int import_img_file(const char *path, bool save_undo = true);

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "UI/IEditorPanel.h"
+#include "UI/widgets/IEditorPanel.h"
 
 class DocumentTabsPanel : public IEditorPanel {
 public:

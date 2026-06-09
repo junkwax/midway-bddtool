@@ -1,8 +1,8 @@
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
-#include "UI/preferences_panel.h"
-#include "UI/right_panel_layout.h"
-#include "UI/settings.h"
+#include "UI/dialogs/preferences_panel.h"
+#include "UI/view/right_panel_layout.h"
+#include "UI/app/settings.h"
 #include "imgui.h"
 
 void draw_preferences(void)

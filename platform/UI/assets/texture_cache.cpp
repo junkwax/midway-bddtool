@@ -1,4 +1,4 @@
-#include "UI/texture_cache.h"
+#include "UI/assets/texture_cache.h"
 
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"

@@ -1,5 +1,5 @@
 #include "Core/editor_app_globals.h"
-#include "UI/save_error_popup.h"
+#include "UI/dialogs/save_error_popup.h"
 #include "imgui.h"
 
 #include <stdio.h>

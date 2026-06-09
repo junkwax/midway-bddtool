@@ -1,4 +1,4 @@
-#include "UI/sdl_alignment_guides.h"
+#include "UI/overlays/sdl_alignment_guides.h"
 
 #include "bg_editor.h"
 
