@@ -86,6 +86,7 @@ struct ImageIndexDelta {
 
 struct ImagePixelDelta {
     int img_i;
+    int image_idx;   /* stable BDD image id; survives slot reorder/delete */
     int width;
     int height;
     int count;
@@ -329,6 +330,7 @@ static bool undo_copy_image_pixels(Undo *dst, const Undo *src)
         return false;
     }
     dst->image_pixels.img_i = src->image_pixels.img_i;
+    dst->image_pixels.image_idx = src->image_pixels.image_idx;
     dst->image_pixels.width = src->image_pixels.width;
     dst->image_pixels.height = src->image_pixels.height;
     dst->image_pixels.count = count;
@@ -339,6 +341,21 @@ static bool undo_copy_image_pixels(Undo *dst, const Undo *src)
     snprintf(dst->label, sizeof(dst->label), "%s",
              src->label[0] ? src->label : "Edit Pixels");
     return true;
+}
+
+/* Image undo deltas record the slot index they were captured at, but slots can
+   be reordered, deleted, or deduped afterward. Resolve the real slot by the
+   stable BDD image id, preferring the recorded slot only while it still holds
+   the expected id, so an undo can never write into the wrong image. */
+static int undo_find_image_slot(int recorded_slot, int image_idx)
+{
+    if (recorded_slot >= 0 && recorded_slot < g_ni &&
+        g_img[recorded_slot].idx == image_idx)
+        return recorded_slot;
+    for (int i = 0; i < g_ni; i++)
+        if (g_img[i].idx == image_idx)
+            return i;
+    return -1;
 }
 
 static void undo_apply_object_positions(const Undo *u, bool redo)
@@ -420,17 +437,18 @@ static void undo_apply_palette_slot(const Undo *u, bool redo)
 
 static void undo_apply_image_index(const Undo *u, bool redo)
 {
-    int img_i;
-
     if (!u || u->kind != UNDO_KIND_IMAGE_INDEX)
         return;
 
-    img_i = u->image_index.img_i;
-    if (img_i < 0 || img_i >= g_ni)
+    /* The id itself is what changes, so locate the image by the id it currently
+       holds (after_idx when undoing, before_idx when redoing). */
+    int source_idx = redo ? u->image_index.before_idx : u->image_index.after_idx;
+    int slot = undo_find_image_slot(u->image_index.img_i, source_idx);
+    if (slot < 0)
         return;
 
-    g_img[img_i].idx = redo ? u->image_index.after_idx
-                            : u->image_index.before_idx;
+    g_img[slot].idx = redo ? u->image_index.after_idx
+                           : u->image_index.before_idx;
     g_need_rebuild = 1;
 }
 
@@ -443,7 +461,7 @@ static void undo_apply_image_pixels(const Undo *u, bool redo)
     if (!u || u->kind != UNDO_KIND_IMAGE_PIXELS)
         return;
 
-    img_i = u->image_pixels.img_i;
+    img_i = undo_find_image_slot(u->image_pixels.img_i, u->image_pixels.image_idx);
     if (img_i < 0 || img_i >= g_ni)
         return;
     im = &g_img[img_i];
@@ -896,6 +914,7 @@ int undo_save_image_pixels_delta(int img_i,
 
     u->kind = UNDO_KIND_IMAGE_PIXELS;
     u->image_pixels.img_i = img_i;
+    u->image_pixels.image_idx = im->idx;
     u->image_pixels.width = width;
     u->image_pixels.height = height;
     u->image_pixels.count = changed;
@@ -979,37 +998,47 @@ void undo_restore(void)
 void redo_restore(void)
 {
     if (!g_redo_avail) return;
-    /* push current → undo ring (without clearing redo) */
+
+    /* Build the entry that will be pushed back onto the undo ring into a
+       temporary first. This way a copy failure (OOM) leaves the ring and its
+       bookkeeping untouched instead of silently dropping the oldest entry. */
+    Undo restored = {};
+    bool ok;
+    if (g_redo_state.kind == UNDO_KIND_OBJECT_POSITIONS) {
+        ok = undo_copy_object_positions(&restored, &g_redo_state);
+    } else if (g_redo_state.kind == UNDO_KIND_OBJECT_RECORDS) {
+        ok = undo_copy_object_records(&restored, &g_redo_state);
+    } else if (g_redo_state.kind == UNDO_KIND_MODULE_LINES) {
+        ok = undo_copy_module_lines(&restored, &g_redo_state);
+    } else if (g_redo_state.kind == UNDO_KIND_PALETTE_SLOT) {
+        ok = undo_copy_palette_slot(&restored, &g_redo_state);
+    } else if (g_redo_state.kind == UNDO_KIND_IMAGE_INDEX) {
+        ok = undo_copy_image_index(&restored, &g_redo_state);
+    } else if (g_redo_state.kind == UNDO_KIND_IMAGE_PIXELS) {
+        ok = undo_copy_image_pixels(&restored, &g_redo_state);
+    } else {
+        ok = undo_capture_snapshot(&restored);
+        if (ok)
+            snprintf(restored.label, sizeof(restored.label), "%s",
+                     g_redo_state.label[0] ? g_redo_state.label : "Edit");
+    }
+    if (!ok) {
+        undo_release_storage(&restored);
+        return;
+    }
+
+    /* Commit: only now that we hold a valid entry do we evict the oldest and
+       push current → undo ring (without clearing redo). */
     if (g_undo_n == UNDO_DEPTH) {
         undo_release_storage(&g_undo_ring[g_undo_base]);
         g_undo_base = (g_undo_base + 1) % UNDO_DEPTH;
         g_undo_n--;
     }
     int slot = (g_undo_base + g_undo_n) % UNDO_DEPTH;
-    if (g_redo_state.kind == UNDO_KIND_OBJECT_POSITIONS) {
-        if (!undo_copy_object_positions(&g_undo_ring[slot], &g_redo_state))
-            return;
-    } else if (g_redo_state.kind == UNDO_KIND_OBJECT_RECORDS) {
-        if (!undo_copy_object_records(&g_undo_ring[slot], &g_redo_state))
-            return;
-    } else if (g_redo_state.kind == UNDO_KIND_MODULE_LINES) {
-        if (!undo_copy_module_lines(&g_undo_ring[slot], &g_redo_state))
-            return;
-    } else if (g_redo_state.kind == UNDO_KIND_PALETTE_SLOT) {
-        if (!undo_copy_palette_slot(&g_undo_ring[slot], &g_redo_state))
-            return;
-    } else if (g_redo_state.kind == UNDO_KIND_IMAGE_INDEX) {
-        if (!undo_copy_image_index(&g_undo_ring[slot], &g_redo_state))
-            return;
-    } else if (g_redo_state.kind == UNDO_KIND_IMAGE_PIXELS) {
-        if (!undo_copy_image_pixels(&g_undo_ring[slot], &g_redo_state))
-            return;
-    } else {
-        if (!undo_capture_snapshot(&g_undo_ring[slot])) return;
-        snprintf(g_undo_ring[slot].label, sizeof(g_undo_ring[slot].label), "%s",
-                 g_redo_state.label[0] ? g_redo_state.label : "Edit");
-    }
+    undo_release_storage(&g_undo_ring[slot]);
+    g_undo_ring[slot] = restored;   /* transfers ownership of malloc'd buffers */
     g_undo_n++;
+
     /* restore redo state */
     undo_apply(&g_redo_state, true);
     undo_release_storage(&g_redo_state);

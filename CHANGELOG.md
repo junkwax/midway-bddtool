@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-06-09
+
+### Added
+- `LICENSE` (MIT) so the project can accept outside contributions, plus
+  `CONTRIBUTING.md` documenting build/test steps and the codebase's conventions.
+- Continuous-integration workflow that builds and smoke-tests on Linux and macOS
+  for every push to `main` and every pull request.
+- Tag-driven releases now publish a Windows x64 zip alongside Linux, macOS, and
+  source packages.
+- "Reclaim ROM Space" tool (MK2 Workflow > Optimize) that shows the payload
+  breakdown and runs a one-click lossless shrink (tight-trim, palette/bit-depth
+  compaction, identical-image dedup, unused-art removal) with a before/after
+  byte report, plus an opt-in near-duplicate color merge for extra savings.
+- "Sprite Wedge Risk" scanner (MK2 Workflow > Check) that flags sprites whose
+  transparent edges LOAD2 cannot row-encode cleanly, the cause of the in-game
+  missing-triangle-wedge artifact, with focus and tight-trim actions.
+- "What to fix & how" guidance in the LOAD2 Doctor: each non-zero diagnosis now
+  names the tool or button that resolves it.
+- Per-row "how to fix" hints on failing Stage Readiness Gate checks.
+- Active-filter highlight and a "Showing N of M images" count in the Images
+  panel.
+
+### Changed
+- Grouped the MK2 Workflow Optimize tools into labeled sections (Space, Palette,
+  Pixels & Color, Dedup & Space, Layout Checks) instead of one flat list.
+- Decluttered Images panel cards: size and palette share a line and redundant
+  source text moved to the hover tooltip and right-click menu.
+- Corrected the README "Project Structure" section to match the current layout.
+
+### Fixed
+- Block editor brush now paints a continuous line between mouse samples, so
+  fast drag strokes no longer skip pixels and leave stray transparent gaps in
+  the edited sprite.
+- Pixel and image-index undo/redo now resolve their target by the stable image
+  id instead of the slot index, so undoing after reordering, deleting, deduping,
+  or compacting images can no longer write into the wrong image.
+- TGA importer: reject colour maps over 256 entries (stack buffer overflow),
+  bound image dimensions and compute the pixel count with `size_t` (integer
+  overflow into a heap overflow), and validate the colour-map depth.
+- Undo/redo: `redo_restore` now builds the restored entry before mutating the
+  ring, so an allocation failure can no longer silently drop the oldest undo.
+- Guarded the object-drag grid snap against a zero grid spacing (divide-by-zero).
+- Removed a dead duplicate error assignment in `bdd_core_load_stage` and
+  bounds-guarded the sprite-sheet `.png` extension append.
+- Windows build helpers now pass `VERSION` into CMake so cached build dirs cannot
+  keep stale executable resource metadata.
+
 ## [1.0.2] - 2026-06-09
 
 ### Changed

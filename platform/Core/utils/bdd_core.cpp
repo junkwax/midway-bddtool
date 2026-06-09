@@ -481,7 +481,6 @@ int bdd_core_load_stage(const char *bdb_path,
             }
         }
     } else if (require_bdd) {
-        bdd_core_stage_set_error(out, "missing BDD path");
         out->init();
         bdd_core_stage_set_error(out, "missing BDD path");
         return 0;

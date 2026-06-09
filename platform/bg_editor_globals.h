@@ -485,6 +485,8 @@ void draw_mk2_palette_builder_tool(void);
 void draw_mk2_animation_planner_tool(void);
 void draw_mk2_rom_space_budget_tool(void);
 void draw_mk2_stage_readiness_gate(void);
+void draw_mk2_rom_space_reclaim(void);
+void draw_mk2_wedge_risk_tool(void);
 void draw_mk2_pan_coverage_scanner(void);
 void draw_mk2_duplicate_mirror_finder(void);
 void draw_mk2_palette_usage_optimizer(void);

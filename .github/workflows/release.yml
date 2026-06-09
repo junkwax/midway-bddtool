@@ -126,10 +126,69 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  windows:
+    name: Build windows-x86_64
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Resolve release version
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$') {
+            throw 'Release tags must look like v1.0.2 or v1.0.2.0'
+          }
+          "BDDVIEW_RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build
+        shell: pwsh
+        run: |
+          .\build.ps1 `
+            -BuildRoot "$env:RUNNER_TEMP\bddview-build" `
+            -SharedDeps "$env:RUNNER_TEMP\midway-build\deps" `
+            -Sdl2Ver 2.32.10 `
+            -Arch x64 `
+            -ReleaseVersion "$env:BDDVIEW_RELEASE_VERSION"
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $smoke = Join-Path $env:RUNNER_TEMP 'checker'
+          .\build-win\Release\bddview.exe --write-checker-test $smoke
+          .\build-win\Release\bddview.exe --check-open-mode "$smoke.BDB"
+          .\build-win\Release\bddtool.exe validate "$smoke.BDB" "$smoke.BDD"
+          python tools\roundtrip_smoke.py --bddview build-win\Release\bddview.exe --bddtool build-win\Release\bddtool.exe
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $platform = 'windows-x86_64'
+          $package = "midway-bddtool-$env:GITHUB_REF_NAME-$platform"
+          $root = Join-Path 'dist' $package
+          $bin = Join-Path $root 'bin'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          Copy-Item build-win\Release\bddview.exe, build-win\Release\bddtool.exe, build-win\Release\SDL2.dll -Destination $bin -Force
+          Copy-Item README.md, CHANGELOG.md -Destination $root -Force
+          if (Test-Path build-win\Release\assets) {
+            Copy-Item build-win\Release\assets -Destination $bin -Recurse -Force
+          }
+          Compress-Archive -Path $root -DestinationPath "dist\$package.zip" -Force
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: dist/*.zip
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub release
     needs:
       - build
+      - windows
       - source
     runs-on: ubuntu-latest
 

@@ -1133,7 +1133,7 @@ void export_sprite_sheet_png(void)
             "PNG Files\0*.png\0All Files\0*.*\0", path, (int)sizeof path))
         return;
     size_t pl = strlen(path);
-    if (pl < 4 || strcasecmp(path + pl - 4, ".png") != 0)
+    if ((pl < 4 || strcasecmp(path + pl - 4, ".png") != 0) && pl + 4 < sizeof path)
         strncat(path, ".png", sizeof path - pl - 1);
 
     const int COLS = 16;

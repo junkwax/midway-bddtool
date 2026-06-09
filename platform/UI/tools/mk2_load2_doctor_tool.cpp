@@ -5,6 +5,21 @@
 
 #include <stdio.h>
 
+/* Render one actionable line for the "What to fix & how" section: a colored
+   problem statement plus an indented, plain-English remedy that names the tool
+   or button that resolves it. Nothing draws when the issue is not present. */
+static void mk2_doctor_fix(bool show, bool blocking, const char *problem, const char *how)
+{
+    if (!show) return;
+    ImGui::TextColored(blocking ? ImVec4(1.0f, 0.45f, 0.35f, 1) : ImVec4(1.0f, 0.78f, 0.35f, 1),
+                       "%s %s", blocking ? "Fix:" : "Check:", problem);
+    ImGui::Indent();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+    ImGui::TextWrapped("How: %s", how);
+    ImGui::PopStyleColor();
+    ImGui::Unindent();
+}
+
 void draw_mk2_load2_doctor_tool(void)
 {
     Mk2Diag d;
@@ -49,6 +64,43 @@ void draw_mk2_load2_doctor_tool(void)
     ImGui::NextColumn();
     ImGui::Text("X-order cautions"); ImGui::NextColumn(); ImGui::Text("%d", d.order_issues); ImGui::NextColumn();
     ImGui::Columns(1);
+
+    /* Translate the raw counts above into concrete remedies. Only issues that
+       lack a dedicated fix button further down get a hint here, so the section
+       stays focused on "what do I actually do about this". */
+    bool any_guided = d.missing_images > 0 || d.bad_palettes > 0 ||
+                      d.module_bound_issues > 0 || d.old_style_bounds > 0 ||
+                      d.load2_oversize_images > 0 || d.palette_high_nibble > 0 ||
+                      d.high_color_images > 0 || d.load2_narrow_padded_images > 0 ||
+                      d.order_issues > 0;
+    if (any_guided) {
+        ImGui::SeparatorText("What to fix & how");
+        mk2_doctor_fix(d.missing_images > 0, true,
+            "Some objects point at image IDs that are not in the BDD.",
+            "Re-import the source IMG/LOD art (MK2 Workflow > Import), or open the Images panel, filter to the missing art, and delete the orphan objects.");
+        mk2_doctor_fix(d.bad_palettes > 0, true,
+            "One or more palettes have an invalid color count.",
+            "Open the Palette panel and set each flagged palette to 1-256 colors, then click 'Sync Header Counts' below.");
+        mk2_doctor_fix(d.module_bound_issues > 0 || d.old_style_bounds > 0, true,
+            "Module bounds are malformed or use the old single-point style.",
+            "Click 'Fit Module Bounds to Objects' below, or edit each bound in the Modules panel into a full TSTMOD rectangle.");
+        mk2_doctor_fix(d.load2_oversize_images > 0, true,
+            "At least one block is larger than the LOAD2 byte budget.",
+            "Shrink the sprite (Optimize > Trim Transparent Border) or lower its color depth (Optimize > Selected BPP Reducer); split very large art across blocks.");
+        mk2_doctor_fix(d.palette_high_nibble > 0, false,
+            "Palette indices >= 16 are used where MK2 expects a low nibble.",
+            "Remap the art onto a compact palette with Optimize > Palette Remap / Compress, then re-run this check.");
+        mk2_doctor_fix(d.high_color_images > 0, false,
+            "Some images use more colors than the LOAD2 target depth.",
+            "Reduce the color count with Optimize > Selected BPP Reducer or Smart Palette Grouper.");
+        mk2_doctor_fix(d.load2_narrow_padded_images > 0, false,
+            "Images narrower than 3px are padded by LOAD2.",
+            "Widen the art to 3px or more, or accept the automatic padding if the on-screen result is unaffected.");
+        mk2_doctor_fix(d.order_issues > 0, false,
+            "Object draw order is not X-major, which LOAD2 expects.",
+            "Click 'Sort Objects X-Major for LOAD2' below to reorder every object automatically.");
+        ImGui::Spacing();
+    }
 
     if (d.load2_palette_overflow || d.load2_module_overflow ||
         d.load2_image_header_overflow || d.load2_block_table_overflow) {

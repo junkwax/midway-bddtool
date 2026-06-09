@@ -4,14 +4,28 @@
 
 #include <stdio.h>
 
-static void draw_gate_row(const char *name, bool pass, const char *detail)
+static void draw_gate_row(const char *name, bool pass, const char *detail, const char *how = nullptr)
 {
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::TextColored(pass ? ImVec4(0.45f, 1.0f, 0.55f, 1.0f) : ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
                        "%s", pass ? "PASS" : "FIX");
     ImGui::TableNextColumn(); ImGui::TextUnformatted(name);
-    ImGui::TableNextColumn(); ImGui::TextUnformatted(detail);
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted(detail);
+    /* Failing rows get a hover hint that explains how to clear the check, so the
+       gate tells you what to do, not just that something is wrong. */
+    if (!pass && how && how[0]) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
+            ImGui::TextUnformatted(how);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    }
 }
 
 void draw_mk2_stage_readiness_gate(void)
@@ -86,7 +100,8 @@ void draw_mk2_stage_readiness_gate(void)
                      d.load2_oversize_images, MK2_LOAD2_MAX_DATA_BYTES);
         else
             snprintf(detail, sizeof detail, "%d hard issue(s)", hard);
-        draw_gate_row("LOAD2", load2_ok, detail);
+        draw_gate_row("LOAD2", load2_ok, detail,
+            "Open LOAD2 Doctor (Check section) and work its 'What to fix & how' list: missing art, bad palettes, module bounds, or oversize blocks.");
         bool load2_caps_ok = d.load2_palette_overflow == 0 &&
                              d.load2_module_overflow == 0 &&
                              d.load2_image_header_overflow == 0 &&
@@ -97,25 +112,34 @@ void draw_mk2_stage_readiness_gate(void)
                  g_bdb_num_modules, MK2_LOAD2_MAX_MODULES,
                  g_ni, MK2_LOAD2_MAX_IMAGE_HEADERS,
                  d.max_load2_block_bytes, MK2_LOAD2_MAX_DATA_BYTES);
-        draw_gate_row("LOAD2 caps", load2_caps_ok, detail);
+        draw_gate_row("LOAD2 caps", load2_caps_ok, detail,
+            "A LOAD2 file table is full. Merge palettes (Optimize > Smart Palette Grouper), drop unused images, or shrink oversize art (Optimize > Selected BPP Reducer).");
         bool display_ok = d.display_object_overflow == 0;
         snprintf(detail, sizeof detail, "%d/%d at X %d before fighters/effects/UI",
                  d.max_visible_objects, MK2_DISPLAY_OBJECT_CAP, d.max_visible_objects_x);
-        draw_gate_row("Display objs", display_ok, detail);
+        draw_gate_row("Display objs", display_ok, detail,
+            "Too many background objects are visible at once near this X. Thin out or merge objects there, or push some onto other layers.");
         snprintf(detail, sizeof detail, "%d X-order caution(s)", d.order_issues);
-        draw_gate_row("Object order", order_ok, detail);
+        draw_gate_row("Object order", order_ok, detail,
+            "Draw order is not X-major. Click 'Run Safe Fixes' below, or 'Sort Objects X-Major for LOAD2' in the LOAD2 Doctor.");
         snprintf(detail, sizeof detail, "0x%zX / 0x%X", b.estimated_payload, g_gate_payload_limit);
-        draw_gate_row("ROM budget", budget_ok, detail);
+        draw_gate_row("ROM budget", budget_ok, detail,
+            "Payload exceeds the limit. Use the budget relief suggestions shown below, dedupe mirrored art (Optimize > Duplicate / Mirror Finder), or reduce color depth.");
         snprintf(detail, sizeof detail, "full %.1f%% at worst X %d", ps.full, ps.worst_x);
-        draw_gate_row("Pan full", full_ok, detail);
+        draw_gate_row("Pan full", full_ok, detail,
+            "A pan position is under-covered. Extend background art across the worst X ('Use Worst Pan X As Preview' below), or lower the threshold if the gap is intentional.");
         snprintf(detail, sizeof detail, "top %.1f%%", ps.top);
-        draw_gate_row("Pan top", top_ok, detail);
+        draw_gate_row("Pan top", top_ok, detail,
+            "Top-of-screen coverage is below target. Add upper-layer art, or lower 'Min Top Coverage' if intentional.");
         snprintf(detail, sizeof detail, "floor %.1f%%", ps.floor);
-        draw_gate_row("Pan floor", floor_ok, detail);
+        draw_gate_row("Pan floor", floor_ok, detail,
+            "Floor coverage is below target. Add floor/lower-layer art, or lower 'Min Floor Coverage' if intentional.");
         snprintf(detail, sizeof detail, "%d high-color image(s)", b.high_color_images);
-        draw_gate_row("Color cost", color_ok, detail);
+        draw_gate_row("Color cost", color_ok, detail,
+            "High-color images inflate ROM. Reduce with Optimize > Selected BPP Reducer or Smart Palette Grouper, or uncheck 'Block on high-color images'.");
         snprintf(detail, sizeof detail, "possible raw savings 0x%zX", dup_savings);
-        draw_gate_row("Duplicate art", dup_savings == 0, detail);
+        draw_gate_row("Duplicate art", dup_savings == 0, detail,
+            "Identical or mirrored art can be shared. Use Optimize > Duplicate / Mirror Finder, then the Safe Dedup Assistant.");
         ImGui::EndTable();
     }
 

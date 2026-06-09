@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(BDDVIEW_DEFAULT_VERSION "1.0.2")
+set(BDDVIEW_DEFAULT_VERSION "1.0.3")
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
     file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" BDDVIEW_DEFAULT_VERSION LIMIT_COUNT 1)
 endif()
@@ -123,6 +123,7 @@ add_executable(bddview
     platform/UI/tools/mk2_smart_palette_grouper.cpp
     platform/UI/tools/mk2_preview_diff_tool.cpp
     platform/UI/tools/mk2_quick_tile_tools.cpp
+    platform/UI/tools/mk2_rom_space_reclaim.cpp
     platform/UI/tools/mk2_runtime_extras_backend.cpp
     platform/UI/tools/mk2_runtime_extras_overlay.cpp
     platform/UI/tools/mk2_runtime_extras_tool.cpp
@@ -132,6 +133,7 @@ add_executable(bddview
     platform/UI/tools/mk2_selected_bpp_reducer_tool.cpp
     platform/UI/tools/mk2_stage_handoff_tools.cpp
     platform/UI/tools/mk2_stage_config.cpp
+    platform/UI/tools/mk2_wedge_risk_tool.cpp
     platform/UI/tools/mk2_stage_recipe_manifest.cpp
     platform/UI/tools/mk2_stage_fx_builder_tool.cpp
     platform/UI/tools/mk2_stage_layer_role_editor.cpp

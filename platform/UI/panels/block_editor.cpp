@@ -3,6 +3,7 @@
 #include "undo_manager.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <vector>
 
 bool g_block_edit_open = false;
@@ -27,6 +28,37 @@ struct BlockPixelUndoCapture {
 };
 
 static BlockPixelUndoCapture g_block_pixel_undo;
+
+/* Brush-stroke state so a drag paints a continuous line instead of only the
+   per-frame hovered cell. Without this, fast drags skip the pixels between
+   sampled mouse positions, leaving stray gaps (transparent where the art was
+   already index 0). */
+static bool g_block_paint_active = false;
+static int  g_block_paint_last_x = -1;
+static int  g_block_paint_last_y = -1;
+
+static void block_paint_pixel(Img *im, int x, int y, Uint8 col)
+{
+    if (!im || !im->pix || x < 0 || y < 0 || x >= im->w || y >= im->h)
+        return;
+    im->pix[(size_t)y * (size_t)im->w + (size_t)x] = col;
+}
+
+/* Paint every cell on the line from (x0,y0) to (x1,y1) so dragged strokes are
+   continuous regardless of mouse speed. */
+static void block_paint_line(Img *im, int x0, int y0, int x1, int y1, Uint8 col)
+{
+    int dx = abs(x1 - x0), dy = -abs(y1 - y0);
+    int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    for (;;) {
+        block_paint_pixel(im, x0, y0, col);
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
 
 static void block_pixel_undo_begin(int img_i, const Img *im)
 {
@@ -228,10 +260,23 @@ void draw_block_editor(void)
         if (gx >= 0 && gx < im->w && gy >= 0 && gy < im->h) {
             hover_x = gx;
             hover_y = gy;
-            if (ImGui::IsMouseClicked(0))
+            if (ImGui::IsMouseClicked(0)) {
                 block_pixel_undo_begin(g_block_edit_img, im);
-            if (ImGui::IsMouseDown(0)) {
-                im->pix[gy * im->w + gx] = (Uint8)g_block_edit_col;
+                block_paint_pixel(im, gx, gy, (Uint8)g_block_edit_col);
+                g_block_paint_active = true;
+                g_block_paint_last_x = gx;
+                g_block_paint_last_y = gy;
+                g_dirty = 1;
+                g_need_rebuild = 1;
+            } else if (ImGui::IsMouseDown(0)) {
+                if (g_block_paint_active)
+                    block_paint_line(im, g_block_paint_last_x, g_block_paint_last_y,
+                                     gx, gy, (Uint8)g_block_edit_col);
+                else
+                    block_paint_pixel(im, gx, gy, (Uint8)g_block_edit_col);
+                g_block_paint_active = true;
+                g_block_paint_last_x = gx;
+                g_block_paint_last_y = gy;
                 g_dirty = 1;
                 g_need_rebuild = 1;
             }
@@ -247,6 +292,8 @@ void draw_block_editor(void)
     }
     if (g_block_pixel_undo.active && !ImGui::IsMouseDown(0))
         block_pixel_undo_commit();
+    if (!ImGui::IsMouseDown(0))
+        g_block_paint_active = false;
     ImGui::EndChild();
 
     ImGui::SameLine();

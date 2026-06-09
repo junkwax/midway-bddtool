@@ -125,10 +125,20 @@ void draw_image_list(void)
     static int  img_filter = 0;
     static char img_search[64] = "";
     ImGui::Text("Show:"); ImGui::SameLine();
-    if (ImGui::SmallButton("All"))    img_filter = 0; ImGui::SameLine();
-    if (ImGui::SmallButton("Used"))   img_filter = 1; ImGui::SameLine();
-    if (ImGui::SmallButton("Unused")) img_filter = 2; ImGui::SameLine();
-    if (ImGui::SmallButton("LOD"))    img_filter = 3;
+    /* Highlight the active filter so it's obvious which view is selected. */
+    auto filter_button = [&](const char *label, int value) {
+        bool active = (img_filter == value);
+        if (active)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+        if (ImGui::SmallButton(label))
+            img_filter = value;
+        if (active)
+            ImGui::PopStyleColor();
+    };
+    filter_button("All", 0);    ImGui::SameLine();
+    filter_button("Used", 1);   ImGui::SameLine();
+    filter_button("Unused", 2); ImGui::SameLine();
+    filter_button("LOD", 3);
     ImGui::SetNextItemWidth(-1);
     ImGui::InputText("##imgsearch", img_search, sizeof img_search);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Filter by index, IMG frame name, source IMG/LOD, or palette");
@@ -318,7 +328,13 @@ void draw_image_list(void)
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Renumbers BDD image IDs to match current list order.");
 
+    int shown_images = 0;
+    for (int i = 0; i < g_ni; i++)
+        if (image_passes_list_filter(&g_img[i], img_filter, img_search, search_idx))
+            shown_images++;
     ImGui::SeparatorText("Assets");
+    if (shown_images != g_ni)
+        ImGui::TextDisabled("Showing %d of %d image(s)", shown_images, g_ni);
 
     int col_pos = 0;
     int last_module_bucket = INT_MIN;
@@ -472,14 +488,17 @@ void draw_image_list(void)
             g_img_edit_idx = i;
         }
         ImGui::SameLine();
-        ImGui::Text("%dx%d", im->w, im->h);
+        /* Size and palette share one line; full source/anipoint detail lives in
+           the hover tooltip and right-click menu to keep each card compact. */
+        if (g_simple_mode)
+            ImGui::Text("%dx%d  palette %d", im->w, im->h, im->pal_idx);
+        else
+            ImGui::Text("%dx%d  pal=%d", im->w, im->h, im->pal_idx);
         if (im->label[0]) {
             if (im->lod_ref)
                 ImGui::TextColored(ImVec4(0.55f,0.9f,1.0f,1.0f), "LOD %s", im->label);
             else
                 ImGui::TextWrapped("%s", im->label);
-            if (im->source[0])
-                ImGui::TextDisabled("%s", im->source);
         } else if (im->source[0]) {
             ImGui::TextDisabled("%s", im->source);
         }
@@ -489,8 +508,6 @@ void draw_image_list(void)
             ImGui::TextColored(ImVec4(0.5f,0.9f,0.5f,1.0f), "x%d", use_count);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%d object%s reference this image", use_count, use_count == 1 ? "" : "s");
-        if (g_simple_mode) ImGui::Text("palette %d", im->pal_idx);
-        else ImGui::Text("pal=%d", im->pal_idx);
         {
             char mod_badge[96];
             image_module_badge_label(&image_modules[(size_t)i], mod_badge, sizeof mod_badge);

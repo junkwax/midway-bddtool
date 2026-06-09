@@ -4,7 +4,8 @@ param(
     [string]$BuildRoot  = "$env:LOCALAPPDATA\bddview-build",
     [string]$SharedDeps = "$env:LOCALAPPDATA\midway-build\deps",
     [string]$Sdl2Ver    = "",
-    [string]$Arch       = "x64"
+    [string]$Arch       = "x64",
+    [string]$ReleaseVersion = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +56,11 @@ if (-not $Sdl2Ver) {
 $sdl2Root  = "$SharedDeps\SDL2-$Sdl2Ver"
 $sdl2Cmake = "$sdl2Root\cmake"
 $buildDir  = "$BuildRoot\build"
+$versionFile = Join-Path $SourceDir "VERSION"
+$releaseVersion = $ReleaseVersion.Trim()
+if (-not $releaseVersion -and (Test-Path $versionFile)) {
+    $releaseVersion = (Get-Content -Path $versionFile -TotalCount 1).Trim()
+}
 New-Item -ItemType Directory -Force -Path $BuildRoot, $SharedDeps, $buildDir | Out-Null
 
 if (-not (Test-Path $sdl2Root)) {
@@ -68,12 +74,17 @@ if (-not (Test-Path $sdl2Root)) {
 
 # CMake configure + build
 Write-Host "[3/4] Configuring..." -ForegroundColor Cyan
+$cmakeConfigure = "cmake -B `"$buildDir`" -G `"Visual Studio 17 2022`" -A $cmakeArch -DSDL2_DIR=`"$sdl2Cmake`""
+if ($releaseVersion) {
+    $cmakeConfigure += " -DBDDVIEW_RELEASE_VERSION=`"$releaseVersion`""
+}
+$cmakeConfigure += " `"$SourceDir`""
 $batLines = @(
     "@echo off",
     "call `"$vcvarsall`" $vcvarsArch",
     "if errorlevel 1 exit /b 1",
     "set PATH=$vsCmake;%PATH%",
-    "cmake -B `"$buildDir`" -G `"Visual Studio 17 2022`" -A $cmakeArch -DSDL2_DIR=`"$sdl2Cmake`" `"$SourceDir`"",
+    $cmakeConfigure,
     "if errorlevel 1 exit /b 1"
 )
 $batFile = "$env:TEMP\build_bddview.bat"

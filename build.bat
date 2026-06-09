@@ -49,6 +49,11 @@ set "SOURCE=."
 set "BUILDROOT=%LOCALAPPDATA%\bddview-build"
 set "BUILDDIR=%BUILDROOT%\build"
 set "DEPSDIR=%BUILDROOT%\deps"
+set "RELEASE_VERSION="
+set "VERSION_FLAG="
+if defined BDDVIEW_RELEASE_VERSION set "RELEASE_VERSION=%BDDVIEW_RELEASE_VERSION%"
+if not defined RELEASE_VERSION if exist "%SOURCE%\VERSION" set /p RELEASE_VERSION=<"%SOURCE%\VERSION"
+if defined RELEASE_VERSION set "VERSION_FLAG=-DBDDVIEW_RELEASE_VERSION=%RELEASE_VERSION%"
 set "SDL2VER=2.30.2"
 set "SDL2DIR=%DEPSDIR%\SDL2-%SDL2VER%"
 set "SDL2CMAKE=%SDL2DIR%\cmake"
@@ -80,6 +85,7 @@ if not exist "%SDL2DIR%" (
 echo [4/4] CMake configure + build...
 "%CMAKE%" -B "%BUILDDIR%" -G "Visual Studio 17 2022" -A %CMAKE_ARCH% ^
     -DSDL2_DIR="%SDL2CMAKE%" ^
+    %VERSION_FLAG% ^
     "%SOURCE%"
 if errorlevel 1 exit /b 1
 

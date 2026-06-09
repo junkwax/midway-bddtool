@@ -84,6 +84,9 @@ void draw_mk2_workflow(void)
         ImGui::Separator();
         if (mk2_tool_header("Stage Readiness Gate", g_mk2_focus_tool == 5))
             draw_mk2_stage_readiness_gate();
+        ImGui::Separator();
+        if (mk2_tool_header("Sprite Wedge Risk"))
+            draw_mk2_wedge_risk_tool();
         break;
 
     case MK2_WF_PREVIEW:
@@ -130,50 +133,49 @@ void draw_mk2_workflow(void)
         break;
 
     case MK2_WF_OPTIMIZE:
-        if (mk2_tool_header("Palette Seam Detector", true))
+        /* Grouped by what each tool acts on so the long list is scannable
+           instead of one flat stack of 15 headers. */
+        ImGui::SeparatorText("Space");
+        if (mk2_tool_header("Reclaim ROM Space", true))
+            draw_mk2_rom_space_reclaim();
+
+        ImGui::SeparatorText("Palette");
+        if (mk2_tool_header("Palette Seam Detector"))
             draw_mk2_palette_seam_detector();
-        ImGui::Separator();
-        if (mk2_tool_header("Uppercut Headroom Preview"))
-            draw_mk2_uppercut_headroom_preview();
-        ImGui::Separator();
-        if (mk2_tool_header("Parallax Sanity Checker"))
-            draw_mk2_parallax_sanity_checker();
-        ImGui::Separator();
-        if (mk2_tool_header("Mirrored Asset Tool"))
-            draw_mk2_mirrored_asset_tool();
-        ImGui::Separator();
-        if (mk2_tool_header("Duplicate / Mirror Finder"))
-            draw_mk2_duplicate_mirror_finder();
-        ImGui::Separator();
-        if (mk2_tool_header("Safe Dedup Assistant"))
-            draw_mk2_safe_dedup_assistant();
-        ImGui::Separator();
-        if (mk2_tool_header("Selected BPP Reducer"))
-            draw_mk2_selected_bpp_reducer_tool();
-        ImGui::Separator();
-        if (mk2_tool_header("Small Artifact Finder"))
-            draw_mk2_small_artifact_finder();
-        ImGui::Separator();
-        if (mk2_tool_header("Batch Image Cleanup"))
-            draw_mk2_batch_image_cleanup_tool();
-        ImGui::Separator();
         if (mk2_tool_header("Palette Usage Optimizer"))
             draw_mk2_palette_usage_optimizer();
-        ImGui::Separator();
         if (mk2_tool_header("Smart Palette Grouper"))
             draw_mk2_smart_palette_grouper();
-        ImGui::Separator();
         if (mk2_tool_header("Palette Blend / Merge"))
             draw_palette_blend_merge_tool();
-        ImGui::Separator();
         if (mk2_tool_header("Palette Remap / Compress"))
             draw_mk2_palette_remap_compress_tool();
-        ImGui::Separator();
-        if (mk2_tool_header("Trim Transparent Border"))
-            draw_mk2_trim_transparent_border_tool();
-        ImGui::Separator();
         if (mk2_tool_header("Palette Builder"))
             draw_mk2_palette_builder_tool();
+
+        ImGui::SeparatorText("Pixels & Color");
+        if (mk2_tool_header("Selected BPP Reducer"))
+            draw_mk2_selected_bpp_reducer_tool();
+        if (mk2_tool_header("Small Artifact Finder"))
+            draw_mk2_small_artifact_finder();
+        if (mk2_tool_header("Batch Image Cleanup"))
+            draw_mk2_batch_image_cleanup_tool();
+        if (mk2_tool_header("Trim Transparent Border"))
+            draw_mk2_trim_transparent_border_tool();
+
+        ImGui::SeparatorText("Dedup & Space");
+        if (mk2_tool_header("Mirrored Asset Tool"))
+            draw_mk2_mirrored_asset_tool();
+        if (mk2_tool_header("Duplicate / Mirror Finder"))
+            draw_mk2_duplicate_mirror_finder();
+        if (mk2_tool_header("Safe Dedup Assistant"))
+            draw_mk2_safe_dedup_assistant();
+
+        ImGui::SeparatorText("Layout Checks");
+        if (mk2_tool_header("Uppercut Headroom Preview"))
+            draw_mk2_uppercut_headroom_preview();
+        if (mk2_tool_header("Parallax Sanity Checker"))
+            draw_mk2_parallax_sanity_checker();
         break;
 
     case MK2_WF_FX:

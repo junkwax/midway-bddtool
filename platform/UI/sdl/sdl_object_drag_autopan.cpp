@@ -82,7 +82,7 @@ void bdd_sdl_object_drag_update(int drag_idx,
         if (!g_sel_flags[si]) continue;
         int d2 = drag_depth[si] + dx;
         int s2 = drag_sy[si] + dy;
-        if (g_grid_snap) {
+        if (g_grid_snap && g_grid_sx > 0 && g_grid_sy > 0) {
             d2 = (d2 / g_grid_sx) * g_grid_sx;
             s2 = (s2 / g_grid_sy) * g_grid_sy;
         }

@@ -43,6 +43,27 @@ static int tga_load(const char *path, int *out_w, int *out_h,
         return 0;
     }
 
+    if (cmap_depth != 15 && cmap_depth != 16) {
+        fprintf(stderr, "tga: only 15/16-bit RGB555 colour maps supported (got depth=%d)\n",
+                cmap_depth);
+        fclose(f);
+        return 0;
+    }
+
+    /* The BDD format caps palettes at 256 entries; reject anything larger so
+       downstream fixed-size buffers (e.g. colors[256]) cannot overflow. */
+    if (cmap_count <= 0 || cmap_count > 256) {
+        fprintf(stderr, "tga: invalid colour-map count %d (must be 1..256)\n", cmap_count);
+        fclose(f);
+        return 0;
+    }
+
+    if (width <= 0 || height <= 0 || width > 4096 || height > 4096) {
+        fprintf(stderr, "tga: invalid image dimensions %dx%d\n", width, height);
+        fclose(f);
+        return 0;
+    }
+
     fseek(f, id_len, SEEK_CUR);
 
     int bpp = (cmap_depth + 7) / 8;
@@ -61,9 +82,9 @@ static int tga_load(const char *path, int *out_w, int *out_h,
         pal[i] = (Uint16)(buf[0] | (buf[1] << 8));
     }
 
-    int npix = width * height;
-    Uint8 *raw = (Uint8 *)malloc((size_t)npix);
-    Uint8 *pix = (Uint8 *)malloc((size_t)npix);
+    size_t npix = (size_t)width * (size_t)height;
+    Uint8 *raw = (Uint8 *)malloc(npix);
+    Uint8 *pix = (Uint8 *)malloc(npix);
     if (!raw || !pix) {
         free(raw);
         free(pix);
@@ -71,7 +92,7 @@ static int tga_load(const char *path, int *out_w, int *out_h,
         fclose(f);
         return 0;
     }
-    if ((int)fread(raw, 1, (size_t)npix, f) < npix) {
+    if (fread(raw, 1, npix, f) != npix) {
         free(raw);
         free(pix);
         free(pal);

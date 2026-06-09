@@ -83,8 +83,8 @@ writes the release executable under `%LOCALAPPDATA%\bddview-build\`.
 ## Releases
 
 Tagged releases are built by GitHub Actions. Pushing a `v*` tag publishes a
-GitHub release with zip packages for Linux, macOS, and a checked-out source
-archive. The tag version is passed into CMake, so `BDD Viewer vX.Y.Z`, the
+GitHub release with zip packages for Linux, macOS, Windows x64, and a
+checked-out source archive. The tag version is passed into CMake, so `BDD Viewer vX.Y.Z`, the
 About dialog, and Windows executable metadata match the release tag.
 
 ## Usage
@@ -132,12 +132,17 @@ external toolchain material do not need to be committed.
 ## Project Structure
 
 ```text
-bddview.c              SDL2 viewer/editor core
-platform/              ImGui bridge, shared format types, helpers, assets
+bddview.cpp            SDL2/ImGui app entry point
+platform/              Application code: format I/O, project storage, UI, tools
+platform/Core/         BDB/BDD format I/O, project storage, image/palette logic
+platform/UI/           ImGui panels, dialogs, overlays, tools, and views
+platform/bddtool_cli.cpp  Headless CLI (validate/diff) entry point
+platform/libs/         Vendored stb_image
 imgui/                 Dear ImGui sources
-tools/                 Headless smoke scripts
+tools/                 Headless smoke scripts and helper utilities
 reference/             Ignored local reference workspace plus public placeholders
 CHANGELOG.md           Release history
+CONTRIBUTING.md        Build, test, and contribution guide
 ```
 
 ## Status
