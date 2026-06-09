@@ -659,7 +659,9 @@ void draw_game_view_overlay(void)
     {
         float bar_w = 500.0f;
         float bar_x = gx + (gw - bar_w) * 0.5f;
-        float bar_y = gy + gh + 6.0f;
+        float bar_y = gy + gh + 74.0f;
+        ImVec2 ds = ImGui::GetIO().DisplaySize;
+        if (bar_y > ds.y - 58.0f) bar_y = ds.y - 58.0f;
         ImGui::SetNextWindowPos(ImVec2(bar_x, bar_y), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(bar_w, 0), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.82f);

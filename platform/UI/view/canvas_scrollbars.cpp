@@ -1,4 +1,5 @@
 #include "bg_editor.h"
+#include "bg_editor_globals.h"
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
 #include "UI/view/canvas_scrollbars.h"
@@ -66,7 +67,9 @@ void draw_canvas_scrollbars(void)
     const float top = editor_canvas_top_y();
     const float status_h = (!g_simple_mode && g_have_bdb) ? 70.0f : 22.0f;
     float right = ds.x - 6.0f;
-    if (right < 260.0f) right = ds.x - 6.0f;
+    float panel_left = right_panel_canvas_right_limit();
+    if (panel_left > 0.0f && panel_left < right)
+        right = panel_left - 8.0f;
     float bottom = ds.y - status_h - 6.0f;
 
     float h_track_x = left;
@@ -191,9 +194,7 @@ void draw_canvas_scrollbars(void)
 
     g_canvas_scrollbar_mouse_capture = hover_h || hover_v || s_drag_h || s_drag_v;
 
-    /* background draw list so docked/floating panels render over the scrollbars
-       instead of the scrollbars painting on top of them */
-    ImDrawList *dl = ImGui::GetBackgroundDrawList();
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
     ImU32 track_col = IM_COL32(25, 27, 34, 210);
     ImU32 track_hover_col = IM_COL32(35, 39, 50, 230);
     ImU32 handle_col = IM_COL32(88, 108, 140, 230);

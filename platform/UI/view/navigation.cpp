@@ -68,7 +68,10 @@ void fit_game_preview_zoom_to_window(void)
 {
     ImVec2 ds = ImGui::GetIO().DisplaySize;
     int zx = (int)(ds.x * 0.68f / 400.0f);
-    int zy = (int)((ds.y - 110.0f) * 0.85f / 254.0f);
+    float top = (float)bg_editor_canvas_top_px();
+    float avail_y = ds.y - top - 156.0f;
+    if (avail_y < 254.0f) avail_y = 254.0f;
+    int zy = (int)(avail_y / 254.0f);
     g_zoom = (zx < zy) ? zx : zy;
     if (g_zoom < 1) g_zoom = 1;
     if (g_zoom > 8) g_zoom = 8;

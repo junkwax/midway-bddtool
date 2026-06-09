@@ -12,6 +12,7 @@ int runtime_actor_preview_import_count(void);
 void runtime_actor_preview_import_status(char *out, size_t outsz);
 bool runtime_actor_sidecar_load(void);
 bool runtime_actor_sidecar_save(void);
+int runtime_actor_import_inferred_level_animations(void);
 void runtime_actor_autoload_for_stage(void);
 
 #endif

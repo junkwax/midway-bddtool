@@ -28,10 +28,106 @@ static void obj_prop_commit(const char *label)
     s_obj_prop_capture_active = 0;
 }
 
-void draw_obj_properties(void)
+static void draw_object_image_summary(Obj *o, Img *im, int ii_idx)
 {
-    if (g_hl_obj < 0 || g_hl_obj >= g_no) return;
-    if (!g_show_obj_properties) return;
+    if (!o) return;
+    if (!im) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.25f, 1.0f),
+                           "Missing image 0x%02X", o->ii);
+        ImGui::Separator();
+        return;
+    }
+
+    SDL_Texture *tex = editor_texture_at(ii_idx);
+    if (!tex) return;
+
+    float avail = ImGui::GetContentRegionAvail().x;
+    float target = avail < 320.0f ? 64.0f : 78.0f;
+    int max_dim_i = im->w > im->h ? im->w : im->h;
+    float scale = max_dim_i > 0 ? target / (float)max_dim_i : 1.0f;
+    if (scale > 3.0f) scale = 3.0f;
+    if (scale < 0.08f) scale = 0.08f;
+    float iw = im->w * scale;
+    float ih = im->h * scale;
+
+    ImGui::BeginGroup();
+    draw_editor_texture_transparent(tex, iw, ih);
+    ImGui::EndGroup();
+    ImGui::SameLine(0, 8);
+    ImGui::BeginGroup();
+    if (im->label[0])
+        ImGui::TextWrapped("%s", im->label);
+    else
+        ImGui::Text(g_simple_mode ? "Image %d" : "Image 0x%02X", o->ii);
+    if (g_simple_mode)
+        ImGui::TextDisabled("%dx%d  pal %d", im->w, im->h, o->fl);
+    else
+        ImGui::TextDisabled("ii=0x%02X  %dx%d  pal=%d", o->ii, im->w, im->h, o->fl);
+    ImGui::TextDisabled("obj #%d  order %d  uses x%d", g_hl_obj, o->order, image_use_count(im->idx));
+    ImGui::TextDisabled("%dbpp  image pal %d  flags %d",
+                        mk2_bpp_for_image(im), im->pal_idx, im->flags);
+    if (im->source[0])
+        ImGui::TextDisabled("src %s", im->source);
+    if (im->anix || im->aniy || im->anix2 || im->aniy2)
+        ImGui::TextDisabled("anipoint %d,%d  alt %d,%d,%d",
+                            im->anix, im->aniy, im->anix2, im->aniy2, im->aniz2);
+    if (im->frm || im->opals || im->pttblnum || im->anix || im->aniy)
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f),
+                           "anim frm=%d  pttbl=%d", im->frm, im->pttblnum);
+    ImGui::EndGroup();
+    ImGui::Separator();
+}
+
+static void draw_selected_image_asset_summary(void)
+{
+    if (g_place_tool_img < 0 || g_place_tool_img >= g_ni) {
+        ImGui::TextDisabled("No object selected.");
+        return;
+    }
+
+    Img *im = &g_img[g_place_tool_img];
+    SDL_Texture *tex = editor_texture_at(g_place_tool_img);
+    if (tex) {
+        float target = 78.0f;
+        int max_dim_i = im->w > im->h ? im->w : im->h;
+        float scale = max_dim_i > 0 ? target / (float)max_dim_i : 1.0f;
+        if (scale > 3.0f) scale = 3.0f;
+        if (scale < 0.08f) scale = 0.08f;
+        draw_editor_texture_transparent(tex, im->w * scale, im->h * scale);
+        ImGui::SameLine(0, 8);
+    }
+
+    ImGui::BeginGroup();
+    if (im->label[0])
+        ImGui::TextWrapped("%s", im->label);
+    else
+        ImGui::Text(g_simple_mode ? "Image %d" : "Image 0x%02X", im->idx);
+    ImGui::TextDisabled("selected image asset");
+    ImGui::TextDisabled("id 0x%02X  %dx%d  pal %d  %dbpp",
+                        im->idx, im->w, im->h, im->pal_idx, mk2_bpp_for_image(im));
+    ImGui::TextDisabled("uses x%d", image_use_count(im->idx));
+    if (im->source[0])
+        ImGui::TextDisabled("src %s", im->source);
+    if (im->frm || im->opals || im->pttblnum || im->anix || im->aniy)
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f),
+                           "anim frm=%d  pttbl=%d", im->frm, im->pttblnum);
+    ImGui::EndGroup();
+    ImGui::Separator();
+
+    if (ImGui::Button("Place Sprite", ImVec2(-1, 0))) {
+        g_place_tool_img = (int)(im - g_img);
+        g_cur_tool = 1;
+    }
+    if (image_use_count(im->idx) > 0 && ImGui::Button("Select All Uses", ImVec2(-1, 0)))
+        select_all_with_image_ii(im->idx);
+}
+
+void draw_obj_properties_contents(void)
+{
+    if (g_hl_obj < 0 || g_hl_obj >= g_no) {
+        draw_selected_image_asset_summary();
+        return;
+    }
 
     int sel_count = 0;
     for (int i = 0; i < g_no; i++) if (g_sel_flags[i]) sel_count++;
@@ -39,16 +135,6 @@ void draw_obj_properties(void)
     Obj *o = &g_obj[g_hl_obj];
     Img *im = img_find(o->ii);
     int ii_idx = im ? (int)(im - g_img) : -1;
-
-    right_panel_set_next(RIGHT_PANEL_OBJ_PROPERTIES);
-    if (obj_properties_take_focus_request())
-        ImGui::SetNextWindowFocus();
-    bool open = ImGui::Begin("Object Properties", &g_show_obj_properties);
-    right_panel_after_begin(RIGHT_PANEL_OBJ_PROPERTIES);
-    if (!open) {
-        ImGui::End();
-        return;
-    }
 
     if (sel_count >= 2) {
         ImGui::TextColored(ImVec4(0.7f,0.9f,1.0f,1.0f), "%d objects selected", sel_count);
@@ -103,18 +189,7 @@ void draw_obj_properties(void)
         ImGui::Spacing();
     }
 
-    if (SDL_Texture *tex = editor_texture_at(ii_idx)) {
-        float max_sz = ImGui::GetContentRegionAvail().x;
-        float scale = max_sz / (float)(im->w > im->h ? im->w : im->h);
-        if (scale > 4.0f) scale = 4.0f;
-        float iw = im->w * scale, ih = im->h * scale;
-        draw_editor_texture_transparent(tex, iw, ih);
-        if (g_simple_mode)
-            ImGui::Text("%dx%d  palette %d", im->w, im->h, o->fl);
-        else
-            ImGui::Text("Image: ii=0x%02X  %dx%d  pal=%d", o->ii, im->w, im->h, o->fl);
-        ImGui::Separator();
-    }
+    draw_object_image_summary(o, im, ii_idx);
 
     {
         int cur = o->ii;
@@ -208,26 +283,44 @@ void draw_obj_properties(void)
         }
     }
 
-    int depth_val = o->depth;
-    bool depth_changed = ImGui::InputInt(g_simple_mode ? "X" : "Depth (Z)", &depth_val);
-    if (ImGui::IsItemActivated()) obj_prop_capture_one(g_hl_obj);
-    if (depth_changed) {
-        if (!s_obj_prop_capture_active) obj_prop_capture_one(g_hl_obj);
-        o->depth = depth_val;
-        g_dirty = 1;
-        g_need_rebuild = 1;
+    if (ImGui::BeginTable("obj_prop_position", 2, ImGuiTableFlags_SizingStretchProp)) {
+        int depth_val = o->depth;
+        ImGui::TableSetupColumn("field", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", g_simple_mode ? "X" : "Depth (Z)");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1);
+        bool depth_changed = ImGui::InputInt("##obj_depth", &depth_val);
+        if (ImGui::IsItemActivated()) obj_prop_capture_one(g_hl_obj);
+        if (depth_changed) {
+            if (!s_obj_prop_capture_active) obj_prop_capture_one(g_hl_obj);
+            o->depth = depth_val;
+            g_dirty = 1;
+            g_need_rebuild = 1;
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) obj_prop_commit("Move Object");
+
+        int sy_val = o->sy;
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", g_simple_mode ? "Y" : "Screen Y");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1);
+        bool sy_changed = ImGui::InputInt("##obj_sy", &sy_val);
+        if (ImGui::IsItemActivated()) obj_prop_capture_one(g_hl_obj);
+        if (sy_changed) {
+            if (!s_obj_prop_capture_active) obj_prop_capture_one(g_hl_obj);
+            o->sy = sy_val;
+            g_dirty = 1;
+            g_need_rebuild = 1;
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) obj_prop_commit("Move Object");
+        ImGui::EndTable();
     }
-    if (ImGui::IsItemDeactivatedAfterEdit()) obj_prop_commit("Move Object");
-    int sy_val = o->sy;
-    bool sy_changed = ImGui::InputInt(g_simple_mode ? "Y" : "Screen Y", &sy_val);
-    if (ImGui::IsItemActivated()) obj_prop_capture_one(g_hl_obj);
-    if (sy_changed) {
-        if (!s_obj_prop_capture_active) obj_prop_capture_one(g_hl_obj);
-        o->sy = sy_val;
-        g_dirty = 1;
-        g_need_rebuild = 1;
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) obj_prop_commit("Move Object");
 
     if (g_n_pals > 0) {
         char pal_preview[80];
@@ -271,21 +364,35 @@ void draw_obj_properties(void)
     }
 
     ImGui::Separator();
-    if (ImGui::Button("Edit Block", ImVec2(90, 0)) && ii_idx >= 0) {
-        edit_block_for_object(g_hl_obj);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Resize", ImVec2(80, 0)) && ii_idx >= 0) {
-        open_sprite_resize(ii_idx, true);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Delete", ImVec2(80, 0))) {
-        delete_object_menu_targets(g_hl_obj);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Duplicate", ImVec2(80, 0)) && editor_project_reserve_objects(g_no + 1)) {
-        duplicate_object_menu_targets(g_hl_obj);
+    if (ImGui::BeginTable("obj_prop_actions", 2, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        if (ImGui::Button("Edit Block", ImVec2(-1, 0)) && ii_idx >= 0)
+            edit_block_for_object(g_hl_obj);
+        ImGui::TableSetColumnIndex(1);
+        if (ImGui::Button("Resize", ImVec2(-1, 0)) && ii_idx >= 0)
+            open_sprite_resize(ii_idx, true);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        if (ImGui::Button("Duplicate", ImVec2(-1, 0)) && editor_project_reserve_objects(g_no + 1))
+            duplicate_object_menu_targets(g_hl_obj);
+        ImGui::TableSetColumnIndex(1);
+        if (ImGui::Button("Delete", ImVec2(-1, 0)))
+            delete_object_menu_targets(g_hl_obj);
+        ImGui::EndTable();
     }
 
+}
+
+void draw_obj_properties(void)
+{
+    if (!g_show_obj_properties) return;
+    right_panel_set_next(RIGHT_PANEL_OBJ_PROPERTIES);
+    if (obj_properties_take_focus_request())
+        ImGui::SetNextWindowFocus();
+    bool open = ImGui::Begin("Object Properties", &g_show_obj_properties);
+    right_panel_after_begin(RIGHT_PANEL_OBJ_PROPERTIES);
+    if (open)
+        draw_obj_properties_contents();
     ImGui::End();
 }

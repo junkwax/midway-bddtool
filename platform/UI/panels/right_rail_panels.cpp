@@ -1,17 +1,43 @@
 #include "UI/panels/RightRailPanels.h"
 
 #include "bg_editor_globals.h"
+#include "imgui.h"
 
 void draw_palette(void);
 
+static void draw_object_group_panel(void)
+{
+    right_panel_set_next(RIGHT_PANEL_OBJECTS);
+    bool open = ImGui::Begin("Objects", NULL, ImGuiWindowFlags_HorizontalScrollbar);
+    right_panel_after_begin(RIGHT_PANEL_OBJECTS);
+    if (!open) {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::BeginTabBar("object_panel_tabs")) {
+        if (ImGui::BeginTabItem("Properties")) {
+            draw_obj_properties_contents();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Objects")) {
+            draw_obj_list_contents();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+
+    ImGui::End();
+}
+
 void ObjectListPanel::render()
 {
-    draw_obj_list();
+    draw_object_group_panel();
 }
 
 void ObjectPropertiesPanel::render()
 {
-    draw_obj_properties();
+    /* Properties are grouped with the object list in draw_object_group_panel(). */
 }
 
 void BlockEditorPanel::render()

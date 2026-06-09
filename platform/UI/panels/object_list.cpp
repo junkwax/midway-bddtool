@@ -71,20 +71,13 @@ static void sort_objects(void)
     if (new_hl >= 0) g_hl_obj = new_hl;
 }
 
-void draw_obj_list(void)
+void draw_obj_list_contents(void)
 {
     g_hover_obj = -1;
-    right_panel_set_next(RIGHT_PANEL_OBJECTS);
-    bool open = ImGui::Begin("Objects", NULL, ImGuiWindowFlags_HorizontalScrollbar);
-    right_panel_after_begin(RIGHT_PANEL_OBJECTS);
-    if (!open) {
-        ImGui::End();
-        return;
-    }
+    static int s_last_auto_scroll_obj = -2;
 
     if (g_no == 0) {
         ImGui::TextUnformatted("No objects loaded.");
-        ImGui::End();
         return;
     }
 
@@ -173,6 +166,8 @@ void draw_obj_list(void)
             if (filter_z  >= 0 && o->depth != filter_z) continue;
             if (filter_wx >= 0 && ((o->wx >> 8) & 0xFF) != filter_wx) continue;
             ImGui::TableNextRow();
+            if (i == g_hl_obj)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(35, 125, 165, 95));
             if (g_budget_relief_highlight_img_ii == o->ii)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, IM_COL32(120, 92, 35, 120));
             ImGui::TableNextColumn();
@@ -192,6 +187,8 @@ void draw_obj_list(void)
                     g_hl_obj = i;
                 }
             }
+            if (i == g_hl_obj && s_last_auto_scroll_obj != g_hl_obj)
+                ImGui::SetScrollHereY(0.45f);
             if (ImGui::IsItemHovered()) g_hover_obj = i;
             if (ImGui::BeginDragDropSource()) {
                 ImGui::SetDragDropPayload("OBJ_REORDER", &i, sizeof(int));
@@ -239,6 +236,7 @@ void draw_obj_list(void)
         }
         ImGui::EndTable();
     }
+    s_last_auto_scroll_obj = g_hl_obj;
 
     if (ImGui::BeginPopup("obj_ctx")) {
         int active = (g_hl_obj >= 0 && g_hl_obj < g_no) ? g_hl_obj : -1;
@@ -305,6 +303,14 @@ void draw_obj_list(void)
         snprintf(cap_lbl, sizeof cap_lbl, "Sprites  %d / %d", g_no, object_cap);
         ImGui::ProgressBar(object_cap > 0 ? (float)g_no / (float)object_cap : 0.0f, ImVec2(-1, 0), cap_lbl);
     }
+}
 
+void draw_obj_list(void)
+{
+    right_panel_set_next(RIGHT_PANEL_OBJECTS);
+    bool open = ImGui::Begin("Objects", NULL, ImGuiWindowFlags_HorizontalScrollbar);
+    right_panel_after_begin(RIGHT_PANEL_OBJECTS);
+    if (open)
+        draw_obj_list_contents();
     ImGui::End();
 }

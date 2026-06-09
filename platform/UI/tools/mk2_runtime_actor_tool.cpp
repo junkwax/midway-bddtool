@@ -13,6 +13,7 @@
 
 #define MAX_RUNTIME_ACTORS 64
 #define MAX_RUNTIME_ACTOR_FRAMES 24
+#define MAX_INFERRED_RUNTIME_GROUPS 128
 
 struct RuntimeStageActor {
     char name[64];
@@ -94,6 +95,15 @@ static int  g_runtime_actor_preview_base_pals = -1;
 static int runtime_actor_frame_ticks_at(const RuntimeStageActor *actor, int frame);
 
 static const char *const k_runtime_actor_preview_source_prefix = "RTPREVIEW:";
+
+struct InferredRuntimeFrameGroup {
+    char base[64];
+    char source[64];
+    int frames[MAX_RUNTIME_ACTOR_FRAMES];
+    int order[MAX_RUNTIME_ACTOR_FRAMES];
+    int frame_count;
+    bool strong_metadata;
+};
 
 static void runtime_actor_status(const char *msg)
 {
@@ -293,6 +303,193 @@ static int runtime_actor_frame_ticks_at(const RuntimeStageActor *actor, int fram
     if (!actor || frame < 0 || frame >= MAX_RUNTIME_ACTOR_FRAMES) return 1;
     if (actor->frame_ticks_override[frame] > 0) return actor->frame_ticks_override[frame];
     return actor->frame_ticks > 0 ? actor->frame_ticks : 1;
+}
+
+static bool runtime_actor_image_has_anim_metadata(const Img *im)
+{
+    if (!im) return false;
+    return im->frm || im->opals || im->pttblnum ||
+           im->anix || im->aniy || im->anix2 || im->aniy2 || im->aniz2;
+}
+
+static bool runtime_actor_image_has_strong_anim_metadata(const Img *im)
+{
+    if (!im) return false;
+    return im->frm || im->opals || im->pttblnum;
+}
+
+static bool runtime_actor_label_has_anim_hint(const char *s)
+{
+    if (!s || !s[0]) return false;
+    char upper[64];
+    size_t n = 0;
+    for (; s[n] && n + 1 < sizeof upper; n++) {
+        char c = s[n];
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        upper[n] = c;
+    }
+    upper[n] = '\0';
+    return strstr(upper, "FACE") || strstr(upper, "ANIM") ||
+           strstr(upper, "FLAME") || strstr(upper, "FIRE") ||
+           strstr(upper, "WATER") || strstr(upper, "SMOKE") ||
+           strstr(upper, "CLOUD") || strstr(upper, "SPIN");
+}
+
+static bool runtime_actor_parse_numbered_frame_key(const Img *im,
+                                                   char *base, size_t basesz,
+                                                   int *order)
+{
+    if (!im || !base || basesz == 0 || !order) return false;
+    const char *label = im->label[0] ? im->label : "";
+    if (!label[0]) return false;
+
+    char tmp[64];
+    snprintf(tmp, sizeof tmp, "%s", label);
+    int len = (int)strlen(tmp);
+    while (len > 0 && (tmp[len - 1] == ' ' || tmp[len - 1] == '\t'))
+        tmp[--len] = '\0';
+    int digit_start = len;
+    while (digit_start > 0 && tmp[digit_start - 1] >= '0' && tmp[digit_start - 1] <= '9')
+        digit_start--;
+    if (digit_start == len || digit_start <= 1)
+        return false;
+
+    *order = atoi(tmp + digit_start);
+    int base_len = digit_start;
+    while (base_len > 0 &&
+           (tmp[base_len - 1] == '_' || tmp[base_len - 1] == '-' ||
+            tmp[base_len - 1] == '.' || tmp[base_len - 1] == ' '))
+        base_len--;
+    if (base_len <= 1) return false;
+    if ((size_t)base_len >= basesz) base_len = (int)basesz - 1;
+    memcpy(base, tmp, (size_t)base_len);
+    base[base_len] = '\0';
+    return true;
+}
+
+static int runtime_actor_find_inferred_group(InferredRuntimeFrameGroup *groups,
+                                             int group_count,
+                                             const char *base,
+                                             const char *source)
+{
+    if (!groups || !base) return -1;
+    if (!source) source = "";
+    for (int i = 0; i < group_count; i++) {
+        if (strcmp(groups[i].base, base) == 0 &&
+            strcmp(groups[i].source, source) == 0)
+            return i;
+    }
+    return -1;
+}
+
+static void runtime_actor_sort_inferred_group(InferredRuntimeFrameGroup *g)
+{
+    if (!g) return;
+    for (int i = 1; i < g->frame_count; i++) {
+        int frame = g->frames[i];
+        int order = g->order[i];
+        int j = i - 1;
+        while (j >= 0 && g->order[j] > order) {
+            g->frames[j + 1] = g->frames[j];
+            g->order[j + 1] = g->order[j];
+            j--;
+        }
+        g->frames[j + 1] = frame;
+        g->order[j + 1] = order;
+    }
+}
+
+static int runtime_actor_collect_inferred_groups(InferredRuntimeFrameGroup *groups,
+                                                 int max_groups)
+{
+    if (!groups || max_groups <= 0) return 0;
+    int group_count = 0;
+    for (int i = 0; i < g_ni; i++) {
+        Img *im = &g_img[i];
+        if (!runtime_actor_image_has_anim_metadata(im)) continue;
+
+        char base[64];
+        int order = 0;
+        if (!runtime_actor_parse_numbered_frame_key(im, base, sizeof base, &order))
+            continue;
+
+        const char *source = im->source[0] ? im->source : "";
+        int gi = runtime_actor_find_inferred_group(groups, group_count, base, source);
+        if (gi < 0) {
+            if (group_count >= max_groups) continue;
+            gi = group_count++;
+            snprintf(groups[gi].base, sizeof groups[gi].base, "%s", base);
+            snprintf(groups[gi].source, sizeof groups[gi].source, "%s", source);
+            groups[gi].frame_count = 0;
+            groups[gi].strong_metadata = false;
+        }
+        InferredRuntimeFrameGroup *g = &groups[gi];
+        if (g->frame_count >= MAX_RUNTIME_ACTOR_FRAMES)
+            continue;
+        bool dup = false;
+        for (int fi = 0; fi < g->frame_count; fi++) {
+            if (g->frames[fi] == i) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) continue;
+        g->frames[g->frame_count] = i;
+        g->order[g->frame_count] = order;
+        g->frame_count++;
+        if (runtime_actor_image_has_strong_anim_metadata(im) ||
+            runtime_actor_label_has_anim_hint(base))
+            g->strong_metadata = true;
+    }
+
+    int out_count = 0;
+    for (int gi = 0; gi < group_count; gi++) {
+        InferredRuntimeFrameGroup *g = &groups[gi];
+        runtime_actor_sort_inferred_group(g);
+        if (g->frame_count < 2 || !g->strong_metadata)
+            continue;
+        if (out_count != gi)
+            groups[out_count] = groups[gi];
+        out_count++;
+    }
+    return out_count;
+}
+
+static int runtime_actor_group_contains_image(const InferredRuntimeFrameGroup *g, int img_i)
+{
+    if (!g) return -1;
+    for (int fi = 0; fi < g->frame_count; fi++)
+        if (g->frames[fi] == img_i) return fi;
+    return -1;
+}
+
+static bool runtime_actor_has_source_object_actor(int obj_i)
+{
+    if (obj_i < 0) return false;
+    for (int i = 0; i < g_runtime_actor_count; i++) {
+        const RuntimeStageActor *a = &g_runtime_actors[i];
+        if (a->source_object == obj_i) return true;
+    }
+    return false;
+}
+
+static void runtime_actor_init_default(RuntimeStageActor *actor)
+{
+    if (!actor) return;
+    memset(actor, 0, sizeof *actor);
+    snprintf(actor->trigger, sizeof actor->trigger, "always");
+    snprintf(actor->code_pattern, sizeof actor->code_pattern, "loop_sprite");
+    snprintf(actor->insert_list, sizeof actor->insert_list, "baklst4");
+    snprintf(actor->scroll_symbol, sizeof actor->scroll_symbol, "worldtlx4");
+    snprintf(actor->frame_driver, sizeof actor->frame_driver, "frame_a9");
+    snprintf(actor->group_role, sizeof actor->group_role, "solo");
+    actor->source_object = -1;
+    actor->frame_ticks = 6;
+    actor->loop = true;
+    actor->enabled = true;
+    actor->scroll = 1.0f;
+    actor->emit_bgnd_code = false;
+    actor->part_count = 1;
 }
 
 static const RuntimeStageActor *runtime_actor_group_leader(const RuntimeStageActor *actor)
@@ -1198,12 +1395,92 @@ bool runtime_actor_sidecar_load(void)
     return loaded_count > 0;
 }
 
+int runtime_actor_import_inferred_level_animations(void)
+{
+    InferredRuntimeFrameGroup groups[MAX_INFERRED_RUNTIME_GROUPS] = {};
+    int group_count = runtime_actor_collect_inferred_groups(groups, MAX_INFERRED_RUNTIME_GROUPS);
+    if (group_count <= 0) {
+        snprintf(g_runtime_actor_status, sizeof g_runtime_actor_status,
+                 "No inferred IMG animation frame groups found");
+        return 0;
+    }
+
+    int added = 0;
+    for (int oi = 0; oi < g_no && g_runtime_actor_count < MAX_RUNTIME_ACTORS; oi++) {
+        if (runtime_actor_has_source_object_actor(oi)) continue;
+        Obj *obj = &g_obj[oi];
+        Img *source_im = img_find(obj->ii);
+        if (!source_im) continue;
+        int source_img_i = (int)(source_im - g_img);
+
+        int best_group = -1;
+        int source_frame = -1;
+        for (int gi = 0; gi < group_count; gi++) {
+            int fi = runtime_actor_group_contains_image(&groups[gi], source_img_i);
+            if (fi >= 0) {
+                best_group = gi;
+                source_frame = fi;
+                break;
+            }
+        }
+        if (best_group < 0) continue;
+
+        InferredRuntimeFrameGroup *g = &groups[best_group];
+        RuntimeStageActor actor;
+        runtime_actor_init_default(&actor);
+
+        snprintf(actor.name, sizeof actor.name, "%s_auto_%03d",
+                 g->base[0] ? g->base : "anim", oi);
+        runtime_actor_make_code_label(actor.name, actor.code_label, sizeof actor.code_label);
+        snprintf(actor.trigger, sizeof actor.trigger, "autoload");
+        actor.source_object = oi;
+        actor.replace_source = true;
+        actor.x = obj->depth;
+        actor.y = obj->sy;
+        actor.layer = (obj->wx >> 8) & 0xFF;
+        actor.scroll = mk2_scroll_factor_for_layer(actor.layer);
+        actor.hfl = obj->hfl ? 1 : 0;
+        actor.vfl = obj->vfl ? 1 : 0;
+        actor.phase_ticks = source_frame > 0 ? source_frame * actor.frame_ticks : 0;
+        actor.frame_count = g->frame_count;
+
+        int source_ax = img_anim_offset_x(source_im, actor.hfl);
+        int source_ay = img_anim_offset_y(source_im, actor.vfl);
+        for (int fi = 0; fi < actor.frame_count; fi++) {
+            Img *frame_im = &g_img[g->frames[fi]];
+            runtime_actor_image_label(frame_im, actor.frames[fi], sizeof actor.frames[fi]);
+            actor.frame_dx[fi] = source_ax - img_anim_offset_x(frame_im, actor.hfl);
+            actor.frame_dy[fi] = source_ay - img_anim_offset_y(frame_im, actor.vfl);
+            actor.frame_ticks_override[fi] = 0;
+            actor.frame_hfl_mode[fi] = 0;
+            actor.frame_vfl_mode[fi] = 0;
+        }
+
+        g_runtime_actors[g_runtime_actor_count++] = actor;
+        added++;
+    }
+
+    if (added > 0) {
+        runtime_actor_select(0);
+        g_runtime_actor_preview = true;
+        snprintf(g_runtime_actor_status, sizeof g_runtime_actor_status,
+                 "Auto-imported %d inferred animation actor(s) from %d IMG frame group(s)",
+                 added, group_count);
+        stage_set_toast("Auto-imported level animations");
+    } else {
+        snprintf(g_runtime_actor_status, sizeof g_runtime_actor_status,
+                 "Found IMG animation frame groups, but none match placed BDB objects");
+    }
+    return added;
+}
+
 void runtime_actor_autoload_for_stage(void)
 {
     g_runtime_actor_count = 0;
     g_runtime_actor_selected = -1;
     g_runtime_actor_preview = false;
-    runtime_actor_sidecar_load();
+    if (!runtime_actor_sidecar_load())
+        runtime_actor_import_inferred_level_animations();
 }
 
 void draw_mk2_runtime_actor_overlay(void)
@@ -1492,7 +1769,7 @@ static void draw_runtime_actor_frame_row(RuntimeStageActor *actor, int frame)
 void draw_mk2_runtime_actor_tool(void)
 {
     ImGui::Text("Runtime Animation Actors");
-    ImGui::TextDisabled("Turn selected BDB objects or imported IMG frames into stage runtime actors with sidecar data.");
+    ImGui::TextDisabled("Preview stage runtime animations from sidecars or inferred IMG frame groups.");
 
     char sidecar[640];
     runtime_actor_default_sidecar_path(sidecar, sizeof sidecar);
@@ -1507,6 +1784,8 @@ void draw_mk2_runtime_actor_tool(void)
         runtime_actor_add_from_selected_object();
     if (ImGui::Button("Load Runtime Sidecar", ImVec2(-1, 0)))
         runtime_actor_sidecar_load();
+    if (ImGui::Button("Infer IMG Level Animations", ImVec2(-1, 0)))
+        runtime_actor_import_inferred_level_animations();
     if (ImGui::Button("Save Runtime Sidecar", ImVec2(-1, 0)))
         runtime_actor_sidecar_save();
     if (ImGui::Button("Import Hanger Sprite IMGs", ImVec2(-1, 0)))

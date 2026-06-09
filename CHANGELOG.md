@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-06-09
+
+### Added
+- Runtime animation autoload on stage open, including inferred IMG frame groups
+  for levels without a sidecar.
+- Top-menu build status badges for pass/warn/error, palette pressure, and
+  detected animation metadata.
+
+### Changed
+- Reworked the right-side dock into a Photoshop-style Objects, Images, and
+  Palettes workflow with tabbed object properties, repairable dock sizes, and
+  cleaner image/palette tables.
+- Moved game-preview controls below the stage view so sprites are not covered
+  while previewing runtime layout.
+- Improved cross-panel selection sync so image, object, property, and palette
+  panels follow the same selected sprite/object.
+
+### Fixed
+- Canvas scrollbars now stop before docked panels instead of drawing through the
+  right rail.
+- Group bit-depth reduction dialogs no longer resize the window unexpectedly.
+
 ## [1.0.3] - 2026-06-09
 
 ### Added

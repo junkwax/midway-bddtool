@@ -30,6 +30,7 @@ int bdd_sdl_open_stage_file(const char *path,
 
     if (!bdd_viewer_load_stage_for_path(path, bdb_path, bdb_sz, bdd_path, bdd_sz))
         return 0;
+    runtime_actor_autoload_for_stage();
 
     if (g_runtime_layout_view)
         bdd_get_runtime_layout_bounds(&x0, &x1, &y0, &y1);

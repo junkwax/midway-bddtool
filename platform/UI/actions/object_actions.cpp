@@ -346,18 +346,26 @@ void select_all_with_image_ii(int image_ii)
 {
     if (image_ii < 0) return;
     object_actions_clear_selection();
+    g_hl_obj = -1;
     for (int i = 0; i < g_no; i++)
-        if (g_obj[i].ii == image_ii)
+        if (g_obj[i].ii == image_ii) {
             g_sel_flags[i] = 1;
+            if (g_hl_obj < 0)
+                g_hl_obj = i;
+        }
 }
 
 void select_all_in_layer_byte(int layer)
 {
     if (layer < 0) return;
     object_actions_clear_selection();
+    g_hl_obj = -1;
     for (int i = 0; i < g_no; i++)
-        if (((g_obj[i].wx >> 8) & 0xFF) == layer)
+        if (((g_obj[i].wx >> 8) & 0xFF) == layer) {
             g_sel_flags[i] = 1;
+            if (g_hl_obj < 0)
+                g_hl_obj = i;
+        }
 }
 
 void assign_layer_to_object_targets(int active, int layer)

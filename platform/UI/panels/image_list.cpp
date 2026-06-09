@@ -17,6 +17,146 @@
 #define image_list_strcasecmp strcasecmp
 #endif
 
+static void image_list_draw_details_tooltip(const Img *im, const ImageModuleInfo *module_info,
+                                            int use_count)
+{
+    if (!im) return;
+    ImGui::BeginTooltip();
+    if (im->label[0])
+        ImGui::TextUnformatted(im->label);
+    else
+        ImGui::Text(g_simple_mode ? "Image %d" : "Image 0x%02X", im->idx);
+    ImGui::Separator();
+    ImGui::Text("%dx%d   pal %d   %dbpp", im->w, im->h, im->pal_idx, mk2_bpp_for_image(im));
+    ImGui::Text("%d object%s reference this image", use_count, use_count == 1 ? "" : "s");
+    if (module_info) {
+        char mod_badge[96];
+        image_module_badge_label(module_info, mod_badge, sizeof mod_badge);
+        ImGui::Text("Module: %s", mod_badge);
+    }
+    if (im->source[0])
+        ImGui::TextDisabled("source: %s", im->source);
+    if (im->anix || im->aniy || im->anix2 || im->aniy2)
+        ImGui::TextDisabled("anipoint: %d,%d  alt: %d,%d,%d",
+                            im->anix, im->aniy, im->anix2, im->aniy2, im->aniz2);
+    if (im->frm || im->opals || im->pttblnum)
+        ImGui::TextDisabled("frm=%d  opals=%d  pttbl=%d",
+                            im->frm, im->opals, im->pttblnum);
+    ImGui::TextDisabled("Click preview/name to arm placement. Right-click for actions.");
+    ImGui::EndTooltip();
+}
+
+static void image_list_draw_action_menu(int i, bool *delete_this_image)
+{
+    if (i < 0 || i >= g_ni) return;
+    Img *im = &g_img[i];
+
+    if (im->label[0])
+        ImGui::Text("%s", im->label);
+    ImGui::Text(g_simple_mode ? "Image %d  (%dx%d)" : "Image 0x%02X  (%dx%d)",
+                im->idx, im->w, im->h);
+    if (im->source[0]) ImGui::TextDisabled("source: %s", im->source);
+    if (im->anix || im->aniy || im->anix2 || im->aniy2)
+        ImGui::TextDisabled("anipoint: %d,%d  alt: %d,%d,%d",
+                            im->anix, im->aniy, im->anix2, im->aniy2, im->aniz2);
+    if (im->frm || im->opals || im->pttblnum)
+        ImGui::TextDisabled("frm=%d  opals=%d  pttbl=%d",
+                            im->frm, im->opals, im->pttblnum);
+    if (im->lod_ref)
+        ImGui::TextColored(ImVec4(0.5f,0.9f,1.0f,1.0f), "Imported or referenced by LOD");
+    ImGui::Separator();
+
+    if (ImGui::MenuItem("Arm Place Tool")) {
+        g_place_tool_img = i;
+        g_cur_tool = 1;
+    }
+    if (ImGui::MenuItem("Add to Center of View") && g_no < editor_project_object_capacity())
+        add_image_to_view_center(i);
+    if (ImGui::MenuItem("Set as Static Background", NULL, false,
+                        g_no < editor_project_object_capacity() || image_use_count(im->idx) > 0)) {
+        if (mk2_set_image_as_static_background(i)) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "Set %s as static background",
+                     im->label[0] ? im->label : "image");
+            stage_set_toast(msg);
+        } else {
+            stage_set_toast("Could not set static background");
+        }
+    }
+    if (ImGui::MenuItem("Add Chopped to Center") && g_no < editor_project_object_capacity()) {
+        ImVec2 ds = ImGui::GetIO().DisplaySize;
+        int x = 0, y = 0;
+        bdd_screen_to_world((int)(ds.x * 0.5f), (int)(ds.y * 0.5f),
+                            g_view_x, g_view_y, g_zoom, &x, &y);
+        int pal = (im->pal_idx >= 0) ? im->pal_idx : 0;
+        chop_image_to_map(i, x, y, 0x4100, pal, false, false, -1, true);
+    }
+
+    ImGui::Separator();
+    if (ImGui::MenuItem("Clear Edge Matte")) {
+        int changed = clear_image_edge_matte(i, false, true);
+        char msg[128];
+        snprintf(msg, sizeof msg, changed > 0 ? "Cleared %d matte pixel(s)" : "No edge matte found", changed);
+        stage_set_toast(msg);
+    }
+    if (ImGui::MenuItem("Clear Black Matte")) {
+        int changed = clear_image_edge_matte(i, true, true);
+        char msg[128];
+        snprintf(msg, sizeof msg, changed > 0 ? "Cleared %d black matte pixel(s)" : "No black matte found", changed);
+        stage_set_toast(msg);
+    }
+
+    ImGui::Separator();
+    if (ImGui::MenuItem("Edit Image ID...")) {
+        snprintf(g_img_edit_buf, sizeof g_img_edit_buf, "%X", im->idx);
+        g_img_edit_idx = i;
+    }
+    if (ImGui::MenuItem("Resize Sprite..."))
+        open_sprite_resize(i, false);
+    if (ImGui::MenuItem("Select All Uses"))
+        select_all_with_image_ii(im->idx);
+    if (ImGui::MenuItem("Replace from PNG...")) {
+        char path[512] = "";
+        if (file_dialog_open("Replace from PNG",
+            "PNG Files\0*.PNG;*.png\0All Files\0*.*\0", path, sizeof path))
+        {
+            undo_save();
+            reimport_image(i, path);
+        }
+    }
+    if (ImGui::MenuItem("Export as TGA"))
+        export_image_tga(im);
+    if (ImGui::MenuItem("Export as PNG"))
+        export_image_png(im);
+    ImGui::Separator();
+    if (ImGui::MenuItem("Delete image") && delete_this_image)
+        *delete_this_image = true;
+}
+
+static void image_list_select_asset(int i)
+{
+    if (i < 0 || i >= g_ni) return;
+    Img *im = &g_img[i];
+
+    g_place_tool_img = i;
+    g_cur_tool = 1;
+    if (im->pal_idx >= 0 && im->pal_idx < g_n_pals)
+        g_sel_pal = im->pal_idx;
+
+    editor_project_clear_selection();
+    g_hl_obj = -1;
+
+    bool select_all_uses = ImGui::GetIO().KeyCtrl;
+    for (int oi = 0; oi < g_no; oi++) {
+        if (g_obj[oi].ii != im->idx) continue;
+        g_sel_flags[oi] = 1;
+        if (g_hl_obj < 0)
+            g_hl_obj = oi;
+        if (!select_all_uses)
+            break;
+    }
+}
+
 void draw_image_list(void)
 {
     right_panel_set_next(RIGHT_PANEL_IMAGES);
@@ -218,14 +358,6 @@ void draw_image_list(void)
         ImGui::Separator();
     }
 
-    float win_w = ImGui::GetContentRegionAvail().x;
-    int cols = (int)(win_w / 92.0f);
-    if (cols < 3) cols = 3;
-    if (cols > 6) cols = 6;
-    float thumb_max = (win_w - (cols + 1) * 6.0f) / cols;
-    if (thumb_max < 30.0f) thumb_max = 30.0f;
-    if (thumb_max > 64.0f) thumb_max = 64.0f;
-
     std::vector<ImageModuleInfo> image_modules;
     image_modules.reserve((size_t)g_ni);
     for (int i = 0; i < g_ni; i++)
@@ -336,245 +468,198 @@ void draw_image_list(void)
     if (shown_images != g_ni)
         ImGui::TextDisabled("Showing %d of %d image(s)", shown_images, g_ni);
 
-    int col_pos = 0;
-    int last_module_bucket = INT_MIN;
-    for (int order_pos = 0; order_pos < (int)image_order.size(); order_pos++) {
-        int i = image_order[(size_t)order_pos];
-        Img *im = &g_img[i];
-        if (!image_passes_list_filter(im, img_filter, img_search, search_idx)) continue;
-        if (img_sort == 9) {
-            int bucket = image_modules[(size_t)i].bucket;
-            if (bucket != last_module_bucket) {
-                char group_lbl[96];
-                image_module_group_label(bucket, group_lbl, sizeof group_lbl);
-                ImGui::Separator();
-                ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "%s", group_lbl);
-                last_module_bucket = bucket;
-                col_pos = 0;
-            }
-        }
-        if (col_pos % cols != 0) ImGui::SameLine();
-        col_pos++;
+    float table_h = ImGui::GetContentRegionAvail().y;
+    if (g_simple_mode) table_h -= 34.0f;
+    if (table_h < 150.0f) table_h = 150.0f;
+    ImGuiTableFlags table_flags =
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+        ImGuiTableFlags_BordersOuter | ImGuiTableFlags_Resizable |
+        ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
+        ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX |
+        ImGuiTableFlags_SizingStretchProp;
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 4.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
+    if (ImGui::BeginTable("image_asset_table", 3, table_flags, ImVec2(0, table_h))) {
+        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+        ImGui::TableSetupColumn("Asset", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("Refs", ImGuiTableColumnFlags_WidthFixed, 48.0f);
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableHeadersRow();
 
-        ImGui::BeginGroup();
-        ImGui::PushID(i);
-        SDL_Texture *tex = editor_texture_at(i);
-        if (tex) {
-            float sc = thumb_max / (float)(im->w > im->h ? im->w : im->h);
-            if (sc > 1.25f) sc = 1.25f;
-            ImVec2 im_sz(im->w * sc, im->h * sc);
-            ImVec2 im_min = ImGui::GetCursorScreenPos();
-            draw_editor_texture_transparent(tex, im_sz.x, im_sz.y);
-            if (ImGui::IsItemHovered()) {
-                g_hover_img_ii = im->idx;
-                char tip[256];
-                if (im->label[0])
-                    snprintf(tip, sizeof tip, "%s\nsrc=%s  anipoint=(%d,%d)\nClick to arm one placement  |  Right-click for options",
-                             im->label, im->source[0] ? im->source : "BDD", im->anix, im->aniy);
-                else
-                    snprintf(tip, sizeof tip, "0x%02X\nClick to arm one placement  |  Right-click for options", im->idx);
-                ImGui::SetTooltip("%s", tip);
+        int last_module_bucket = INT_MIN;
+        int sel_ii = (g_hl_obj >= 0 && g_hl_obj < g_no) ? g_obj[g_hl_obj].ii : -1;
+        for (int order_pos = 0; order_pos < (int)image_order.size(); order_pos++) {
+            int i = image_order[(size_t)order_pos];
+            Img *im = &g_img[i];
+            if (!image_passes_list_filter(im, img_filter, img_search, search_idx)) continue;
+            const ImageModuleInfo *module_info = &image_modules[(size_t)i];
+            int use_count = module_info->use_count;
+
+            if (img_sort == 9) {
+                int bucket = module_info->bucket;
+                if (bucket != last_module_bucket) {
+                    char group_lbl[96];
+                    image_module_group_label(bucket, group_lbl, sizeof group_lbl);
+                    ImGui::TableNextRow(ImGuiTableRowFlags_Headers, 0.0f);
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "%s", group_lbl);
+                    last_module_bucket = bucket;
+                }
             }
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-                g_place_tool_img = i;
-                g_cur_tool = 1;
-            }
-            char ctx_id[32]; snprintf(ctx_id, sizeof ctx_id, "imgctx%d", i);
-            if (ImGui::BeginPopupContextItem(ctx_id)) {
-                if (im->label[0])
-                    ImGui::Text("%s", im->label);
-                ImGui::Text(g_simple_mode ? "Image %d  (%dx%d)" : "Image 0x%02X  (%dx%d)",
-                            im->idx, im->w, im->h);
-                if (im->source[0]) ImGui::TextDisabled("source: %s", im->source);
-                if (im->anix || im->aniy || im->anix2 || im->aniy2)
-                    ImGui::TextDisabled("anipoint: %d,%d  alt: %d,%d,%d",
-                                        im->anix, im->aniy, im->anix2, im->aniy2, im->aniz2);
-                if (im->frm || im->opals || im->pttblnum)
-                    ImGui::TextDisabled("frm=%d  opals=%d  pttbl=%d",
-                                        im->frm, im->opals, im->pttblnum);
-                if (im->lod_ref) ImGui::TextColored(ImVec4(0.5f,0.9f,1.0f,1.0f), "Imported or referenced by LOD");
-                ImGui::Separator();
-                if (ImGui::MenuItem("Arm Place Tool")) {
-                    g_place_tool_img = i; g_cur_tool = 1;
+
+            ImGui::TableNextRow(ImGuiTableRowFlags_None, 76.0f);
+            if (sel_ii == im->idx)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(30, 130, 80, 70));
+            else if (g_budget_relief_highlight_img_ii == im->idx)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(160, 105, 35, 70));
+            else if (g_place_tool_img == i)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(35, 115, 150, 70));
+
+            bool delete_this_image = false;
+            ImGui::PushID(i);
+
+            ImGui::TableSetColumnIndex(0);
+            SDL_Texture *tex = editor_texture_at(i);
+            if (tex) {
+                float max_dim = (float)(im->w > im->h ? im->w : im->h);
+                float sc = max_dim > 0.0f ? 42.0f / max_dim : 1.0f;
+                if (sc > 1.75f) sc = 1.75f;
+                if (sc < 0.05f) sc = 0.05f;
+                ImVec2 im_sz(im->w * sc, im->h * sc);
+                ImVec2 im_min = ImGui::GetCursorScreenPos();
+                draw_editor_texture_transparent(tex, im_sz.x, im_sz.y);
+                if (ImGui::IsItemHovered()) {
+                    g_hover_img_ii = im->idx;
+                    image_list_draw_details_tooltip(im, module_info, use_count);
                 }
-                if (ImGui::MenuItem("Add to Center of View") && g_no < editor_project_object_capacity()) {
-                    add_image_to_view_center(i);
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                    image_list_select_asset(i);
                 }
-                if (ImGui::MenuItem("Set as Static Background", NULL, false,
-                                    g_no < editor_project_object_capacity() || image_use_count(im->idx) > 0)) {
-                    if (mk2_set_image_as_static_background(i)) {
-                        char msg[160];
-                        snprintf(msg, sizeof msg, "Set %s as static background",
-                                 im->label[0] ? im->label : "image");
-                        stage_set_toast(msg);
-                    } else {
-                        stage_set_toast("Could not set static background");
-                    }
+                if (ImGui::BeginPopupContextItem("imgctx")) {
+                    image_list_draw_action_menu(i, &delete_this_image);
+                    ImGui::EndPopup();
                 }
-                if (ImGui::MenuItem("Add Chopped to Center") && g_no < editor_project_object_capacity()) {
-                    ImVec2 ds = ImGui::GetIO().DisplaySize;
-                    int x = 0, y = 0;
-                    bdd_screen_to_world((int)(ds.x * 0.5f), (int)(ds.y * 0.5f),
-                                        g_view_x, g_view_y, g_zoom, &x, &y);
-                    int pal = (im->pal_idx >= 0) ? im->pal_idx : 0;
-                    chop_image_to_map(i, x, y, 0x4100, pal, false, false, -1, true);
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Clear Edge Matte")) {
-                    int changed = clear_image_edge_matte(i, false, true);
-                    char msg[128];
-                    snprintf(msg, sizeof msg, changed > 0 ? "Cleared %d matte pixel(s)" : "No edge matte found", changed);
-                    stage_set_toast(msg);
-                }
-                if (ImGui::MenuItem("Clear Black Matte")) {
-                    int changed = clear_image_edge_matte(i, true, true);
-                    char msg[128];
-                    snprintf(msg, sizeof msg, changed > 0 ? "Cleared %d black matte pixel(s)" : "No black matte found", changed);
-                    stage_set_toast(msg);
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Resize Sprite...")) {
-                    open_sprite_resize(i, false);
-                }
-                if (ImGui::MenuItem("Select All Uses")) {
-                    select_all_with_image_ii(im->idx);
-                }
-                ImGui::EndPopup();
-            }
-            int sel_ii = (g_hl_obj >= 0 && g_hl_obj < g_no) ? g_obj[g_hl_obj].ii : -1;
-            if (sel_ii == im->idx) {
                 ImVec2 im_max(im_min.x + im_sz.x, im_min.y + im_sz.y);
-                ImGui::GetWindowDrawList()->AddRect(im_min, im_max,
-                    IM_COL32(0, 255, 128, 255), 0, 0, 3.0f);
-            }
-            if (g_budget_relief_highlight_img_ii == im->idx) {
-                ImVec2 im_max(im_min.x + im_sz.x, im_min.y + im_sz.y);
-                ImGui::GetWindowDrawList()->AddRect(im_min, im_max,
-                    IM_COL32(255, 190, 70, 255), 0, 0, 3.0f);
-            }
-            if (g_place_tool_img == i) {
-                ImVec2 im_max(im_min.x + im_sz.x, im_min.y + im_sz.y);
-                ImGui::GetWindowDrawList()->AddRect(im_min, im_max,
-                    IM_COL32(0, 220, 255, 255), 0, 0, 2.0f);
-            }
-            if (ImGui::BeginDragDropSource()) {
-                ImGui::SetDragDropPayload("IMG_REORDER", &i, sizeof(int));
-                ImGui::Text("Move img %d", i);
-                ImGui::EndDragDropSource();
-            }
-            if (ImGui::BeginDragDropTarget()) {
-                if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("IMG_REORDER")) {
-                    int src = *(int*)pl->Data;
-                    if (src >= 0 && src < g_ni && src != i) {
-                        undo_save();
-                        if (editor_project_swap_image_slots(src, i)) {
-                            g_need_rebuild = 1;
-                            g_dirty = 1;
+                if (sel_ii == im->idx)
+                    ImGui::GetWindowDrawList()->AddRect(im_min, im_max,
+                        IM_COL32(0, 255, 128, 255), 0, 0, 3.0f);
+                if (g_budget_relief_highlight_img_ii == im->idx)
+                    ImGui::GetWindowDrawList()->AddRect(im_min, im_max,
+                        IM_COL32(255, 190, 70, 255), 0, 0, 3.0f);
+                if (g_place_tool_img == i)
+                    ImGui::GetWindowDrawList()->AddRect(im_min, im_max,
+                        IM_COL32(0, 220, 255, 255), 0, 0, 2.0f);
+                if (ImGui::BeginDragDropSource()) {
+                    ImGui::SetDragDropPayload("IMG_REORDER", &i, sizeof(int));
+                    ImGui::Text("Move img %d", i);
+                    ImGui::EndDragDropSource();
+                }
+                if (ImGui::BeginDragDropTarget()) {
+                    if (const ImGuiPayload *pl = ImGui::AcceptDragDropPayload("IMG_REORDER")) {
+                        int src = *(int*)pl->Data;
+                        if (src >= 0 && src < g_ni && src != i) {
+                            undo_save();
+                            if (editor_project_swap_image_slots(src, i)) {
+                                g_need_rebuild = 1;
+                                g_dirty = 1;
+                            }
                         }
                     }
+                    ImGui::EndDragDropTarget();
                 }
-                ImGui::EndDragDropTarget();
+            } else {
+                ImGui::Dummy(ImVec2(42.0f, 42.0f));
             }
-        }
-        int use_count = image_modules[(size_t)i].use_count;
 
-        char idx_lbl[20];
-        if (g_simple_mode)
-            snprintf(idx_lbl, sizeof idx_lbl, "Img %d", im->idx);
-        else
-            snprintf(idx_lbl, sizeof idx_lbl, "0x%02X", im->idx);
-        if (ImGui::SmallButton(idx_lbl)) {
-            snprintf(g_img_edit_buf, sizeof g_img_edit_buf, "%X", im->idx);
-            g_img_edit_idx = i;
-        }
-        ImGui::SameLine();
-        /* Size and palette share one line; full source/anipoint detail lives in
-           the hover tooltip and right-click menu to keep each card compact. */
-        if (g_simple_mode)
-            ImGui::Text("%dx%d  palette %d", im->w, im->h, im->pal_idx);
-        else
-            ImGui::Text("%dx%d  pal=%d", im->w, im->h, im->pal_idx);
-        if (im->label[0]) {
-            if (im->lod_ref)
-                ImGui::TextColored(ImVec4(0.55f,0.9f,1.0f,1.0f), "LOD %s", im->label);
+            ImGui::TableSetColumnIndex(1);
+            char asset_name[96];
+            if (im->label[0])
+                snprintf(asset_name, sizeof asset_name, "%s", im->label);
+            else if (g_simple_mode)
+                snprintf(asset_name, sizeof asset_name, "Image %d", im->idx);
             else
-                ImGui::TextWrapped("%s", im->label);
-        } else if (im->source[0]) {
-            ImGui::TextDisabled("%s", im->source);
-        }
-        if (use_count == 0)
-            ImGui::TextColored(ImVec4(1.0f,0.5f,0.2f,1.0f), "unused");
-        else
-            ImGui::TextColored(ImVec4(0.5f,0.9f,0.5f,1.0f), "x%d", use_count);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%d object%s reference this image", use_count, use_count == 1 ? "" : "s");
-        {
+                snprintf(asset_name, sizeof asset_name, "Image 0x%02X", im->idx);
+            ImVec4 name_col = im->lod_ref ? ImVec4(0.55f,0.9f,1.0f,1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+            ImGui::PushStyleColor(ImGuiCol_Text, name_col);
+            if (ImGui::Selectable(asset_name, g_place_tool_img == i,
+                                  ImGuiSelectableFlags_AllowDoubleClick)) {
+                image_list_select_asset(i);
+            }
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered())
+                image_list_draw_details_tooltip(im, module_info, use_count);
+            if (ImGui::BeginPopupContextItem("imgrowctx")) {
+                image_list_draw_action_menu(i, &delete_this_image);
+                ImGui::EndPopup();
+            }
+
+            char id_line[96];
+            if (g_simple_mode)
+                snprintf(id_line, sizeof id_line, "id %d", im->idx);
+            else
+                snprintf(id_line, sizeof id_line, "id 0x%02X", im->idx);
+            ImGui::TextDisabled("%s  %dx%d  pal %d  %dbpp",
+                                id_line, im->w, im->h, im->pal_idx,
+                                mk2_bpp_for_image(im));
+
             char mod_badge[96];
-            image_module_badge_label(&image_modules[(size_t)i], mod_badge, sizeof mod_badge);
+            image_module_badge_label(module_info, mod_badge, sizeof mod_badge);
             ImVec4 mod_col = ImVec4(0.65f, 0.75f, 0.85f, 1.0f);
             if (use_count == 0)
                 mod_col = ImVec4(1.0f, 0.55f, 0.25f, 1.0f);
-            else if (image_modules[(size_t)i].outside && image_modules[(size_t)i].primary_module < 0)
+            else if (module_info->outside && module_info->primary_module < 0)
                 mod_col = ImVec4(1.0f, 0.35f, 0.25f, 1.0f);
-            else if (image_modules[(size_t)i].mixed)
+            else if (module_info->mixed)
                 mod_col = ImVec4(1.0f, 0.75f, 0.25f, 1.0f);
             ImGui::TextColored(mod_col, "%s", mod_badge);
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%d placement%s; sort by Module to group images by LOAD2 module.",
-                                  use_count, use_count == 1 ? "" : "s");
+            if (im->frm || im->opals || im->pttblnum || im->anix || im->aniy)
+            {
+                ImGui::SameLine(0, 8);
+                ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "anim %d", im->frm);
             }
-        }
-        bool delete_this_image = false;
-        if (ImGui::SmallButton("+")) {
-            add_image_to_view_center(i);
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add object to world view");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Size")) {
-            open_sprite_resize(i, false);
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Resize this sprite image");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("..."))
-            ImGui::OpenPopup("img_actions");
-        if (ImGui::BeginPopup("img_actions")) {
-            if (ImGui::MenuItem("Replace from PNG...")) {
-                char path[512] = "";
-                if (file_dialog_open("Replace from PNG",
-                    "PNG Files\0*.PNG;*.png\0All Files\0*.*\0", path, sizeof path))
-                {
-                    undo_save();
-                    reimport_image(i, path);
-                }
+            if (im->source[0]) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped("src %s", im->source);
+                ImGui::PopStyleColor();
             }
-            if (ImGui::MenuItem("Add chopped to center", NULL, false, g_no < editor_project_object_capacity())) {
-                ImVec2 ds = ImGui::GetIO().DisplaySize;
-                int x = 0, y = 0;
-                bdd_screen_to_world((int)(ds.x * 0.5f), (int)(ds.y * 0.5f),
-                                    g_view_x, g_view_y, g_zoom, &x, &y);
-                int pal = (im->pal_idx >= 0) ? im->pal_idx : 0;
-                chop_image_to_map(i, x, y, 0x4100, pal, false, false, -1, true);
+
+            if (ImGui::SmallButton("+")) {
+                add_image_to_view_center(i);
             }
-            if (ImGui::MenuItem("Export as TGA"))
-                export_image_tga(im);
-            if (ImGui::MenuItem("Export as PNG"))
-                export_image_png(im);
-            ImGui::Separator();
-            if (ImGui::MenuItem("Delete image"))
-                delete_this_image = true;
-            ImGui::EndPopup();
-        }
-        if (delete_this_image) {
-            undo_save();
-            editor_project_delete_image_slot(i);
-            g_need_rebuild = 1;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add object to world view");
+            ImGui::SameLine(0, 4);
+            if (ImGui::SmallButton("S")) {
+                open_sprite_resize(i, false);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Resize this sprite image");
+            ImGui::SameLine(0, 4);
+            if (ImGui::SmallButton("..."))
+                ImGui::OpenPopup("img_actions");
+            if (ImGui::BeginPopup("img_actions")) {
+                image_list_draw_action_menu(i, &delete_this_image);
+                ImGui::EndPopup();
+            }
+
+            ImGui::TableSetColumnIndex(2);
+            if (use_count == 0)
+                ImGui::TextColored(ImVec4(1.0f,0.5f,0.2f,1.0f), "unused");
+            else
+                ImGui::TextColored(ImVec4(0.5f,0.9f,0.5f,1.0f), "x%d", use_count);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%d object placement%s", use_count,
+                                  use_count == 1 ? "" : "s");
+            if (delete_this_image) {
+                undo_save();
+                editor_project_delete_image_slot(i);
+                g_need_rebuild = 1;
+                ImGui::PopID();
+                break;
+            }
             ImGui::PopID();
-            ImGui::EndGroup();
-            break;
         }
-        ImGui::PopID();
-        ImGui::EndGroup();
+        ImGui::EndTable();
     }
+    ImGui::PopStyleVar(2);
 
     if (g_simple_mode) {
         ImGui::Separator();

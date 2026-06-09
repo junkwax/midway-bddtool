@@ -58,10 +58,10 @@ void draw_game_view_controls(void)
             ImVec2 ds = ImGui::GetIO().DisplaySize;
             BddScreenRect vp;
             bdd_game_view_screen_rect(g_zoom, (int)ds.x, (int)ds.y, &vp);
-            float anchor_y = (float)(vp.y + vp.h);            /* transport sits +6 below this */
-            if (anchor_y > ds.y - 4.0f) anchor_y = ds.y - 4.0f;
+            float anchor_y = (float)(vp.y + vp.h + 6);        /* reserved space below viewport */
+            if (anchor_y > ds.y - 88.0f) anchor_y = ds.y - 88.0f;
             ImGui::SetNextWindowPos(ImVec2(ds.x * 0.5f, anchor_y),
-                                    ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+                                    ImGuiCond_Always, ImVec2(0.5f, 0.0f));
             ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Always);  /* height auto */
             ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f,0.08f,0.12f,0.92f));
             if (ImGui::Begin("##gameview", NULL, ImGuiWindowFlags_NoTitleBar

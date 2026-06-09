@@ -102,41 +102,49 @@ static void doc_tabs(void)
     bool new_doc_requested = false;
     int switch_to = -1;
     int close_idx = -1;
+    static int s_last_selected_tab_id = 0;
 
-    if (g_num_docs < MAX_DOCS && ImGui::SmallButton("+"))
-        new_doc_requested = true;
+    ImGuiTabBarFlags tab_flags =
+        ImGuiTabBarFlags_FittingPolicyScroll |
+        ImGuiTabBarFlags_NoCloseWithMiddleMouseButton;
+    if (ImGui::BeginTabBar("##document_tabbar", tab_flags)) {
+        if (g_num_docs < MAX_DOCS &&
+            ImGui::TabItemButton("+", ImGuiTabItemFlags_Leading | ImGuiTabItemFlags_NoTooltip))
+            new_doc_requested = true;
 
-    for (int i = 0; i < g_num_docs; i++) {
-        if (!g_docs[i].loaded) continue;
-        ImGui::SameLine(0, 4);
-        ImGui::PushID(g_docs[i].tab_id > 0 ? g_docs[i].tab_id : i + 1);
+        int active_tab_id = (g_cur_doc >= 0 && g_cur_doc < g_num_docs)
+                          ? g_docs[g_cur_doc].tab_id : 0;
+        for (int i = 0; i < g_num_docs; i++) {
+            if (!g_docs[i].loaded) continue;
 
-        char label[96];
-        bool active = (i == g_cur_doc);
-        bool is_dirty = active ? g_dirty : g_docs[i].dirty;
-        int tab_no = active ? g_no : g_docs[i].snapshot.no;
-        int tab_ni = active ? g_ni : g_docs[i].snapshot.ni;
-        const char *tab_name = (active && g_name[0]) ? g_name :
-            (g_docs[i].snapshot.name[0] ? g_docs[i].snapshot.name : "Untitled");
-        if (active || g_num_docs == 1)
-            snprintf(label, sizeof label, "%s%s  %d obj  %d img",
-                     tab_name, is_dirty ? " *" : "", tab_no, tab_ni);
-        else
-            snprintf(label, sizeof label, "%s%s", tab_name, is_dirty ? " *" : "");
+            char label[128];
+            bool active = (i == g_cur_doc);
+            bool is_dirty = active ? g_dirty : g_docs[i].dirty;
+            const char *tab_name = (active && g_name[0]) ? g_name :
+                (g_docs[i].snapshot.name[0] ? g_docs[i].snapshot.name : "Untitled");
+            snprintf(label, sizeof label, "%s###doc%d", tab_name,
+                     g_docs[i].tab_id > 0 ? g_docs[i].tab_id : i + 1);
 
-        if (active) {
-            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f,0.45f,0.80f,1.00f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f,0.52f,0.90f,1.00f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.30f,0.58f,1.00f,1.00f));
+            bool tab_open = true;
+            ImGuiTabItemFlags item_flags = ImGuiTabItemFlags_NoCloseWithMiddleMouseButton;
+            if (is_dirty)
+                item_flags |= ImGuiTabItemFlags_UnsavedDocument | ImGuiTabItemFlags_NoAssumedClosure;
+            if (active && active_tab_id != s_last_selected_tab_id)
+                item_flags |= ImGuiTabItemFlags_SetSelected;
+
+            if (ImGui::BeginTabItem(label, &tab_open, item_flags)) {
+                if (i != g_cur_doc)
+                    switch_to = i;
+                int tab_no = active ? g_no : g_docs[i].snapshot.no;
+                int tab_ni = active ? g_ni : g_docs[i].snapshot.ni;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%d objects, %d images", tab_no, tab_ni);
+                ImGui::EndTabItem();
+            }
+            if (!tab_open)
+                close_idx = i;
         }
-        if (ImGui::SmallButton(label))
-            switch_to = i;
-        if (active) ImGui::PopStyleColor(3);
-
-        ImGui::SameLine(0, 1);
-        if (ImGui::SmallButton("x"))
-            close_idx = i;
-        ImGui::PopID();
+        ImGui::EndTabBar();
     }
 
     if (close_idx >= 0) {
@@ -153,53 +161,11 @@ static void doc_tabs(void)
     if (new_doc_requested) {
         editor_emit_unsaved_action(UNSAVED_ACTION_SHOW_NEW_PROJECT);
     }
-}
 
-static void draw_doc_strip_summary(void)
-{
-    if (!g_have_bdb && g_ni == 0) return;
-
-    int sel = selected_count();
-    char info[160];
-    if (g_name[0]) {
-        snprintf(info, sizeof info, "%s%d objects  %d images  %d palettes%s",
-                 g_dirty ? "*  " : "", g_no, g_ni, g_n_pals,
-                 sel > 0 ? "  |" : "");
-    } else {
-        snprintf(info, sizeof info, "%s%d images  %d palettes%s",
-                 g_dirty ? "*  " : "", g_ni, g_n_pals,
-                 sel > 0 ? "  |" : "");
-    }
-    ImGui::SameLine(0, 12);
-    if (g_dirty) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f,0.8f,0.25f,1.0f));
-    ImGui::TextDisabled("%s", info);
-    if (g_dirty) ImGui::PopStyleColor();
-    if (sel > 0) {
-        ImGui::SameLine(0, 4);
-        ImGui::TextColored(ImVec4(1.0f,0.85f,0.35f,1.0f), "%d selected", sel);
-    }
-
-    if (g_have_bdb && g_no > 0) {
-        static const struct { int wx; const char *name; ImVec4 col; } layers[] = {
-            {0x32, "32", ImVec4(1.00f,0.70f,0.39f,1.0f)},
-            {0x3C, "3C", ImVec4(0.39f,0.78f,1.00f,1.0f)},
-            {0x40, "40", ImVec4(0.39f,1.00f,0.47f,1.0f)},
-            {0x41, "41", ImVec4(0.78f,1.00f,0.39f,1.0f)},
-            {0x43, "43", ImVec4(1.00f,0.59f,0.78f,1.0f)},
-            {0x46, "46", ImVec4(1.00f,0.39f,0.39f,1.0f)}
-        };
-        for (int li = 0; li < 6; li++) {
-            int count = 0;
-            for (int oi = 0; oi < g_no; oi++)
-                if (((g_obj[oi].wx >> 8) & 0xFF) == layers[li].wx)
-                    count++;
-            if (count <= 0) continue;
-            char pill[32];
-            snprintf(pill, sizeof pill, "%s:%d", layers[li].name, count);
-            ImGui::SameLine(0, 6);
-            ImGui::TextColored(layers[li].col, "%s", pill);
-        }
-    }
+    if (g_cur_doc >= 0 && g_cur_doc < g_num_docs)
+        s_last_selected_tab_id = g_docs[g_cur_doc].tab_id;
+    else
+        s_last_selected_tab_id = 0;
 }
 
 void DocumentTabsPanel::render()
@@ -222,7 +188,6 @@ void DocumentTabsPanel::render()
         ImGuiWindowFlags_NoBringToFrontOnFocus);
     if (open) {
         doc_tabs();
-        draw_doc_strip_summary();
     }
     ImGui::End();
     ImGui::PopStyleVar(2);

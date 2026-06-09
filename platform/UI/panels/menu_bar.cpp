@@ -11,6 +11,117 @@
 #include <limits.h>
 #include <vector>
 
+static int menu_bar_animation_metadata_count(void)
+{
+    int count = 0;
+    for (int i = 0; i < g_ni; i++) {
+        const Img *im = &g_img[i];
+        if (im->frm || im->opals || im->pttblnum ||
+            im->anix || im->aniy || im->anix2 || im->aniy2 || im->aniz2)
+            count++;
+    }
+    return count;
+}
+
+static void menu_bar_diag_tooltip(const Mk2Diag *d, int hard, int cautions)
+{
+    if (!d) return;
+    ImGui::BeginTooltip();
+    ImGui::Text("Loaded: %d objects, %d images, %d palettes", g_no, g_ni, g_n_pals);
+    ImGui::Text("Runtime palettes: %d / %d", d->runtime_palette_count, MK2_RUNTIME_PALETTE_SLOTS);
+    if (hard == 0 && cautions == 0) {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.55f, 1.0f), "No build-blocking MK2 warnings detected.");
+    } else {
+        ImGui::Separator();
+        if (d->missing_images) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "%d missing image reference(s)", d->missing_images);
+        if (d->bad_palettes) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "%d bad palette reference(s)", d->bad_palettes);
+        if (d->load2_oversize_images) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "%d LOAD2 oversize image(s)", d->load2_oversize_images);
+        if (d->load2_palette_overflow) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "LOAD2 palette overflow +%d", d->load2_palette_overflow);
+        if (d->load2_module_overflow) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "LOAD2 module overflow +%d", d->load2_module_overflow);
+        if (d->load2_image_header_overflow) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "LOAD2 image header overflow +%d", d->load2_image_header_overflow);
+        if (d->load2_block_table_overflow) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "LOAD2 block table overflow +%d", d->load2_block_table_overflow);
+        if (d->palette_high_nibble) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "%d object(s) use palette >= 16", d->palette_high_nibble);
+        if (d->runtime_palette16_pressure) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "Runtime palette pressure: %d used", d->runtime_palette_count);
+        else if (d->runtime_palette_pressure) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "Dynamic palette pressure: %d used", d->runtime_palette_count);
+        if (d->display_object_overflow) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "Display object overflow +%d at X %d", d->display_object_overflow, d->max_visible_objects_x);
+        else if (d->display_object_pressure) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "Display object pressure: %d at X %d", d->max_visible_objects, d->max_visible_objects_x);
+        if (d->high_color_images) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "%d image(s) use color index >= 64", d->high_color_images);
+        if (d->unassigned_objects) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "%d object(s) outside modules", d->unassigned_objects);
+        if (d->module_bound_issues) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "%d module bound issue(s)", d->module_bound_issues);
+        if (d->order_issues) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "%d object order issue(s)", d->order_issues);
+    }
+    ImGui::EndTooltip();
+}
+
+static void draw_menu_bar_stage_info(void)
+{
+    if (!g_name[0] && g_ni <= 0) return;
+
+    char info[256] = "";
+    if (g_name[0])
+        snprintf(info, sizeof info, "%s%s  |  %d objects  %d images  %d palettes",
+                 g_dirty ? "* " : "", g_name, g_no, g_ni, g_n_pals);
+    else
+        snprintf(info, sizeof info, "%s%d images  %d palettes  (no BDB)",
+                 g_dirty ? "* " : "", g_ni, g_n_pals);
+
+    Mk2Diag d;
+    mk2_collect_diag(&d);
+    int hard = mk2_diag_hard_issues(&d);
+    int cautions = mk2_diag_cautions(&d);
+    int anim_meta = menu_bar_animation_metadata_count();
+
+    char build[48];
+    if (hard > 0)
+        snprintf(build, sizeof build, "BUILD ERROR:%d", hard);
+    else if (cautions > 0)
+        snprintf(build, sizeof build, "BUILD WARN:%d", cautions);
+    else
+        snprintf(build, sizeof build, "BUILD PASS");
+
+    char pal[32];
+    snprintf(pal, sizeof pal, "PAL %d/%d", d.runtime_palette_count, MK2_RUNTIME_PALETTE_SLOTS);
+    char anim[32] = "";
+    if (anim_meta > 0)
+        snprintf(anim, sizeof anim, "ANIM %d", anim_meta);
+
+    const float gap = 10.0f;
+    float total_w = ImGui::CalcTextSize(info).x + gap + ImGui::CalcTextSize(build).x +
+                    gap + ImGui::CalcTextSize(pal).x;
+    if (anim[0]) total_w += gap + ImGui::CalcTextSize(anim).x;
+
+    float right = ImGui::GetWindowContentRegionMax().x;
+    float target = right - total_w;
+    if (target > ImGui::GetCursorPosX())
+        ImGui::SetCursorPosX(target);
+
+    if (g_dirty) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,0.8f,0.2f,1));
+    ImGui::Text("%s", info);
+    if (g_dirty) ImGui::PopStyleColor();
+
+    ImGui::SameLine(0, gap);
+    ImVec4 build_col = hard > 0 ? ImVec4(1.0f, 0.34f, 0.22f, 1.0f) :
+                       (cautions > 0 ? ImVec4(1.0f, 0.78f, 0.30f, 1.0f) :
+                                        ImVec4(0.45f, 0.95f, 0.55f, 1.0f));
+    ImGui::TextColored(build_col, "%s", build);
+    if (ImGui::IsItemHovered())
+        menu_bar_diag_tooltip(&d, hard, cautions);
+
+    ImGui::SameLine(0, gap);
+    ImVec4 pal_col = d.runtime_palette16_pressure ? ImVec4(1.0f,0.34f,0.22f,1.0f) :
+                     (d.runtime_palette_pressure ? ImVec4(1.0f,0.78f,0.30f,1.0f) :
+                                                   ImVec4(0.60f,0.84f,1.0f,1.0f));
+    ImGui::TextColored(pal_col, "%s", pal);
+    if (ImGui::IsItemHovered())
+        menu_bar_diag_tooltip(&d, hard, cautions);
+
+    if (anim[0]) {
+        ImGui::SameLine(0, gap);
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "%s", anim);
+    }
+}
+
 void MenuBarPanel::render()
 {
     const int object_cap = editor_project_object_capacity();
@@ -643,19 +754,7 @@ void MenuBarPanel::render()
                 g_about_open = true;
             ImGui::EndMenu();
         }
-        char info[256] = "";
-        if (g_name[0])
-            snprintf(info, sizeof info, "%s%s  |  %d objects  %d images  %d palettes",
-                     g_dirty ? "* " : "", g_name, g_no, g_ni, g_n_pals);
-        else if (g_ni > 0)
-            snprintf(info, sizeof info, "%s%d images  %d palettes  (no BDB)",
-                     g_dirty ? "* " : "", g_ni, g_n_pals);
-        float rw = ImGui::GetContentRegionAvail().x;
-        float tw = ImGui::CalcTextSize(info).x;
-        if (g_dirty) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,0.8f,0.2f,1));
-        ImGui::SetCursorPosX(rw - tw);
-        ImGui::Text("%s", info);
-        if (g_dirty) ImGui::PopStyleColor();
+        draw_menu_bar_stage_info();
         ImGui::EndMainMenuBar();
     }
 }

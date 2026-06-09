@@ -1,6 +1,7 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/editor_project_storage.h"
+#include "Core/image_lookup.h"
 #include "undo_manager.h"
 #include <stdio.h>
 #include <string.h>
@@ -48,6 +49,69 @@ static int palette_slot_undo_commit(PaletteSlotUndoCapture *cap, const char *lab
                                          label);
     memset(cap, 0, sizeof(*cap));
     return saved;
+}
+
+static void palette_usage_stats(int pal_i, int *out_images, int *out_objects)
+{
+    int images = 0;
+    int objects = 0;
+    for (int ii = 0; ii < g_ni; ii++) {
+        if (g_img[ii].pal_idx == pal_i)
+            images++;
+    }
+    for (int oi = 0; oi < g_no; oi++) {
+        Img *im = img_find(g_obj[oi].ii);
+        if (!im) continue;
+        if (object_palette_for_image(&g_obj[oi], im) == pal_i)
+            objects++;
+    }
+    if (out_images) *out_images = images;
+    if (out_objects) *out_objects = objects;
+}
+
+static void draw_palette_slot_table(int selected_object_palette)
+{
+    float table_h = 24.0f + (float)g_n_pals * ImGui::GetTextLineHeightWithSpacing();
+    if (table_h < 70.0f) table_h = 70.0f;
+    if (table_h > 140.0f) table_h = 140.0f;
+
+    ImGuiTableFlags flags =
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+        ImGuiTableFlags_BordersOuter | ImGuiTableFlags_Resizable |
+        ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit;
+    if (ImGui::BeginTable("palette_slot_table", 4, flags, ImVec2(0, table_h))) {
+        ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("Clr", ImGuiTableColumnFlags_WidthFixed, 38.0f);
+        ImGui::TableSetupColumn("Refs", ImGuiTableColumnFlags_WidthFixed, 52.0f);
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableHeadersRow();
+        for (int i = 0; i < g_n_pals; i++) {
+            int image_refs = 0, object_refs = 0;
+            palette_usage_stats(i, &image_refs, &object_refs);
+            ImGui::TableNextRow();
+            if (i == g_sel_pal)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(40, 105, 150, 75));
+            else if (i == selected_object_palette)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(35, 125, 65, 60));
+
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("%d", i);
+            ImGui::TableSetColumnIndex(1);
+            char label[96];
+            snprintf(label, sizeof label, "%s%s", g_pal_name[i],
+                     i == selected_object_palette ? "  *" : "");
+            if (ImGui::Selectable(label, i == g_sel_pal, ImGuiSelectableFlags_SpanAllColumns))
+                g_sel_pal = i;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%d image slot(s), %d object placement(s)", image_refs, object_refs);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("%d", g_pal_count[i]);
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%d/%d", image_refs, object_refs);
+        }
+        ImGui::EndTable();
+    }
 }
 
 void draw_selected_palette_swatches(int pal_idx)
@@ -136,18 +200,41 @@ void draw_palette(void)
         return;
     }
 
+    int sel_obj_pal = -1;
+    static int s_last_follow_obj = -2;
+    static int s_last_follow_pal = -2;
+    if (g_hl_obj >= 0 && g_hl_obj < g_no) {
+        sel_obj_pal = g_obj[g_hl_obj].fl;
+        if (sel_obj_pal >= 0 && sel_obj_pal < g_n_pals &&
+            (g_hl_obj != s_last_follow_obj || sel_obj_pal != s_last_follow_pal)) {
+            g_sel_pal = sel_obj_pal;
+            s_last_follow_obj = g_hl_obj;
+            s_last_follow_pal = sel_obj_pal;
+        }
+    } else {
+        s_last_follow_obj = -2;
+        s_last_follow_pal = -2;
+    }
+
     if (g_sel_pal < 0) g_sel_pal = 0;
     if (g_sel_pal >= g_n_pals) g_sel_pal = g_n_pals - 1;
 
-    draw_selected_palette_swatches(g_sel_pal);
-    ImGui::Separator();
+    /* show which palette the selected object uses */
+    if (g_hl_obj >= 0 && g_hl_obj < g_no) {
+        if (sel_obj_pal >= 0 && sel_obj_pal < g_n_pals) {
+            ImGui::TextColored(ImVec4(0.4f,1,0.4f,1), "Object %d -> pal %d: %s",
+                              g_hl_obj, sel_obj_pal, g_pal_name[sel_obj_pal]);
+        }
+    }
+
+    draw_palette_slot_table(sel_obj_pal);
 
     int pc = g_pal_count[g_sel_pal];
     if (pc < 0) pc = 0;
     if (pc > 256) pc = 256;
     char pal_name[64];
     snprintf(pal_name, sizeof pal_name, "%s", g_pal_name[g_sel_pal]);
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 62.0f);
     ImGui::InputText("##palname", pal_name, sizeof pal_name);
     if (ImGui::IsItemActivated())
         palette_slot_undo_capture(&g_palette_name_undo, g_sel_pal, -1);
@@ -158,33 +245,13 @@ void draw_palette(void)
         palette_slot_undo_commit(&g_palette_name_undo, "Rename Palette");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rename palette");
     ImGui::SameLine();
-    ImGui::TextDisabled("(%d colors)", pc);
+    ImGui::TextDisabled("%d clr", pc);
 
-    /* show which palette the selected object uses */
-    int sel_obj_pal = -1;
-    if (g_hl_obj >= 0 && g_hl_obj < g_no) {
-        sel_obj_pal = g_obj[g_hl_obj].fl;
-        if (sel_obj_pal >= 0 && sel_obj_pal < g_n_pals) {
-            ImGui::TextColored(ImVec4(0.4f,1,0.4f,1), "Object %d -> pal %d: %s",
-                              g_hl_obj, sel_obj_pal, g_pal_name[sel_obj_pal]);
-        }
-    }
+    ImGui::BeginChild("selected_palette_swatch_scroller", ImVec2(0, 88.0f), true,
+                      ImGuiWindowFlags_HorizontalScrollbar);
+    draw_selected_palette_swatches(g_sel_pal);
+    ImGui::EndChild();
 
-    /* palette selector */
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 50);
-    if (ImGui::BeginCombo("##pal_sel", g_pal_name[g_sel_pal])) {
-        for (int i = 0; i < g_n_pals; i++) {
-            char lbl[80];
-            snprintf(lbl, sizeof lbl, "%s  [%d colors]%s", g_pal_name[i], g_pal_count[i],
-                     i == sel_obj_pal ? "  *" : "");
-            ImGuiSelectableFlags f = (i == sel_obj_pal && sel_obj_pal != g_sel_pal)
-                ? ImGuiSelectableFlags_None : ImGuiSelectableFlags_None;
-            if (ImGui::Selectable(lbl, i == g_sel_pal || i == sel_obj_pal))
-                g_sel_pal = i;
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::SameLine();
     if (ImGui::Button("+")) {
         undo_save();
         char name[64];
