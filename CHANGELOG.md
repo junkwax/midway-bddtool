@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-06-10
+
+### Added
+- The runtime preview now spawns vanilla-derived background actors:
+  `runtime_actor_autoload_for_stage()` builds them from
+  `bdd_stage_runtime_actors()` (BGND.ASM spawn proc -> `a_*` frame sequence ->
+  decoded `movi >y:x,a4` positions), importing the frame sprites from
+  `MK6MIL.LOD` (which packages `MKBGANI.IMG`). Armory lava, Tomb bats, Spiral
+  monks/warplite and Bridge fighters now appear from source data; Forest keeps
+  its existing path; stages with no `pid_bani` frame actors (Tower/Battle/Dead
+  Pool) are unaffected.
+- `--render-png` now also draws the runtime actors (first frame) so the derived
+  actors can be reviewed in headless captures.
+
+### Fixed
+- The `a_*` sequence parser stops at `ani_*` control opcodes (e.g.
+  `.long ani_jump,a_medbat`) so loop markers are not mistaken for frames.
+
 ## [1.0.10] - 2026-06-10
 
 ### Added
