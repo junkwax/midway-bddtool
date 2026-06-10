@@ -678,6 +678,10 @@ typedef struct {
     int plane_count;
     int floor_rank;          /* draw rank of the -1/floor_code dlists slot, -1 if none */
     char floor_label[32];    /* floor SAG label from <stage>_floor_info, "" if none */
+    char floor_palette[32];  /* floor palette label from <stage>_floor_info, "" if none */
+    int floor_info_valid;    /* floor_y/floor_height were parsed from floor_info */
+    int floor_y;             /* skew Y position word from <stage>_floor_info */
+    int floor_height;        /* floor height word from <stage>_floor_info */
     int camera_valid;        /* <stage>_mod words 3,4 captured (init worldy/worldx) */
     int camera_x, camera_y;
     int limits_valid;        /* <stage>_mod words 5,6 captured (scroll left/right) */
@@ -983,20 +987,27 @@ static int bdd_bgnd_asm_movi_token(const char *line, char *out, size_t outsz)
     return n > 0;
 }
 
-/* Derive the floor SAG label: <stage>_mod's calla routine does
-   "movi <stage>_floor_info,a0", and <stage>_floor_info's first ".long" is the
-   floor sprite label (e.g. FL_FORST). */
-static void bdd_parse_stage_floor_label(const char *path, const char *calla_label,
-                                        char *out, size_t outsz)
+/* Derive the floor descriptor from <stage>_floor_info, which the mod's calla
+   routine references via "movi <stage>_floor_info,a0". The block is:
+       .long  FL_xxx        ; floor SAG label
+       .long  xxx_p         ; floor palette label
+       .word  skew_y        ; floor screen Y
+       .word  height        ; floor height
+   Fills table->floor_label / floor_palette / floor_y / floor_height and sets
+   floor_info_valid when the two words were read. Leaves empty when the stage
+   has no floor (e.g. dedpool's calla has no floor_info). */
+static void bdd_parse_stage_floor_info(const char *path, const char *calla_label,
+                                       BddStageModuleTable *table)
 {
     FILE *f;
     char line[512];
     char floor_info_label[64] = "";
     int in_calla = 0;
     int in_info = 0;
+    int long_seen = 0;
+    int word_seen = 0;
 
-    if (out && outsz) out[0] = '\0';
-    if (!path || !calla_label || !calla_label[0] || !out) return;
+    if (!path || !calla_label || !calla_label[0] || !table) return;
 
     /* Pass 1: find the *_floor_info label referenced inside the calla routine. */
     f = fopen(path, "r");
@@ -1024,7 +1035,7 @@ static void bdd_parse_stage_floor_label(const char *path, const char *calla_labe
     fclose(f);
     if (!floor_info_label[0]) return;
 
-    /* Pass 2: first ".long" of the floor_info block is the floor SAG label. */
+    /* Pass 2: label(.long #1), palette(.long #2), skew_y(.word #1), height(.word #2). */
     f = fopen(path, "r");
     if (!f) return;
     while (fgets(line, sizeof line, f)) {
@@ -1034,9 +1045,26 @@ static void bdd_parse_stage_floor_label(const char *path, const char *calla_labe
             continue;
         }
         char tok[64];
-        if (bdd_bgnd_asm_long_token(line, tok, sizeof tok)) {
-            snprintf(out, outsz, "%s", tok);
-            break;
+        if (bdd_bgnd_asm_active_directive(line, ".long") &&
+            bdd_bgnd_asm_long_token(line, tok, sizeof tok)) {
+            long_seen++;
+            if (long_seen == 1)
+                snprintf(table->floor_label, sizeof table->floor_label, "%s", tok);
+            else if (long_seen == 2)
+                snprintf(table->floor_palette, sizeof table->floor_palette, "%s", tok);
+            continue;
+        }
+        int v = 0;
+        if (bdd_bgnd_asm_active_directive(line, ".word") &&
+            bdd_bgnd_asm_word_expr_value(line, BDD_BGND_SCRRGT, BDD_BGND_WY_OFFSET, &v)) {
+            word_seen++;
+            if (word_seen == 1) {
+                table->floor_y = v;
+            } else if (word_seen == 2) {
+                table->floor_height = v;
+                table->floor_info_valid = 1;
+                break;
+            }
         }
     }
     fclose(f);
@@ -1166,6 +1194,10 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
     table->plane_count = 0;
     table->floor_rank = -1;
     table->floor_label[0] = '\0';
+    table->floor_palette[0] = '\0';
+    table->floor_info_valid = 0;
+    table->floor_y = 0;
+    table->floor_height = 0;
     table->camera_valid = 0;
     table->limits_valid = 0;
     if (!label) { table->label[0] = '\0'; return 0; }
@@ -1181,8 +1213,7 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
     if (!bdd_parse_stage_scroll_table(path, scroll_label, scroll))
         return 0;
     bdd_parse_stage_dlists(path, dlists_label, table);
-    bdd_parse_stage_floor_label(path, calla_label, table->floor_label,
-                                sizeof table->floor_label);
+    bdd_parse_stage_floor_info(path, calla_label, table);
 
     for (int i = 0; i < table->plane_count; i++) {
         int pos = 8 - table->planes[i].baklst;   /* scroll table row for this plane */
