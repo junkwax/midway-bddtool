@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-06-10
+
+### Added
+- Headless `--render-png <BDD> <out.png> [game|layout] [zoom]` capture of a
+  stage: `layout` renders the whole runtime layout, `game` renders the in-game
+  400x254 view composited at the BGND camera start. Lets stages be reviewed and
+  diffed from the CLI without the GUI.
+
+### Changed
+- Runtime preview now recognizes every MK2 stage by matching the loaded BDB's
+  modules against each BGND.ASM `<stage>_mod` block's baklst `*BMOD` modules,
+  replacing the hardcoded four-stage shortlist. All stages (tomb, armory, arena,
+  port, bridge, etc.) now render with their derived parallax, draw order, floor,
+  and camera instead of a generic fallback.
+- Background draw order is derived from `dlists_<stage>` for every recognized
+  stage (was forest/battle only); Tower keeps its hand-tuned object
+  interleaving.
+- The floor descriptor (label, palette, screen-Y, height) is derived from
+  `<stage>_floor_info` for every stage.
+
 ## [1.0.7] - 2026-06-10
 
 ### Changed
