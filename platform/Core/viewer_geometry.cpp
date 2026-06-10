@@ -659,7 +659,16 @@ typedef struct {
     int plane_count;
     int floor_rank;          /* draw rank of the -1/floor_code dlists slot, -1 if none */
     char floor_label[32];    /* floor SAG label from <stage>_floor_info, "" if none */
+    int camera_valid;        /* <stage>_mod words 3,4 captured (init worldy/worldx) */
+    int camera_x, camera_y;
+    int limits_valid;        /* <stage>_mod words 5,6 captured (scroll left/right) */
+    int scroll_left, scroll_right;
 } BddStageModuleTable;
+
+/* scrrgt/wy_offset substituted into <stage>_mod header expressions, matching the
+   MK2 build (scrrgt = visible width-1, wy_offset = world->screen Y bias). */
+#define BDD_BGND_SCRRGT 399
+#define BDD_BGND_WY_OFFSET 0xe0
 
 static BddStageModuleTable g_stage_module_cache;
 
@@ -763,6 +772,7 @@ static int bdd_parse_stage_mod_block(const char *path, const char *label,
     int long_seen = 0;
     int baklst_num = 0;
     int pending = -1;
+    int header_word = 0;
 
     if (!path || !label || !table) return 0;
     f = fopen(path, "r");
@@ -774,6 +784,27 @@ static int bdd_parse_stage_mod_block(const char *path, const char *label,
             if (bdd_line_is_label(line, label))
                 in_block = 1;
             continue;
+        }
+
+        /* Header words precede every ".long": 1=autoerase, 2=ground y,
+           3=initial worldy, 4=initial worldx, 5=scroll left, 6=scroll right. */
+        if (long_seen == 0) {
+            int hv = 0;
+            if (bdd_bgnd_asm_word_expr_value(line, BDD_BGND_SCRRGT, BDD_BGND_WY_OFFSET, &hv) &&
+                bdd_bgnd_asm_active_directive(line, ".word")) {
+                header_word++;
+                switch (header_word) {
+                    case 3: table->camera_y = hv; break;
+                    case 4: table->camera_x = hv; table->camera_valid = 1; break;
+                    case 5: table->scroll_left = hv; break;
+                    case 6:
+                        table->scroll_right = hv;
+                        if (hv >= table->scroll_left) table->limits_valid = 1;
+                        break;
+                    default: break;
+                }
+                continue;
+            }
         }
 
         const char *long_op = bdd_bgnd_asm_active_directive(line, ".long");
@@ -819,7 +850,7 @@ static int bdd_parse_stage_mod_block(const char *path, const char *label,
 
         if (pending >= 0 && bdd_bgnd_asm_active_directive(line, ".word")) {
             int ox = 0, oy = 0;
-            if (bdd_bgnd_asm_word_pair_value(line, 399, 0xe0, &ox, &oy)) {
+            if (bdd_bgnd_asm_word_pair_value(line, BDD_BGND_SCRRGT, BDD_BGND_WY_OFFSET, &ox, &oy)) {
                 table->planes[pending].ox = ox;
                 table->planes[pending].oy = oy;
             }
@@ -1018,6 +1049,8 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
     table->plane_count = 0;
     table->floor_rank = -1;
     table->floor_label[0] = '\0';
+    table->camera_valid = 0;
+    table->limits_valid = 0;
     if (!label) { table->label[0] = '\0'; return 0; }
 
     bdd_stage_root_from_loaded_path(root, sizeof root);
@@ -1340,9 +1373,18 @@ void bdd_get_game_preview_bounds(int *wx_min, int *wx_max, int *wy_min, int *wy_
     }
     {
         const char *label = bdd_bgnd_stage_label();
+        const BddStageModuleTable *table = bdd_get_stage_module_table();
         int scroll_left = 0;
         int scroll_right = 0;
-        if (label && bdd_read_bgnd_stage_scroll_limits(label, &scroll_left, &scroll_right)) {
+        int have_limits = 0;
+        if (table && table->limits_valid) {
+            scroll_left = table->scroll_left;
+            scroll_right = table->scroll_right;
+            have_limits = 1;
+        } else if (label && bdd_read_bgnd_stage_scroll_limits(label, &scroll_left, &scroll_right)) {
+            have_limits = 1;
+        }
+        if (have_limits) {
             x0 = scroll_left;
             x1 = scroll_right + 400;
         }
@@ -1399,8 +1441,16 @@ int bdd_get_stage_start_camera(int *camera_x, int *camera_y)
     label = bdd_bgnd_stage_label();
     if (!label)
         return 0;
-    if (!bdd_read_bgnd_stage_start_camera(label, &x, &y))
-        return 0;
+
+    {
+        const BddStageModuleTable *table = bdd_get_stage_module_table();
+        if (table && table->camera_valid) {
+            x = table->camera_x;
+            y = table->camera_y;
+        } else if (!bdd_read_bgnd_stage_start_camera(label, &x, &y)) {
+            return 0;
+        }
+    }
 
     if (camera_x) *camera_x = x;
     if (camera_y) *camera_y = y;
