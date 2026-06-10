@@ -48,10 +48,108 @@
 #include "UI/overlays/sdl_world_markers.h"
 #include "UI/sdl/sdl_world_objects.h"
 #include "UI/assets/texture_cache.h"
+#include "UI/tools/mk2_runtime_actor_tool.h"
+#include "libs/stb_image_write.h"
 
 #ifndef BDDVIEW_VERSION
 #define BDDVIEW_VERSION "0.0.0-dev"
 #endif
+
+/* Headless capture of the runtime layout view to a PNG, for visual review of a
+   stage without launching the GUI. Handles "--render-png <BDD> <out.png>".
+   Returns true if it consumed the flag (handled), with *exit_code set. */
+static bool bdd_viewer_render_png(int argc, char *argv[], int *exit_code)
+{
+    const char *bdd_arg = nullptr;
+    const char *out_arg = nullptr;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--render-png") == 0) {
+            if (i + 2 < argc) { bdd_arg = argv[i + 1]; out_arg = argv[i + 2]; }
+            break;
+        }
+    }
+    if (!bdd_arg || !out_arg)
+        return false;
+    *exit_code = 1;
+
+    char bdb_p[512] = "", bdd_p[512] = "";
+    if (!bdd_viewer_load_stage_for_path(bdd_arg, bdb_p, sizeof bdb_p, bdd_p, sizeof bdd_p)) {
+        fprintf(stderr, "render-png: failed to load %s\n", bdd_arg);
+        return true;
+    }
+    runtime_actor_autoload_for_stage();
+
+    g_runtime_layout_view = 1;
+    g_game_view = 0;
+    g_show_objects = 1;
+
+    int x0 = 0, x1 = 400, y0 = 0, y1 = 254;
+    bdd_get_runtime_layout_bounds(&x0, &x1, &y0, &y1);
+    if (x0 == INT_MAX || x1 == INT_MIN || y0 == INT_MAX || y1 == INT_MIN) {
+        x0 = 0; x1 = 400; y0 = 0; y1 = 254;
+    }
+    const int pad = 8;
+    x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+    int ww = x1 - x0, wh = y1 - y0;
+    const int MAXDIM = 8192;
+    if (ww < 16) ww = 16;
+    if (wh < 16) wh = 16;
+    if (ww > MAXDIM) ww = MAXDIM;
+    if (wh > MAXDIM) wh = MAXDIM;
+
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        fprintf(stderr, "render-png: SDL_Init: %s\n", SDL_GetError());
+        return true;
+    }
+    SDL_Window *w = SDL_CreateWindow("bddview-render", 0, 0, 64, 64, SDL_WINDOW_HIDDEN);
+    SDL_Renderer *r = w ? SDL_CreateRenderer(w, -1, SDL_RENDERER_ACCELERATED) : nullptr;
+    if (w && !r) r = SDL_CreateRenderer(w, -1, SDL_RENDERER_SOFTWARE);
+    if (!w || !r) {
+        fprintf(stderr, "render-png: SDL setup failed: %s\n", SDL_GetError());
+        if (r) SDL_DestroyRenderer(r);
+        if (w) SDL_DestroyWindow(w);
+        SDL_Quit();
+        return true;
+    }
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    bdd_texture_cache_set_renderer(r);
+    bdd_texture_cache_rebuild_all();
+
+    int ok = 0;
+    SDL_Texture *target = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888,
+                                            SDL_TEXTUREACCESS_TARGET, ww, wh);
+    if (target) {
+        SDL_SetRenderTarget(r, target);
+        SDL_SetRenderDrawColor(r, g_bg_color[0], g_bg_color[1], g_bg_color[2], 255);
+        SDL_RenderClear(r);
+        bdd_world_objects_draw(r, x0, y0, 1, ww, wh, 0, 0, 0, 0, 0);
+
+        unsigned char *buf = (unsigned char *)malloc((size_t)ww * wh * 4);
+        if (buf && SDL_RenderReadPixels(r, nullptr, SDL_PIXELFORMAT_ABGR8888,
+                                        buf, ww * 4) == 0) {
+            ok = stbi_write_png(out_arg, ww, wh, 4, buf, ww * 4);
+        }
+        free(buf);
+        SDL_SetRenderTarget(r, nullptr);
+        SDL_DestroyTexture(target);
+    } else {
+        fprintf(stderr, "render-png: target texture %dx%d: %s\n", ww, wh, SDL_GetError());
+    }
+
+    bdd_texture_cache_destroy();
+    SDL_DestroyRenderer(r);
+    SDL_DestroyWindow(w);
+    SDL_Quit();
+
+    if (ok) {
+        fprintf(stderr, "render-png: wrote %s (%dx%d, layout x[%d,%d] y[%d,%d])\n",
+                out_arg, ww, wh, x0, x1, y0, y1);
+        *exit_code = 0;
+    } else {
+        fprintf(stderr, "render-png: failed to write %s\n", out_arg);
+    }
+    return true;
+}
 
 static int           g_last_obj = -1;   /* g_obj[] index of last dragged/placed object */
 
@@ -107,6 +205,9 @@ int BddViewApp::init(int argc, char *argv[])
 
     int cli_exit_code = 0;
     if (bdd_viewer_run_cli_command(argc, argv, &cli_exit_code))
+        return cli_exit_code;
+
+    if (bdd_viewer_render_png(argc, argv, &cli_exit_code))
         return cli_exit_code;
 
     if (argc >= 2) {
