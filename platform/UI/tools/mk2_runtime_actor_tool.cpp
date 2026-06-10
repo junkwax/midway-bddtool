@@ -1941,6 +1941,52 @@ void draw_mk2_runtime_actor_overlay(void)
         dl->PopClipRect();
 }
 
+/* Headless SDL draw of the runtime actors (current frame only) for --render-png,
+   mirroring draw_mk2_runtime_actor_overlay's projection without ImGui. */
+void runtime_actor_draw_sdl(SDL_Renderer *rend, int view_x, int view_y,
+                            int zoom, int ww, int wh)
+{
+    if (!rend || g_runtime_actor_count <= 0 || zoom <= 0) return;
+    if (!g_game_view && !g_runtime_layout_view) return;
+
+    BddScreenRect viewport = { 0, 0, ww, wh, 0, 0, ww, wh };
+    if (g_game_view)
+        bdd_game_view_screen_rect(zoom, ww, wh, &viewport);
+
+    for (int i = 0; i < g_runtime_actor_count; i++) {
+        RuntimeStageActor *a = &g_runtime_actors[i];
+        if (!a->enabled || a->frame_count <= 0) continue;
+        int frame = 0;   /* static capture: first frame (no ImGui-time animation) */
+        int img_i = runtime_actor_frame_image_index(a, frame);
+        if (img_i < 0 || img_i >= g_ni) continue;
+        Img *im = &g_img[img_i];
+        SDL_Texture *tex = editor_texture_at(img_i);
+        if (!tex || !im || im->w <= 0 || im->h <= 0) continue;
+
+        int base_x = 0, base_y = 0;
+        float actor_scroll = 1.0f;
+        runtime_actor_project_base(a, &base_x, &base_y, &actor_scroll);
+        int draw_x = base_x + a->frame_dx[frame];
+        int draw_y = base_y + a->frame_dy[frame];
+        float sx, sy;
+        if (g_game_view) {
+            int screen_y = a->screen_space_y ? draw_y : (draw_y - g_game_view_y);
+            sx = (float)viewport.x + ((float)draw_x - (float)g_scroll_pos * actor_scroll) * (float)zoom;
+            sy = (float)viewport.y + (float)screen_y * (float)zoom;
+        } else {
+            sx = ((float)draw_x - (float)view_x) * (float)zoom;
+            sy = ((float)draw_y - (float)view_y) * (float)zoom;
+        }
+        SDL_Rect dst = { (int)sx, (int)sy, im->w * zoom, im->h * zoom };
+        SDL_RendererFlip flip = SDL_FLIP_NONE;
+        if (runtime_actor_frame_hfl_at(a, frame))
+            flip = (SDL_RendererFlip)(flip | SDL_FLIP_HORIZONTAL);
+        if (runtime_actor_frame_vfl_at(a, frame))
+            flip = (SDL_RendererFlip)(flip | SDL_FLIP_VERTICAL);
+        SDL_RenderCopyEx(rend, tex, NULL, &dst, 0.0, NULL, flip);
+    }
+}
+
 void draw_mk2_runtime_actor_isolation_window(void)
 {
     if (!g_runtime_actor_isolation_open) return;

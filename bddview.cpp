@@ -151,6 +151,7 @@ static bool bdd_viewer_render_png(int argc, char *argv[], int *exit_code)
         SDL_SetRenderDrawColor(r, g_bg_color[0], g_bg_color[1], g_bg_color[2], 255);
         SDL_RenderClear(r);
         bdd_world_objects_draw(r, vx, vy, zoom, ww, wh, 0, 0, 0, 0, 0);
+        runtime_actor_draw_sdl(r, vx, vy, zoom, ww, wh);
 
         unsigned char *buf = (unsigned char *)malloc((size_t)ww * wh * 4);
         if (buf && SDL_RenderReadPixels(r, nullptr, SDL_PIXELFORMAT_ABGR8888,

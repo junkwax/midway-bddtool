@@ -3,6 +3,7 @@
 
 #include "Core/bdd_format.h"
 
+#include <SDL.h>
 #include <stddef.h>
 
 void draw_mk2_runtime_actor_tool(void);
@@ -26,5 +27,7 @@ bool runtime_actor_sidecar_load(void);
 bool runtime_actor_sidecar_save(void);
 int runtime_actor_import_inferred_level_animations(void);
 void runtime_actor_autoload_for_stage(void);
+void runtime_actor_draw_sdl(SDL_Renderer *rend, int view_x, int view_y,
+                            int zoom, int ww, int wh);
 
 #endif
