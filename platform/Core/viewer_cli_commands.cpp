@@ -630,6 +630,41 @@ int bdd_viewer_run_cli_command(int argc, char **argv, int *exit_code)
         *exit_code = rc;
         return 1;
     }
+    if (argc >= 2 && strcmp(argv[1], "--stage-actors") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: bddview --stage-actors FILE.BDB|FILE.BDD\n");
+            *exit_code = 1;
+            return 1;
+        }
+        char bdb_path[512] = "", bdd_path[512] = "";
+        if (!bdd_viewer_load_stage_for_path(argv[2], bdb_path, sizeof bdb_path,
+                                            bdd_path, sizeof bdd_path)) {
+            fprintf(stderr, "stage-actors: failed to load %s\n", argv[2]);
+            *exit_code = 1;
+            return 1;
+        }
+        BddStageActor actors[BDD_STAGE_ACTOR_MAX];
+        int n = bdd_stage_runtime_actors(actors, BDD_STAGE_ACTOR_MAX);
+        fprintf(stderr, "stage-actors: %s -> %d animated actor(s)\n",
+                g_name[0] ? g_name : argv[2], n);
+        for (int i = 0; i < n; i++) {
+            fprintf(stderr, "  proc=%-18s seq=%-16s frames=%d\n",
+                    actors[i].proc, actors[i].sequence, actors[i].frame_count);
+            for (int j = 0; j < actors[i].frame_count; j++) {
+                int w = 0, h = 0, xo = 0, yo = 0;
+                char pal[32] = "";
+                if (bdd_mkbgani_sprite_info(actors[i].frames[j], &w, &h,
+                                            &xo, &yo, pal, sizeof pal))
+                    fprintf(stderr, "      %-12s %dx%d off(%d,%d) pal=%s\n",
+                            actors[i].frames[j], w, h, xo, yo, pal);
+                else
+                    fprintf(stderr, "      %-12s (not in MKBGANI.TBL)\n",
+                            actors[i].frames[j]);
+            }
+        }
+        *exit_code = (n > 0) ? 0 : 1;
+        return 1;
+    }
     if (argc >= 2 && strcmp(argv[1], "--roundtrip-save") == 0) {
         if (argc < 4) {
             fprintf(stderr, "usage: bddview --roundtrip-save FILE.BDB|FILE.BDD OUT_PREFIX\n");

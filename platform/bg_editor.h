@@ -82,6 +82,19 @@ int bdd_stage_floor_descriptor(char *label, int label_sz,
 int bdd_mkbgani_sprite_info(const char *label, int *w, int *h,
                             int *xoff, int *yoff, char *palette, int palette_sz);
 
+/* A background animation actor derived from the loaded stage's BGND.ASM:
+   the calla spawns `proc` (create pid_bani,proc), which cycles the `sequence`
+   (a_*) frame table of MKBGANI sprite labels. */
+#define BDD_STAGE_ACTOR_MAX 24
+#define BDD_STAGE_ACTOR_FRAME_MAX 48
+typedef struct {
+    char proc[48];
+    char sequence[48];
+    int frame_count;
+    char frames[BDD_STAGE_ACTOR_FRAME_MAX][32];
+} BddStageActor;
+int bdd_stage_runtime_actors(BddStageActor *out, int max_actors);
+
 typedef struct BddScreenRect {
     int x, y, w, h;
     int clip_x, clip_y, clip_w, clip_h;

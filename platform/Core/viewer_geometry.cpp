@@ -686,6 +686,7 @@ typedef struct {
     int camera_x, camera_y;
     int limits_valid;        /* <stage>_mod words 5,6 captured (scroll left/right) */
     int scroll_left, scroll_right;
+    char calla_label[64];    /* <stage>_mod calla routine (header long #1) */
 } BddStageModuleTable;
 
 /* scrrgt/wy_offset substituted into <stage>_mod header expressions, matching the
@@ -1200,6 +1201,7 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
     table->floor_height = 0;
     table->camera_valid = 0;
     table->limits_valid = 0;
+    table->calla_label[0] = '\0';
     if (!label) { table->label[0] = '\0'; return 0; }
 
     bdd_stage_root_from_loaded_path(root, sizeof root);
@@ -1214,6 +1216,7 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
         return 0;
     bdd_parse_stage_dlists(path, dlists_label, table);
     bdd_parse_stage_floor_info(path, calla_label, table);
+    snprintf(table->calla_label, sizeof table->calla_label, "%s", calla_label);
 
     for (int i = 0; i < table->plane_count; i++) {
         int pos = 8 - table->planes[i].baklst;   /* scroll table row for this plane */
@@ -1409,6 +1412,176 @@ int bdd_mkbgani_sprite_info(const char *label, int *w, int *h,
     if (xoff) *xoff = dims[2];
     if (yoff) *yoff = dims[3];
     return 1;
+}
+
+/* Extract the proc name from a "create pid_bani,<proc>" line. */
+static int bdd_create_pid_bani_proc(const char *line, char *out, size_t outsz)
+{
+    const char *cr = strstr(line, "create");
+    const char *pb = strstr(line, "pid_bani,");
+    const char *semi = strchr(line, ';');
+    size_t k = 0;
+    const char *p;
+    if (!cr || !pb || !out || outsz == 0) return 0;
+    if (semi && semi < pb) return 0;
+    p = pb + 9; /* strlen("pid_bani,") */
+    while (*p && isspace((unsigned char)*p)) p++;
+    while (p[k] && (isalnum((unsigned char)p[k]) || p[k] == '_') && k + 1 < outsz) {
+        out[k] = p[k];
+        k++;
+    }
+    out[k] = '\0';
+    return k > 0;
+}
+
+/* Collect the pid_bani proc names spawned in a calla routine (capped scan;
+   stops at the routine's rets/retp). */
+static int bdd_collect_pid_bani_procs(const char *path, const char *calla_label,
+                                      char procs[][48], int max)
+{
+    FILE *f;
+    char line[512];
+    int in = 0, n = 0, lines = 0;
+    if (!path || !calla_label || !calla_label[0]) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in) {
+            if (bdd_line_is_label(line, calla_label)) in = 1;
+            continue;
+        }
+        if (++lines > 80) break;
+        if (bdd_bgnd_asm_active_directive(line, "rets") ||
+            bdd_bgnd_asm_active_directive(line, "retp"))
+            break;
+        char tok[48];
+        if (bdd_create_pid_bani_proc(line, tok, sizeof tok) && n < max)
+            snprintf(procs[n++], 48, "%s", tok);
+    }
+    fclose(f);
+    return n;
+}
+
+/* True if the line is a column-0 label matching any name in `names` (used to
+   detect where one proc's body ends and a sibling proc begins). */
+static int bdd_line_is_any_of(const char *line, char names[][48], int count,
+                              const char *except)
+{
+    if (isspace((unsigned char)line[0]) || line[0] == '.' ||
+        line[0] == ';' || line[0] == '*')
+        return 0;
+    for (int i = 0; i < count; i++) {
+        if (except && strcasecmp(names[i], except) == 0) continue;
+        if (bdd_line_is_label(line, names[i])) return 1;
+    }
+    return 0;
+}
+
+/* Find the first "movi a_<seq>,aN" animation-table reference inside a proc,
+   stopping if the scan reaches another sibling proc's label. */
+static int bdd_proc_first_sequence(const char *path, const char *proc,
+                                   char *seq, size_t seq_sz,
+                                   char siblings[][48], int sibling_count)
+{
+    FILE *f;
+    char line[512];
+    int in = 0, lines = 0;
+    if (seq && seq_sz) seq[0] = '\0';
+    if (!path || !proc || !proc[0]) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in) {
+            if (bdd_line_is_label(line, proc)) in = 1;
+            continue;
+        }
+        /* Frame animators reference their a_* table early in the proc body;
+           a tight cap avoids leaking into a later proc for velocity-driven
+           procs (e.g. tower clouds) that have no frame table. */
+        if (++lines > 60) break;
+        if (bdd_line_is_any_of(line, siblings, sibling_count, proc))
+            break;   /* reached the next sibling proc without a sequence */
+        const char *m = strstr(line, "movi");
+        const char *semi = strchr(line, ';');
+        if (m && (!semi || semi > m)) {
+            const char *op = m + 4;
+            while (*op && isspace((unsigned char)*op)) op++;
+            if (op[0] == 'a' && op[1] == '_') {
+                size_t k = 0;
+                while (op[k] && (isalnum((unsigned char)op[k]) || op[k] == '_') &&
+                       k + 1 < seq_sz) {
+                    seq[k] = op[k];
+                    k++;
+                }
+                seq[k] = '\0';
+                fclose(f);
+                return 1;
+            }
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+/* Parse an a_<seq> frame-sequence table: the ".long <frame>" symbol entries. */
+static int bdd_parse_anim_sequence(const char *path, const char *seq_label,
+                                   char frames[][32], int maxf)
+{
+    FILE *f;
+    char line[512];
+    int in = 0, n = 0;
+    if (!path || !seq_label || !seq_label[0]) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in) {
+            if (bdd_line_is_label(line, seq_label)) in = 1;
+            continue;
+        }
+        if (bdd_bgnd_asm_active_directive(line, ".long")) {
+            char tok[32];
+            if (bdd_bgnd_asm_long_token(line, tok, sizeof tok)) {
+                if (tok[0] == '>' || isdigit((unsigned char)tok[0]))
+                    break;   /* numeric end marker */
+                if (n < maxf) snprintf(frames[n++], 32, "%s", tok);
+            }
+            continue;
+        }
+        /* A new column-0 label ends the table. */
+        if (!isspace((unsigned char)line[0]) && line[0] != '.' &&
+            line[0] != ';' && line[0] != '*')
+            break;
+    }
+    fclose(f);
+    return n;
+}
+
+/* Public: derive the loaded stage's background animation actors from BGND.ASM:
+   each calla pid_bani proc that drives an a_* frame sequence. */
+int bdd_stage_runtime_actors(BddStageActor *out, int max_actors)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    char procs[BDD_STAGE_ACTOR_MAX][48];
+    int np, n = 0;
+    if (!out || max_actors <= 0 || !table || !table->calla_label[0] ||
+        !table->source_path[0])
+        return 0;
+
+    np = bdd_collect_pid_bani_procs(table->source_path, table->calla_label,
+                                    procs, BDD_STAGE_ACTOR_MAX);
+    for (int i = 0; i < np && n < max_actors; i++) {
+        char seq[48] = "";
+        if (!bdd_proc_first_sequence(table->source_path, procs[i], seq, sizeof seq,
+                                     procs, np))
+            continue;   /* proc drives no a_* frame table */
+        snprintf(out[n].proc, sizeof out[n].proc, "%s", procs[i]);
+        snprintf(out[n].sequence, sizeof out[n].sequence, "%s", seq);
+        out[n].frame_count = bdd_parse_anim_sequence(table->source_path, seq,
+                                                     out[n].frames,
+                                                     BDD_STAGE_ACTOR_FRAME_MAX);
+        n++;
+    }
+    return n;
 }
 
 int bdd_object_runtime_origin(int obj_index, int *rx, int *ry)
