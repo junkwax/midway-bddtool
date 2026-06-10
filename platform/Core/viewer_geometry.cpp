@@ -1698,14 +1698,65 @@ static int bdd_extract_baklst_b4(const char *line)
     return (n >= 1 && n <= 8) ? n : -1;
 }
 
-/* Find the baklst plane the proc inserts its object into (direct "movi
-   baklstN,b4" in the proc body). Returns N, or -1 if it inserts via a helper. */
+/* Extract the operand of a callr/calla/jsrp instruction (the called label). */
+static int bdd_extract_call_target(const char *line, char *out, size_t outsz)
+{
+    static const char *const ops[] = { "callr", "calla", "jsrp" };
+    const char *semi = strchr(line, ';');
+    for (size_t o = 0; o < sizeof ops / sizeof ops[0]; o++) {
+        const char *c = strstr(line, ops[o]);
+        if (!c || (semi && semi < c)) continue;
+        const char *p = c + strlen(ops[o]);
+        if (isalnum((unsigned char)*p) || *p == '_') continue; /* part of a longer word */
+        while (*p && isspace((unsigned char)*p)) p++;
+        size_t n = 0;
+        while (p[n] && (isalnum((unsigned char)p[n]) || p[n] == '_') && n + 1 < outsz) {
+            out[n] = p[n];
+            n++;
+        }
+        out[n] = '\0';
+        return n > 0;
+    }
+    return 0;
+}
+
+/* Scan a routine block for a direct "movi baklstN,b4" (stops at rets/retp or a
+   capped line count). Returns N, or -1. */
+static int bdd_block_baklst(const char *path, const char *label, int max_lines)
+{
+    FILE *f;
+    char line[512];
+    int in = 0, lines = 0;
+    if (!path || !label || !label[0]) return -1;
+    f = fopen(path, "r");
+    if (!f) return -1;
+    while (fgets(line, sizeof line, f)) {
+        if (!in) {
+            if (bdd_line_is_label(line, label)) in = 1;
+            continue;
+        }
+        if (++lines > max_lines) break;
+        int n = bdd_extract_baklst_b4(line);
+        if (n > 0) { fclose(f); return n; }
+        if (bdd_bgnd_asm_active_directive(line, "rets") ||
+            bdd_bgnd_asm_active_directive(line, "retp"))
+            break;
+    }
+    fclose(f);
+    return -1;
+}
+
+/* Find the baklst plane the proc inserts its object into: a direct "movi
+   baklstN,b4" in the proc body, else one inside a helper the proc calls
+   (callr/calla/jsrp), e.g. get_bat_obj / make_a_mad_tree. Returns N or -1. */
 static int bdd_proc_insert_baklst(const char *path, const char *proc,
                                   char siblings[][48], int sibling_count)
 {
     FILE *f;
     char line[512];
     int in = 0, lines = 0;
+    char helpers[8][48];
+    int nh = 0;
     if (!path || !proc || !proc[0]) return -1;
     f = fopen(path, "r");
     if (!f) return -1;
@@ -1719,8 +1770,21 @@ static int bdd_proc_insert_baklst(const char *path, const char *proc,
             break;
         int n = bdd_extract_baklst_b4(line);
         if (n > 0) { fclose(f); return n; }
+        char tok[48];
+        if (nh < (int)(sizeof helpers / sizeof helpers[0]) &&
+            bdd_extract_call_target(line, tok, sizeof tok)) {
+            int dup = 0;
+            for (int j = 0; j < nh; j++)
+                if (strcasecmp(helpers[j], tok) == 0) { dup = 1; break; }
+            if (!dup) snprintf(helpers[nh++], 48, "%s", tok);
+        }
     }
     fclose(f);
+    /* Follow the called helpers one level. */
+    for (int i = 0; i < nh; i++) {
+        int n = bdd_block_baklst(path, helpers[i], 40);
+        if (n > 0) return n;
+    }
     return -1;
 }
 
