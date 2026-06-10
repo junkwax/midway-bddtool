@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-06-10
+
+### Changed
+- Runtime preview now derives stage parallax offsets, scroll rates, background
+  draw order, floor sprite labels, camera start, and scroll limits directly
+  from MK2's `BGND.ASM` (`<stage>_mod`, `<stage>_scroll`, `dlists_<stage>`,
+  `<stage>_floor_info`) instead of transcribed per-stage constant tables. The
+  data is parsed once per stage and cached. Forest, Tower, and Battle runtime
+  output is unchanged (verified byte-identical against the previous constants
+  via the runtime-preview smoke tests).
+
 ## [1.0.6] - 2026-06-09
 
 ### Added
