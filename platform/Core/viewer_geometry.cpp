@@ -1598,6 +1598,16 @@ static int bdd_movi_a4_coord(const char *line, int *x, int *y)
     return 1;
 }
 
+/* A column-0 "a_*" label marks the start of a proc's frame-sequence data table,
+   i.e. the end of the proc's code -- a hard boundary for the proc-body scans. */
+static int bdd_line_is_anim_table_label(const char *line)
+{
+    if (!line || isspace((unsigned char)line[0]) || line[0] == '.' ||
+        line[0] == ';' || line[0] == '*')
+        return 0;
+    return line[0] == 'a' && line[1] == '_';
+}
+
 /* Collect static spawn coordinates (movi >y:x,a4) from a proc body. */
 static int bdd_proc_positions(const char *path, const char *proc,
                               char siblings[][48], int sibling_count,
@@ -1617,6 +1627,8 @@ static int bdd_proc_positions(const char *path, const char *proc,
         if (++lines > 120) break;
         if (bdd_line_is_any_of(line, siblings, sibling_count, proc))
             break;
+        if (bdd_line_is_anim_table_label(line))
+            break;   /* proc code ends where its a_* data table begins */
         int x = 0, y = 0;
         if (bdd_movi_a4_coord(line, &x, &y) && n < max) {
             xs[n] = x;
@@ -1648,6 +1660,8 @@ static int bdd_proc_velocity(const char *path, const char *proc,
         if (++lines > 60) break;
         if (bdd_line_is_any_of(line, siblings, sibling_count, proc))
             break;
+        if (bdd_line_is_anim_table_label(line))
+            break;   /* proc code ends where its a_* data table begins */
         const char *m = strstr(line, "movi");
         const char *semi = strchr(line, ';');
         if (!m || (semi && semi < m)) continue;
@@ -1768,6 +1782,8 @@ static int bdd_proc_insert_baklst(const char *path, const char *proc,
         if (++lines > 120) break;
         if (bdd_line_is_any_of(line, siblings, sibling_count, proc))
             break;
+        if (bdd_line_is_anim_table_label(line))
+            break;   /* proc code ends where its a_* data table begins */
         int n = bdd_extract_baklst_b4(line);
         if (n > 0) { fclose(f); return n; }
         char tok[48];
