@@ -25,8 +25,11 @@ static void welcome_rel_time(const char *path, char *buf, int bufsz)
     else if (diff < 86400)       snprintf(buf, bufsz, "%ld hours ago", diff/3600);
     else if (diff < 172800)      snprintf(buf, bufsz, "yesterday");
     else if (diff < 30*86400)    snprintf(buf, bufsz, "%ld days ago",  diff/86400);
-    else if (diff < 365*86400)   snprintf(buf, bufsz, "%ld weeks ago", diff/604800);
-    else                         snprintf(buf, bufsz, "%ld months ago",diff/2592000);
+    else if (diff < 365*86400)   snprintf(buf, bufsz, "%ld months ago",diff/2592000);
+    else {
+        long years = diff / (365*86400);
+        snprintf(buf, bufsz, years <= 1 ? "1 year ago" : "%ld years ago", years);
+    }
 }
 
 bool welcome_visible(void)

@@ -564,6 +564,26 @@ static bool runtime_guides_have_any_source_image(void)
     return false;
 }
 
+static bool runtime_guide_is_floor_asset(const RuntimeExtraGuide *e)
+{
+    return e && (lod_text_contains_ci(e->asset, "FL_") ||
+                 lod_text_contains_ci(e->label, "floor"));
+}
+
+static bool runtime_guides_missing_non_floor_source_image(void)
+{
+    tower_runtime_guides_init_once();
+    int count = tower_runtime_guide_count();
+    for (int i = 0; i < count; i++) {
+        RuntimeExtraGuide *e = &g_tower_runtime_guides[i];
+        if (runtime_guide_is_floor_asset(e))
+            continue;
+        if (!img_label_exists_ci(e->asset))
+            return true;
+    }
+    return false;
+}
+
 static int mark_runtime_guide_images_as_lod_refs(void)
 {
     tower_runtime_guides_init_once();
@@ -597,7 +617,7 @@ extern "C" int bg_editor_autoload_lod_assets(void)
     bool old_palette_dirty = g_mk2_palette_sync_dirty;
     int imported = import_runtime_lod_sources_for_active_guides(false);
 
-    if (imported <= 0 && mk2_current_stage_is_battle() && !runtime_guides_have_any_source_image()) {
+    if (mk2_current_stage_is_battle() && runtime_guides_missing_non_floor_source_image()) {
         char battle_img_path[512];
         if (mk2_find_sibling_data_file("BATTLE.IMG", battle_img_path, sizeof battle_img_path)) {
             int start = g_ni;
@@ -615,7 +635,7 @@ extern "C" int bg_editor_autoload_lod_assets(void)
 
     int marked = mark_runtime_guide_images_as_lod_refs();
     int baked = 0;
-    if (imported > 0)
+    if (imported > 0 || runtime_guides_have_any_source_image())
         baked = mk2_bake_runtime_guides_to_bdb(false, false);
 
     if (imported > 0 || baked > 0 || marked > 0) {

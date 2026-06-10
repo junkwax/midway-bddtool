@@ -17,6 +17,8 @@ int runtime_actor_count(void);
 int runtime_actor_total_frame_count(void);
 int runtime_actor_missing_frame_count(void);
 int runtime_actor_name_contains_count(const char *needle);
+bool runtime_actor_info(int actor_index, char *name, size_t namesz,
+                        int *x, int *y, int *screen_space_y);
 void runtime_actor_mark_preview_import_range(int image_base, int palette_base,
                                             int start, int end,
                                             const char *source_label);

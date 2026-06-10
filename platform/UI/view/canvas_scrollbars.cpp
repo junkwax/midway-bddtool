@@ -190,7 +190,7 @@ void draw_canvas_scrollbars(void)
 
     g_canvas_scrollbar_mouse_capture = hover_h || hover_v || s_drag_h || s_drag_v;
 
-    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    ImDrawList *dl = ImGui::GetBackgroundDrawList();
     ImU32 track_col = IM_COL32(25, 27, 34, 210);
     ImU32 track_hover_col = IM_COL32(35, 39, 50, 230);
     ImU32 handle_col = IM_COL32(88, 108, 140, 230);

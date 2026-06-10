@@ -41,6 +41,31 @@ static int runtime_overlay_rounded_div_nearest(int value, int step)
     return -((-value + step / 2) / step);
 }
 
+static bool runtime_extra_text_contains_ci(const char *haystack, const char *needle)
+{
+    if (!haystack || !needle || !needle[0]) return false;
+    size_t nlen = strlen(needle);
+    for (const char *h = haystack; *h; h++) {
+        size_t i = 0;
+        while (i < nlen && h[i]) {
+            unsigned char a = (unsigned char)h[i];
+            unsigned char b = (unsigned char)needle[i];
+            if (a >= 'a' && a <= 'z') a = (unsigned char)(a - 32);
+            if (b >= 'a' && b <= 'z') b = (unsigned char)(b - 32);
+            if (a != b) break;
+            i++;
+        }
+        if (i == nlen) return true;
+    }
+    return false;
+}
+
+static bool runtime_extra_uses_floor_screen_y(const RuntimeExtraGuide *e)
+{
+    return e && (runtime_extra_text_contains_ci(e->asset, "FL_") ||
+                 runtime_extra_text_contains_ci(e->label, "floor"));
+}
+
 #define RectBounds RuntimeOverlayBounds
 #define bounds_reset runtime_overlay_bounds_reset
 #define bounds_add_rect runtime_overlay_bounds_add_rect
@@ -57,8 +82,11 @@ static bool runtime_extra_screen_rect(const RuntimeExtraGuide *e, ImVec2 *p0, Im
         ImVec2 ds = ImGui::GetIO().DisplaySize;
         BddScreenRect viewport;
         bdd_game_view_screen_rect(g_zoom, (int)ds.x, (int)ds.y, &viewport);
+        int screen_y = runtime_extra_uses_floor_screen_y(e)
+                     ? bdd_runtime_floor_screen_y(ry)
+                     : ry - g_game_view_y;
         float sx = (float)viewport.x + ((float)rx - (float)g_scroll_pos * e->scroll) * (float)g_zoom;
-        float sy = (float)viewport.y + ((float)ry - (float)g_game_view_y) * (float)g_zoom;
+        float sy = (float)viewport.y + (float)screen_y * (float)g_zoom;
         *p0 = ImVec2(sx, sy);
         *p1 = ImVec2(sx + (float)rw * (float)g_zoom, sy + (float)rh * (float)g_zoom);
         return true;
@@ -129,7 +157,10 @@ static float runtime_extra_screen_y_for_world(const RuntimeExtraGuide *e, int wo
         ImVec2 ds = ImGui::GetIO().DisplaySize;
         BddScreenRect viewport;
         bdd_game_view_screen_rect(g_zoom, (int)ds.x, (int)ds.y, &viewport);
-        return (float)viewport.y + ((float)world_y - (float)g_game_view_y) * (float)g_zoom;
+        int screen_y = runtime_extra_uses_floor_screen_y(e)
+                     ? bdd_runtime_floor_screen_y(world_y)
+                     : world_y - g_game_view_y;
+        return (float)viewport.y + (float)screen_y * (float)g_zoom;
     }
     return ((float)world_y - (float)g_view_y) * (float)g_zoom;
 }
@@ -232,6 +263,7 @@ void draw_mk2_runtime_extras_overlay(void)
     g_runtime_guide_mouse_capture = false;
     if (!g_runtime_extras_overlay || !g_have_bdb || !mk2_current_stage_has_known_runtime_extras())
         return;
+    if (!g_show_borders) return;
     if (g_preview_mode) return;
     tower_runtime_guides_init_once();
 

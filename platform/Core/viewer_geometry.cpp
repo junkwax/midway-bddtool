@@ -1051,3 +1051,137 @@ void bdd_object_game_origin(int obj_index, int *gx, int *gy)
         if (gy) *gy = g_obj[obj_index].sy;
     }
 }
+
+static int bdd_object_image_label_equals(int obj_index, const char *label)
+{
+    if (obj_index < 0 || obj_index >= g_no || !label)
+        return 0;
+    Img *im = img_find(g_obj[obj_index].ii);
+    return im && im->label[0] && strcasecmp(im->label, label) == 0;
+}
+
+static int bdd_object_image_label_is_any(int obj_index, const char *const *labels, int count)
+{
+    for (int i = 0; i < count; i++)
+        if (bdd_object_image_label_equals(obj_index, labels[i]))
+            return 1;
+    return 0;
+}
+
+static int bdd_object_is_stage_floor(int obj_index)
+{
+    if (bdd_current_stage_is_battle())
+        return bdd_object_image_label_equals(obj_index, "FL_BATTL");
+    if (bdd_current_stage_is_forest())
+        return bdd_object_image_label_equals(obj_index, "FL_FORST");
+    if (bdd_current_stage_is_tower_runtime())
+        return bdd_object_image_label_equals(obj_index, "FL_TOW");
+    return 0;
+}
+
+int bdd_object_uses_runtime_floor_y(int obj_index)
+{
+    return bdd_object_is_stage_floor(obj_index);
+}
+
+int bdd_runtime_floor_screen_y(int floor_y)
+{
+    int start_x = 0;
+    int start_y = 0;
+    if (bdd_get_stage_start_camera(&start_x, &start_y))
+        return floor_y + start_y - g_game_view_y;
+    return floor_y - g_game_view_y;
+}
+
+int bdd_object_game_screen_y(int obj_index, int game_y)
+{
+    if (bdd_object_uses_runtime_floor_y(obj_index))
+        return bdd_runtime_floor_screen_y(game_y);
+    return game_y - g_game_view_y;
+}
+
+/* Draw rank follows the BGND display-list plane order for runtime preview:
+   far background first, floor at its -1/floor_code slot, foreground later. */
+int bdd_object_runtime_draw_rank(int obj_index)
+{
+    int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+    char module_name[64];
+
+    if (obj_index < 0 || obj_index >= g_no)
+        return 1000000;
+
+    if (bdd_current_stage_is_battle()) {
+        static const char *const battle_props[] = {
+            "RUBLE1", "BURN_VDA", "SKULLS", "SKELTS",
+            "ROCK_VDA", "BURN6_VDA", "RUBLE2"
+        };
+        if (bdd_object_module_info(obj_index, module_name, (int)sizeof module_name,
+                                   &mx1, &mx2, &my1, &my2)) {
+            if (strcasecmp(module_name, "BAT7") == 0 || strcasecmp(module_name, "BAT7BMOD") == 0)
+                return 10;
+            if (strcasecmp(module_name, "BAT6") == 0 || strcasecmp(module_name, "BAT6BMOD") == 0)
+                return 20;
+            if (strcasecmp(module_name, "BAT5") == 0 || strcasecmp(module_name, "BAT5BMOD") == 0)
+                return 30;
+            if (strcasecmp(module_name, "BAT4") == 0 || strcasecmp(module_name, "BAT4BMOD") == 0)
+                return 40;
+            if (strcasecmp(module_name, "BAT2") == 0 || strcasecmp(module_name, "BAT2BMOD") == 0)
+                return 50;
+            if (strcasecmp(module_name, "BAT1") == 0 || strcasecmp(module_name, "BAT1BMOD") == 0)
+                return 70;
+        }
+        if (bdd_object_image_label_is_any(obj_index, battle_props,
+                                          (int)(sizeof battle_props / sizeof battle_props[0])))
+            return 50;
+        if (bdd_object_is_stage_floor(obj_index))
+            return 60;
+    }
+
+    if (bdd_current_stage_is_forest()) {
+        if (bdd_object_module_info(obj_index, module_name, (int)sizeof module_name,
+                                   &mx1, &mx2, &my1, &my2)) {
+            if (strcasecmp(module_name, "wood7") == 0 || strcasecmp(module_name, "wood7BMOD") == 0)
+                return 10;
+            if (strcasecmp(module_name, "wood6") == 0 || strcasecmp(module_name, "wood6BMOD") == 0)
+                return 20;
+            if (strcasecmp(module_name, "wood5") == 0 || strcasecmp(module_name, "wood5BMOD") == 0)
+                return 30;
+            if (strcasecmp(module_name, "wood4") == 0 || strcasecmp(module_name, "wood4BMOD") == 0)
+                return 40;
+            if (strcasecmp(module_name, "wood2") == 0 || strcasecmp(module_name, "wood2BMOD") == 0)
+                return 50;
+            if (strcasecmp(module_name, "wood1") == 0 || strcasecmp(module_name, "wood1BMOD") == 0)
+                return 70;
+        }
+        if (bdd_object_is_stage_floor(obj_index))
+            return 60;
+    }
+
+    if (bdd_current_stage_is_tower_runtime()) {
+        static const char *const tower_clouds[] = { "CLOUD1A", "CLOUD1B", "CLOUD1C", "CLOUD1D" };
+        static const char *const tower_monk[] = {
+            "MONKTORSO", "MONK1", "MONK2", "MONK3", "MONK4", "MONK5", "MONK6", "MONK7"
+        };
+        if (bdd_object_module_info(obj_index, module_name, (int)sizeof module_name,
+                                   &mx1, &mx2, &my1, &my2)) {
+            if (strcasecmp(module_name, "PLANE5") == 0 || strcasecmp(module_name, "PLANE5BMOD") == 0)
+                return 30;
+            if (strcasecmp(module_name, "PLANE4") == 0 || strcasecmp(module_name, "PLANE4BMOD") == 0)
+                return 50;
+        }
+        if (bdd_object_image_label_is_any(obj_index, tower_clouds,
+                                          (int)(sizeof tower_clouds / sizeof tower_clouds[0])))
+            return 10;
+        if (bdd_object_is_stage_floor(obj_index))
+            return 40;
+        if (bdd_object_image_label_is_any(obj_index, tower_monk,
+                                          (int)(sizeof tower_monk / sizeof tower_monk[0])))
+            return 45;
+        if (bdd_object_image_label_equals(obj_index, "STATUE2") ||
+            bdd_object_image_label_equals(obj_index, "STATUE1") ||
+            bdd_object_image_label_equals(obj_index, "FLAMEA1"))
+            return 55;
+    }
+
+    return 500 + obj_index;
+}

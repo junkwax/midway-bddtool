@@ -6,12 +6,39 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 
+#include <algorithm>
+#include <vector>
+
+static void bdd_build_object_draw_order(std::vector<int> &order)
+{
+    order.clear();
+    order.reserve((size_t)(g_no > 0 ? g_no : 0));
+    for (int i = 0; i < g_no; i++)
+        order.push_back(i);
+
+    if (!g_runtime_layout_view)
+        return;
+
+    std::stable_sort(order.begin(), order.end(), [](int a, int b) {
+        int ra = bdd_object_runtime_draw_rank(a);
+        int rb = bdd_object_runtime_draw_rank(b);
+        if (ra != rb) return ra < rb;
+        int oa = (a >= 0 && a < g_no) ? g_obj[a].order : a;
+        int ob = (b >= 0 && b < g_no) ? g_obj[b].order : b;
+        if (oa != ob) return oa < ob;
+        return a < b;
+    });
+}
+
 void bdd_world_objects_draw(SDL_Renderer *rend,
                             int view_x, int view_y, int zoom, int ww, int wh,
                             int sel_rect_active, int sel_rx1, int sel_ry1,
                             int sel_rx2, int sel_ry2)
 {
     if (!g_show_objects) return;
+
+    std::vector<int> draw_order;
+    bdd_build_object_draw_order(draw_order);
 
     int cx = 0, cy = 0, gw = ww, gh = wh;
     if (g_game_view) {
@@ -32,7 +59,8 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
             SDL_RenderSetClipRect(rend, &hclip);
             SDL_SetRenderDrawColor(rend, 0, 0, 0, 255);
             SDL_RenderFillRect(rend, &hclip);
-            for (int i = 0; i < g_no; i++) {
+            for (size_t oi = 0; oi < draw_order.size(); oi++) {
+                int i = draw_order[oi];
                 if (g_obj_hidden[i] || runtime_actor_preview_hides_object(i)) continue;
                 Obj *o = &g_obj[i];
                 Img *im = img_find(o->ii);
@@ -80,7 +108,8 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
             SDL_RenderFillRect(rend, &clip_rect);
         }
 
-        for (int i = 0; i < g_no; i++) {
+        for (size_t oi = 0; oi < draw_order.size(); oi++) {
+            int i = draw_order[oi];
             if (g_obj_hidden[i] || runtime_actor_preview_hides_object(i)) continue;
             Obj *o = &g_obj[i];
             Img *im = img_find(o->ii);

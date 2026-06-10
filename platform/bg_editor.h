@@ -72,6 +72,10 @@ int bdd_object_editor_origin(int obj_index, int *ex, int *ey);
 /* Game-preview origin/scroll helpers used by legacy SDL world rendering */
 float bdd_object_game_scroll_factor(int obj_index);
 void bdd_object_game_origin(int obj_index, int *gx, int *gy);
+int bdd_object_runtime_draw_rank(int obj_index);
+int bdd_object_uses_runtime_floor_y(int obj_index);
+int bdd_runtime_floor_screen_y(int floor_y);
+int bdd_object_game_screen_y(int obj_index, int game_y);
 
 typedef struct BddScreenRect {
     int x, y, w, h;

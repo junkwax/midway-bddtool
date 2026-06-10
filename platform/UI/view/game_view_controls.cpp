@@ -126,9 +126,24 @@ void draw_game_view_controls(void)
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Vertical camera offset - pan to show floor or sky");
     
                 ImGui::TextDisabled("Layers:");
-                static const struct { int wx; const char *n; float sf; } lp[] = {
-                    {0x32,"Sky",0.2f},{0x3C,"Mid",0.5f},{0x40,"Floor",1.0f},
-                    {0x41,"Floor+",1.0f},{0x43,"Near FG",1.2f},{0x46,"Front FG",1.5f}
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "MK2 draws background art in planes. Each plane has a scroll rate:\n"
+                        "lower values sit farther back, 1.0x follows the playfield, and\n"
+                        "values above 1.0x move faster as foreground masking art.");
+                static const struct { int wx; const char *n; float sf; const char *help; } lp[] = {
+                    {0x32,"Sky",0.2f,
+                     "Far background or sky plane. It usually scrolls slowly, and some BGND display lists pin the farthest plane at 0.0x."},
+                    {0x3C,"Mid",0.5f,
+                     "Middle background depth. Use it for scenery behind the fighters that should drift slower than the playfield."},
+                    {0x40,"Floor",1.0f,
+                     "Main playfield/floor depth. This tracks the match camera and is where the fighters visually stand."},
+                    {0x41,"Floor+",1.0f,
+                     "Alternate playfield-depth floor plane. It keeps 1.0x motion while separating art for packing or ordering."},
+                    {0x43,"Near FG",1.2f,
+                     "Near foreground. It moves a little faster than the playfield and can mask lower sprites or floor edges."},
+                    {0x46,"Front FG",1.5f,
+                     "Front-most foreground. Use it for close occluders that should sweep fastest across the camera."}
                 };
                 for (int li = 0; li < 6; li++) {
                     bool has = false;
@@ -137,6 +152,8 @@ void draw_game_view_controls(void)
                     if (!has) continue;
                     ImGui::SameLine();
                     ImGui::TextDisabled("%s %.1fx", lp[li].n, lp[li].sf);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s", lp[li].help);
                 }
     
                 /* layer assignment row — shown when objects are selected */
@@ -173,7 +190,8 @@ void draw_game_view_controls(void)
                             }
                             if (is_cur) ImGui::PopStyleColor(3);
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("Assign to %s (parallax %.1fx)", lp[li].n, lp[li].sf);
+                                ImGui::SetTooltip("Assign to %s (parallax %.1fx)\n%s",
+                                                  lp[li].n, lp[li].sf, lp[li].help);
                             if (li < 5) ImGui::SameLine(0, 3);
                         }
                     }

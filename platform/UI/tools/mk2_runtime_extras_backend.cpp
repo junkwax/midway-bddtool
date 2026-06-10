@@ -567,13 +567,15 @@ int mk2_bake_runtime_guides_to_bdb(bool save_undo, bool allow_guide_images)
         if (runtime_guide_existing_object_count(e) >= runtime_guide_occurrence_wanted(i))
             continue;
         int img_i = find_img_by_label_casefold(e->asset);
-        if (img_i < 0 && !tried_lod_import) {
+        if (img_i < 0)
+            img_i = ensure_runtime_floor_composite(e);
+        if (img_i < 0 && !tried_lod_import && !runtime_actor_preview_imports_loaded()) {
             import_runtime_lod_sources_for_active_guides(false);
             tried_lod_import = true;
             img_i = find_img_by_label_casefold(e->asset);
+            if (img_i < 0)
+                img_i = ensure_runtime_floor_composite(e);
         }
-        if (img_i < 0)
-            img_i = ensure_runtime_floor_composite(e);
         if (img_i < 0 && allow_guide_images) img_i = make_runtime_guide_image(e);
         if (img_i < 0 || img_i >= g_ni) continue;
         Img *im = &g_img[img_i];

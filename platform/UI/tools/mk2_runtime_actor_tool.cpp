@@ -55,6 +55,7 @@ struct RuntimeStageActor {
     bool emit_bgnd_code;
     bool sync_group_timing;
     bool multipart_piece;
+    bool screen_space_y;
 };
 static const char *const k_runtime_actor_group_roles[] = {
     "solo",
@@ -209,6 +210,8 @@ static void runtime_actor_copy_bgnd_notes(const RuntimeStageActor *a)
     runtime_actor_appendf(out, sizeof out, "; Runtime actor: %s\n", a->name);
     runtime_actor_appendf(out, sizeof out, "; Pattern: %s, driver: %s, trigger: %s\n", pattern, driver, a->trigger);
     runtime_actor_appendf(out, sizeof out, "; Insert: %s, display scroll: %s, preview scroll %.4f\n", insert_list, scroll_symbol, a->scroll);
+    if (a->screen_space_y)
+        runtime_actor_appendf(out, sizeof out, "; Y is screen-space, matching BGND set_xy_coordinates display-object placement\n");
     if (a->sync_group[0]) runtime_actor_appendf(out, sizeof out, "; Sync group: %s\n", a->sync_group);
     if (a->sync_group_timing) runtime_actor_appendf(out, sizeof out, "; Group timing is phase-locked to group leader\n");
     if (a->multipart_piece)
@@ -493,6 +496,7 @@ static void runtime_actor_init_default(RuntimeStageActor *actor)
     actor->scroll = 1.0f;
     actor->emit_bgnd_code = false;
     actor->part_count = 1;
+    actor->screen_space_y = true;
 }
 
 static const RuntimeStageActor *runtime_actor_group_leader(const RuntimeStageActor *actor)
@@ -736,6 +740,20 @@ int runtime_actor_name_contains_count(const char *needle)
             matches++;
     }
     return matches;
+}
+
+bool runtime_actor_info(int actor_index, char *name, size_t namesz,
+                        int *x, int *y, int *screen_space_y)
+{
+    if (actor_index < 0 || actor_index >= g_runtime_actor_count)
+        return false;
+    const RuntimeStageActor *actor = &g_runtime_actors[actor_index];
+    if (name && namesz > 0)
+        snprintf(name, namesz, "%s", actor->name);
+    if (x) *x = actor->x;
+    if (y) *y = actor->y;
+    if (screen_space_y) *screen_space_y = actor->screen_space_y ? 1 : 0;
+    return true;
 }
 
 static bool runtime_actor_stage_is_forest(void)
@@ -1009,6 +1027,7 @@ static int runtime_actor_add_from_selected_object(void)
     actor.emit_bgnd_code = true;
     actor.sync_group_timing = false;
     actor.multipart_piece = false;
+    actor.screen_space_y = false;
 
     int dst = g_runtime_actor_count++;
     g_runtime_actors[dst] = actor;
@@ -1056,6 +1075,7 @@ static void runtime_actor_replace_anchor_from_selected(RuntimeStageActor *actor)
     actor->scroll = mk2_scroll_factor_for_layer(actor->layer);
     actor->hfl = obj->hfl ? 1 : 0;
     actor->vfl = obj->vfl ? 1 : 0;
+    actor->screen_space_y = false;
     runtime_actor_status("Runtime actor anchor updated from selected object");
 }
 
@@ -1399,6 +1419,7 @@ bool runtime_actor_sidecar_save(void)
         fprintf(f, "      \"parent_actor\": "); json_write_string(f, a->parent_actor); fprintf(f, ",\n");
         fprintf(f, "      \"source_object\": %d,\n", a->source_object);
         fprintf(f, "      \"replace_source\": %s,\n", a->replace_source ? "true" : "false");
+        fprintf(f, "      \"screen_space_y\": %s,\n", a->screen_space_y ? "true" : "false");
         fprintf(f, "      \"x\": %d,\n", a->x);
         fprintf(f, "      \"y\": %d,\n", a->y);
         fprintf(f, "      \"layer\": %d,\n", a->layer);
@@ -1553,6 +1574,7 @@ bool runtime_actor_sidecar_load(void)
         a.part_count = 1;
         a.sync_group_timing = false;
         a.multipart_piece = false;
+        a.screen_space_y = true;
         json_get_string_value(obj, "name", a.name, sizeof a.name);
         json_get_string_value(obj, "trigger", a.trigger, sizeof a.trigger);
         json_get_bool_value(obj, "emit_bgnd_code", &a.emit_bgnd_code);
@@ -1571,6 +1593,11 @@ bool runtime_actor_sidecar_load(void)
         json_get_string_value(obj, "parent_actor", a.parent_actor, sizeof a.parent_actor);
         json_get_int_value(obj, "source_object", &a.source_object);
         json_get_bool_value(obj, "replace_source", &a.replace_source);
+        bool screen_space_y = a.source_object < 0;
+        if (json_get_bool_value(obj, "screen_space_y", &screen_space_y))
+            a.screen_space_y = screen_space_y;
+        else
+            a.screen_space_y = a.source_object < 0;
         json_get_int_value(obj, "x", &a.x);
         json_get_int_value(obj, "y", &a.y);
         json_get_int_value(obj, "layer", &a.layer);
@@ -1662,6 +1689,7 @@ int runtime_actor_import_inferred_level_animations(void)
         snprintf(actor.trigger, sizeof actor.trigger, "autoload");
         actor.source_object = oi;
         actor.replace_source = true;
+        actor.screen_space_y = false;
         actor.x = obj->depth;
         actor.y = obj->sy;
         actor.layer = (obj->wx >> 8) & 0xFF;
@@ -1757,8 +1785,9 @@ void draw_mk2_runtime_actor_overlay(void)
         int draw_x = base_x + a->frame_dx[frame];
         int draw_y = base_y + a->frame_dy[frame];
         if (g_game_view) {
+            int screen_y = a->screen_space_y ? draw_y : (draw_y - g_game_view_y);
             sx = (float)viewport.x + ((float)draw_x - (float)g_scroll_pos * actor_scroll) * (float)g_zoom;
-            sy = (float)viewport.y + ((float)draw_y - (float)g_game_view_y) * (float)g_zoom;
+            sy = (float)viewport.y + (float)screen_y * (float)g_zoom;
             if (sx > viewport.x + viewport.w + 200 || sy > viewport.y + viewport.h + 200 ||
                 sx + im->w * g_zoom < viewport.x - 200 || sy + im->h * g_zoom < viewport.y - 200)
                 continue;
@@ -1789,8 +1818,9 @@ void draw_mk2_runtime_actor_overlay(void)
                 int odraw_y = base_y + a->frame_dy[of];
                 float osx, osy;
                 if (g_game_view) {
+                    int oscreen_y = a->screen_space_y ? odraw_y : (odraw_y - g_game_view_y);
                     osx = (float)viewport.x + ((float)odraw_x - (float)g_scroll_pos * actor_scroll) * (float)g_zoom;
-                    osy = (float)viewport.y + ((float)odraw_y - (float)g_game_view_y) * (float)g_zoom;
+                    osy = (float)viewport.y + (float)oscreen_y * (float)g_zoom;
                 } else {
                     osx = ((float)odraw_x - (float)g_view_x) * (float)g_zoom;
                     osy = ((float)odraw_y - (float)g_view_y) * (float)g_zoom;
@@ -1803,11 +1833,12 @@ void draw_mk2_runtime_actor_overlay(void)
                 ImVec2 ouv1(ohfl ? 0.0f : 1.0f, ovfl ? 0.0f : 1.0f);
                 ImU32 tint = oi == 0 ? IM_COL32(120, 170, 255, 72) : IM_COL32(255, 190, 90, 72);
                 dl->AddImage((ImTextureID)(intptr_t)otex, op0, op1, ouv0, ouv1, tint);
-                dl->AddRect(op0, op1, tint, 0.0f, 0, 1.0f);
+                if (g_show_borders)
+                    dl->AddRect(op0, op1, tint, 0.0f, 0, 1.0f);
             }
         }
         dl->AddImage((ImTextureID)(intptr_t)tex, p0, p1, uv0, uv1, IM_COL32_WHITE);
-        if (g_runtime_actor_labels) {
+        if (g_show_borders && g_runtime_actor_labels) {
             dl->AddRect(p0, p1, IM_COL32(80, 220, 255, 190), 0.0f, 0, 1.5f);
             char label[128];
             if (a->sync_group[0] || a->multipart_piece)
@@ -2112,6 +2143,7 @@ void draw_mk2_runtime_actor_tool(void)
     ImGui::InputInt("Y", &actor->y);
     ImGui::InputInt("Layer", &actor->layer);
     ImGui::InputFloat("Scroll", &actor->scroll, 0.05f, 0.25f, "%.4f");
+    ImGui::Checkbox("Screen-space Y", &actor->screen_space_y);
     if (ImGui::Button("Use Layer Scroll", ImVec2(-1, 0)))
         actor->scroll = mk2_scroll_factor_for_layer(actor->layer);
     ImGui::InputInt("Frame Ticks", &actor->frame_ticks);

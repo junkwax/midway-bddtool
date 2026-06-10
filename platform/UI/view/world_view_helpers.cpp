@@ -131,8 +131,9 @@ int bdd_object_screen_rect(int obj_index, int image_w, int image_h,
     if (g_game_view) {
         float sf = bdd_object_game_scroll_factor(obj_index);
         bdd_object_game_origin(obj_index, &ox, &oy);
+        int screen_y = bdd_object_game_screen_y(obj_index, oy);
         rect.x = rect.clip_x + (ox - (int)(game_scroll * sf)) * zoom;
-        rect.y = rect.clip_y + (oy - g_game_view_y) * zoom;
+        rect.y = rect.clip_y + screen_y * zoom;
     } else {
         bdd_object_editor_origin(obj_index, &ox, &oy);
         rect.x = (ox - view_x) * zoom;
@@ -170,7 +171,7 @@ int bdd_object_screen_snap_rect(int obj_index,
         float sf = bdd_object_game_scroll_factor(obj_index);
         bdd_object_game_origin(obj_index, &ox, &oy);
         ox = ox - (int)(game_scroll * sf);
-        oy = oy - g_game_view_y;
+        oy = bdd_object_game_screen_y(obj_index, oy);
         if (!bg_editor_object_snap_rect_at(obj_index, ox, oy, &x1, &y1, &x2, &y2))
             return 0;
         rect.x = rect.clip_x + x1 * zoom;

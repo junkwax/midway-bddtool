@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-06-09
+
+### Added
+- Hover help for MK2 background layer roles and parallax behavior in Game
+  Preview.
+
+### Fixed
+- Runtime preview floors now project with MK2 floor-code screen-space Y math, so
+  the Living Forest floor aligns with the background art at match start.
+- The Borders toggle now hides runtime guide rectangles and runtime actor
+  boxes/labels while leaving the animated sprites visible.
+- Runtime preview smoke tests now assert floor screen-Y projection without
+  touching ImGui state in headless mode.
+
 ## [1.0.5] - 2026-06-09
 
 ### Added

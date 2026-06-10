@@ -107,8 +107,20 @@ static const RuntimeSmokeModuleProjection *runtime_smoke_expected_modules(int *o
         { "wood6", 281,  0x3a, 0.3125f },
         { "wood7", 378,  0x52, 0.0f    },
     };
+    static const RuntimeSmokeModuleProjection battle[] = {
+        { "BAT1", 0,   0x93, 0.8125f  },
+        { "BAT2", 249, 0x04, 0.5f     },
+        { "BAT4", 222, 0x61, 0.25f    },
+        { "BAT5", 667, 0x40, 0.09375f },
+        { "BAT6", 401, 0x5a, 0.0625f  },
+        { "BAT7", 424, 0x1a, 0.0f     },
+    };
 
     if (out_count) *out_count = 0;
+    if (runtime_smoke_stage_contains("BATTLE")) {
+        if (out_count) *out_count = (int)(sizeof battle / sizeof battle[0]);
+        return battle;
+    }
     if (runtime_smoke_stage_contains("TOWER2") ||
         runtime_smoke_stage_contains("TWGCLOUD")) {
         if (out_count) *out_count = (int)(sizeof tower / sizeof tower[0]);
@@ -289,6 +301,21 @@ static int runtime_smoke_check_floors(const char *path,
             errors++;
             continue;
         }
+
+        bool floor_screen_error = false;
+        {
+            int got_screen_y = bdd_object_game_screen_y(obj_i, game_y);
+            int expected_screen_y = bdd_runtime_floor_screen_y(expected_y);
+            if (got_screen_y != expected_screen_y) {
+                fprintf(stderr,
+                        "runtime-preview-smoke: %s floor %s screen-y mismatch obj=%d got=%d expected=%d\n",
+                        path, e->asset, obj_i, got_screen_y, expected_screen_y);
+                errors++;
+                floor_screen_error = true;
+            }
+        }
+        if (floor_screen_error)
+            continue;
         floor_aligned++;
     }
 
@@ -359,6 +386,87 @@ static int runtime_smoke_check_actors(const char *path,
     return errors;
 }
 
+static int runtime_smoke_check_forest_tree_actors(const char *path)
+{
+    if (!runtime_smoke_stage_contains("FOREST"))
+        return 0;
+
+    struct ExpectedTreeActor {
+        const char *name;
+        int x;
+        int y;
+    };
+    static const ExpectedTreeActor expected[] = {
+        { "forest_tree_face_1", 0x0148, 0x0049 },
+        { "forest_tree_face_2", 0x0270, 0x0049 },
+        { "forest_tree_face_3", 0x0391, 0x0049 },
+    };
+
+    int errors = 0;
+    for (int ei = 0; ei < (int)(sizeof expected / sizeof expected[0]); ei++) {
+        bool found = false;
+        for (int ai = 0; ai < runtime_actor_count(); ai++) {
+            char name[96] = "";
+            int x = 0;
+            int y = 0;
+            int screen_space_y = 0;
+            if (!runtime_actor_info(ai, name, sizeof name, &x, &y, &screen_space_y))
+                continue;
+            if (!cli_equals_ci(name, expected[ei].name))
+                continue;
+            found = true;
+            if (x != expected[ei].x || y != expected[ei].y || !screen_space_y) {
+                fprintf(stderr,
+                        "runtime-preview-smoke: %s forest actor %s placement mismatch got=(%d,%d screen_y=%d) expected=(%d,%d screen_y=1)\n",
+                        path, expected[ei].name,
+                        x, y, screen_space_y,
+                        expected[ei].x, expected[ei].y);
+                errors++;
+            }
+            break;
+        }
+        if (!found) {
+            fprintf(stderr,
+                    "runtime-preview-smoke: %s missing Forest runtime actor %s\n",
+                    path, expected[ei].name);
+            errors++;
+        }
+    }
+    return errors;
+}
+
+static int runtime_smoke_check_battle_props(const char *path)
+{
+    if (!runtime_smoke_stage_contains("BATTLE"))
+        return 0;
+
+    int errors = 0;
+    tower_runtime_guides_init_once();
+    for (int i = 0; i < tower_runtime_guide_count(); i++) {
+        const RuntimeExtraGuide *e = &g_tower_runtime_guides[i];
+        if (cli_contains_ci(e->asset, "FL_") || cli_contains_ci(e->label, "floor"))
+            continue;
+
+        int img_i = find_img_by_label_casefold(e->asset);
+        if (img_i < 0) {
+            fprintf(stderr,
+                    "runtime-preview-smoke: %s missing Battle runtime source image %s\n",
+                    path, e->asset);
+            errors++;
+            continue;
+        }
+
+        int obj_i = runtime_guide_existing_object_for_index(i);
+        if (obj_i < 0) {
+            fprintf(stderr,
+                    "runtime-preview-smoke: %s missing baked Battle runtime prop %s\n",
+                    path, e->asset);
+            errors++;
+        }
+    }
+    return errors;
+}
+
 static int runtime_smoke_check_start_camera(const char *path,
                                             int *out_x, int *out_y)
 {
@@ -407,7 +515,9 @@ static int runtime_preview_smoke_one_stage(const char *path)
     errors += runtime_smoke_check_floors(path, expected_floor,
                                         &floor_guides, &floor_aligned);
     errors += runtime_smoke_check_actors(path, expected_actor, forbidden_actor,
-                                        &actors, &frames, &missing);
+                                         &actors, &frames, &missing);
+    errors += runtime_smoke_check_forest_tree_actors(path);
+    errors += runtime_smoke_check_battle_props(path);
     errors += runtime_smoke_check_module_projection(path, &modules);
     errors += runtime_smoke_check_start_camera(path, &start_x, &start_y);
 
