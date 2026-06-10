@@ -87,11 +87,15 @@ int bdd_mkbgani_sprite_info(const char *label, int *w, int *h,
    (a_*) frame table of MKBGANI sprite labels. */
 #define BDD_STAGE_ACTOR_MAX 24
 #define BDD_STAGE_ACTOR_FRAME_MAX 48
+#define BDD_STAGE_ACTOR_POS_MAX 8
 typedef struct {
     char proc[48];
     char sequence[48];
     int frame_count;
     char frames[BDD_STAGE_ACTOR_FRAME_MAX][32];
+    int pos_count;                 /* static y:x spawn coords found in the proc */
+    int pos_x[BDD_STAGE_ACTOR_POS_MAX];
+    int pos_y[BDD_STAGE_ACTOR_POS_MAX];
 } BddStageActor;
 int bdd_stage_runtime_actors(BddStageActor *out, int max_actors);
 

@@ -1556,6 +1556,68 @@ static int bdd_parse_anim_sequence(const char *path, const char *seq_label,
     return n;
 }
 
+/* Decode a "movi >YYYYXXXX,a4" spawn coordinate. set_xy_coordinates reads a4
+   as y:x (high word = Y/oypos, low word = X/oxpos, both signed 16-bit). */
+static int bdd_movi_a4_coord(const char *line, int *x, int *y)
+{
+    const char *m = strstr(line, "movi");
+    const char *semi = strchr(line, ';');
+    const char *op, *reg;
+    char *end = NULL;
+    long v;
+    int xx, yy;
+    if (!m || (semi && semi < m)) return 0;
+    op = m + 4;
+    while (*op && isspace((unsigned char)*op)) op++;
+    if (*op != '>') return 0;                 /* immediate hex only */
+    v = strtol(op + 1, &end, 16);
+    if (end == op + 1) return 0;
+    while (*end && *end != ',') end++;
+    if (*end != ',') return 0;
+    reg = end + 1;
+    while (*reg && isspace((unsigned char)*reg)) reg++;
+    if (!(reg[0] == 'a' && reg[1] == '4' &&
+          !(isalnum((unsigned char)reg[2]) || reg[2] == '_')))
+        return 0;                             /* must target a4 */
+    yy = (int)((v >> 16) & 0xFFFF);
+    xx = (int)(v & 0xFFFF);
+    if (xx > 32767) xx -= 65536;
+    if (yy > 32767) yy -= 65536;
+    *x = xx;
+    *y = yy;
+    return 1;
+}
+
+/* Collect static spawn coordinates (movi >y:x,a4) from a proc body. */
+static int bdd_proc_positions(const char *path, const char *proc,
+                              char siblings[][48], int sibling_count,
+                              int *xs, int *ys, int max)
+{
+    FILE *f;
+    char line[512];
+    int in = 0, lines = 0, n = 0;
+    if (!path || !proc || !proc[0]) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in) {
+            if (bdd_line_is_label(line, proc)) in = 1;
+            continue;
+        }
+        if (++lines > 120) break;
+        if (bdd_line_is_any_of(line, siblings, sibling_count, proc))
+            break;
+        int x = 0, y = 0;
+        if (bdd_movi_a4_coord(line, &x, &y) && n < max) {
+            xs[n] = x;
+            ys[n] = y;
+            n++;
+        }
+    }
+    fclose(f);
+    return n;
+}
+
 /* Public: derive the loaded stage's background animation actors from BGND.ASM:
    each calla pid_bani proc that drives an a_* frame sequence. */
 int bdd_stage_runtime_actors(BddStageActor *out, int max_actors)
@@ -1579,6 +1641,10 @@ int bdd_stage_runtime_actors(BddStageActor *out, int max_actors)
         out[n].frame_count = bdd_parse_anim_sequence(table->source_path, seq,
                                                      out[n].frames,
                                                      BDD_STAGE_ACTOR_FRAME_MAX);
+        out[n].pos_count = bdd_proc_positions(table->source_path, procs[i],
+                                              procs, np,
+                                              out[n].pos_x, out[n].pos_y,
+                                              BDD_STAGE_ACTOR_POS_MAX);
         n++;
     }
     return n;
