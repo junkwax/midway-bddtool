@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-06-10
+
+### Changed
+- The editor runtime-extras floor guide now sources its sprite label, screen-Y,
+  and height from the loaded stage's vanilla `<stage>_floor_info` (BGND.ASM)
+  instead of the hardcoded `g_*_runtime_guide_defaults` literals. Values match
+  the prior constants exactly for Forest/Tower/Battle, so there is no behaviour
+  change -- the floor geometry is simply no longer hardcoded.
+
 ## [1.0.8] - 2026-06-10
 
 ### Added
