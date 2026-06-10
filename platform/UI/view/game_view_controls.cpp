@@ -53,16 +53,22 @@ void draw_game_view_controls(void)
             if (g_game_view_y < wy_min)     g_game_view_y = wy_min;
             if (g_game_view_y > scroll_y_max) g_game_view_y = scroll_y_max;
     
-            /* Controls panel sits bottom-center, just above the Play/Bounce
-               transport bar (which is centered under the game viewport). */
+            /* Controls panel sits bottom-center under the game viewport. */
             ImVec2 ds = ImGui::GetIO().DisplaySize;
             BddScreenRect vp;
             bdd_game_view_screen_rect(g_zoom, (int)ds.x, (int)ds.y, &vp);
             float anchor_y = (float)(vp.y + vp.h + 6);        /* reserved space below viewport */
-            if (anchor_y > ds.y - 88.0f) anchor_y = ds.y - 88.0f;
+            float max_anchor_y = ds.y - 136.0f;
+            float panel_w = ds.x - 48.0f;
+            if (panel_w > 660.0f) panel_w = 660.0f;
+            if (panel_w < 420.0f) panel_w = 420.0f;
+            if (anchor_y > max_anchor_y)
+                anchor_y = max_anchor_y;
+            if (anchor_y < (float)bg_editor_canvas_top_px())
+                anchor_y = (float)bg_editor_canvas_top_px();
             ImGui::SetNextWindowPos(ImVec2(ds.x * 0.5f, anchor_y),
                                     ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-            ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Always);  /* height auto */
+            ImGui::SetNextWindowSize(ImVec2(panel_w, 0), ImGuiCond_Always);  /* height auto */
             ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f,0.08f,0.12f,0.92f));
             if (ImGui::Begin("##gameview", NULL, ImGuiWindowFlags_NoTitleBar
                              | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove
@@ -85,6 +91,12 @@ void draw_game_view_controls(void)
                     ImGui::PopStyleColor();
                     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Auto-scroll (ping-pong)");
                 }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Start")) {
+                    route_to_game_preview_screen(true, false);
+                    s_gv_play = false;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset to the BGND match-start camera");
                 ImGui::SameLine();
                 if (ImGui::SmallButton("|<")) { g_scroll_pos = wx_min;    s_gv_play = false; } ImGui::SameLine();
                 if (ImGui::SmallButton("<<")) { g_scroll_pos -= 50;       s_gv_play = false; } ImGui::SameLine();
@@ -140,7 +152,6 @@ void draw_game_view_controls(void)
                         ImGui::Separator();
                         ImGui::TextColored(ImVec4(1.0f,0.85f,0.4f,1.0f),
                                            "Layer  (%d selected):", sel_count);
-                        ImGui::SameLine();
                         for (int li = 0; li < 6; li++) {
                             bool is_cur = (cur_layer == lp[li].wx);
                             if (is_cur) {

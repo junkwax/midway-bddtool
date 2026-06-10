@@ -59,6 +59,10 @@ void bdd_get_game_preview_bounds(int *wx_min, int *wx_max, int *wy_min, int *wy_
 /* Center the game-preview camera within the current stage-art bounds */
 void bdd_center_game_preview_camera(void);
 
+/* Read and apply the MK2 stage's match-load camera when available; falls back to centering. */
+int bdd_get_stage_start_camera(int *camera_x, int *camera_y);
+void bdd_reset_game_preview_camera(void);
+
 /* Map one object from BDB source coordinates into its first-fit module-local origin */
 int bdd_object_runtime_origin(int obj_index, int *rx, int *ry);
 

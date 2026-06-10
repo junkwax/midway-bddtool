@@ -1,6 +1,7 @@
 #include "Core/viewer_stage_io.h"
 
 #include "bg_editor.h"
+#include "bg_editor_globals.h"
 #include "Core/editor_project_globals.h"
 #include "Core/editor_project_storage.h"
 #include "Core/image_lookup.h"
@@ -28,7 +29,7 @@ void bdd_viewer_enter_edit_layout_after_bdb_load(void)
     g_game_view = 0;
     g_split_view = 0;
     g_runtime_layout_view = 1;
-    bdd_center_game_preview_camera();
+    bdd_reset_game_preview_camera();
 }
 
 void bdd_viewer_make_ext(const char *src, const char *ext, char *out, size_t outsz)
@@ -77,6 +78,7 @@ int bdd_viewer_load_stage_for_path(const char *arg, char *bdb_path, size_t bdb_s
     if (!arg || !arg[0]) return 0;
 
     editor_project_reset_loaded_stage();
+    runtime_guides_clear_session();
 
     alen = strlen(arg);
     ext = (alen >= 4) ? (arg + alen - 4) : "";

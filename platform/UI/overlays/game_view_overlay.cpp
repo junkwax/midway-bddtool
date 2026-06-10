@@ -93,8 +93,7 @@ static int game_preview_object_bounds_at_source(int obj_idx, int source_x, int s
     ox += source_x - cur_x;
     oy += source_y - cur_y;
 
-    int layer = (g_obj[obj_idx].wx >> 8) & 0xFF;
-    float scroll = gv_scroll_factor(layer);
+    float scroll = bdd_object_game_scroll_factor(obj_idx);
     int px = ox - (int)(g_scroll_pos * scroll);
     int py = oy - g_game_view_y;
 
@@ -235,7 +234,7 @@ static void export_game_frame_png(int frame_n)
                             ? g_pals[im->pal_idx] : NULL;
         if (!pal) continue;
         int base_x = o->depth, base_y = o->sy;
-        float f  = gv_scroll_factor((o->wx >> 8) & 0xFF);
+        float f  = bdd_object_game_scroll_factor(i);
         gv_object_origin(i, &base_x, &base_y);
         int   ox = base_x - (int)(g_scroll_pos * f);
         int   oy = base_y - g_game_view_y;
@@ -352,7 +351,7 @@ void draw_game_view_overlay(void)
             Img *im = img_find(o->ii);
             if (!im) continue;
             int ox = o->depth, oy = o->sy;
-            float f  = gv_scroll_factor((o->wx >> 8) & 0xFF);
+            float f  = bdd_object_game_scroll_factor(i);
             gv_object_origin(i, &ox, &oy);
             int local_x = ox - (int)(g_scroll_pos * f);
             int local_y = oy - g_game_view_y;
@@ -655,13 +654,18 @@ void draw_game_view_overlay(void)
 
     ImGui::End();
 
+    if (!g_preview_mode)
+        return;
+
     /* ---- transport bar: small floating window below the game viewport ---- */
     {
         float bar_w = 500.0f;
         float bar_x = gx + (gw - bar_w) * 0.5f;
         float bar_y = gy + gh + 74.0f;
         ImVec2 ds = ImGui::GetIO().DisplaySize;
-        if (bar_y > ds.y - 58.0f) bar_y = ds.y - 58.0f;
+        float max_bar_y = ds.y - 58.0f;
+        if (bar_y > max_bar_y && max_bar_y >= gy + gh + 4.0f)
+            bar_y = max_bar_y;
         ImGui::SetNextWindowPos(ImVec2(bar_x, bar_y), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(bar_w, 0), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.82f);

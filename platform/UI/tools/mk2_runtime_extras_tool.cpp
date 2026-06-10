@@ -15,39 +15,45 @@
 #define strcasecmp mk2_runtime_strcasecmp
 static bool mk2_current_stage_is_tower2(void)
 {
-    if (g_name[0] && strcasecmp(g_name, "TOWER2") == 0) return true;
-    if (g_stage_internal_name[0] && strcasecmp(g_stage_internal_name, "TOWER2") == 0) return true;
-    return strstr(g_bdb_path, "TOWER2") || strstr(g_bdb_path, "tower2") ||
-           strstr(g_bdd_path, "TOWER2") || strstr(g_bdd_path, "tower2");
+    if (g_name[0]) return strcasecmp(g_name, "TOWER2") == 0;
+    if (g_bdb_path[0] || g_bdd_path[0])
+        return strstr(g_bdb_path, "TOWER2") || strstr(g_bdb_path, "tower2") ||
+               strstr(g_bdd_path, "TOWER2") || strstr(g_bdd_path, "tower2");
+    return g_stage_internal_name[0] && strcasecmp(g_stage_internal_name, "TOWER2") == 0;
 }
 
 bool mk2_current_stage_is_battle(void)
 {
-    if (g_name[0] && strcasecmp(g_name, "BATTLE") == 0) return true;
-    if (g_stage_internal_name[0] && strcasecmp(g_stage_internal_name, "BATTLE") == 0) return true;
-    return strstr(g_bdb_path, "BATTLE") || strstr(g_bdb_path, "battle") ||
-           strstr(g_bdd_path, "BATTLE") || strstr(g_bdd_path, "battle");
+    if (g_name[0]) return strcasecmp(g_name, "BATTLE") == 0;
+    if (g_bdb_path[0] || g_bdd_path[0])
+        return strstr(g_bdb_path, "BATTLE") || strstr(g_bdb_path, "battle") ||
+               strstr(g_bdd_path, "BATTLE") || strstr(g_bdd_path, "battle");
+    return g_stage_internal_name[0] && strcasecmp(g_stage_internal_name, "BATTLE") == 0;
 }
 
 static bool mk2_current_stage_is_forest(void)
 {
-    if (g_name[0] && (strcasecmp(g_name, "FOREST") == 0 || strcasecmp(g_name, "FOREST2") == 0)) return true;
-    if (g_stage_internal_name[0] &&
-        (strcasecmp(g_stage_internal_name, "FOREST") == 0 || strcasecmp(g_stage_internal_name, "FOREST2") == 0))
-        return true;
-    return strstr(g_bdb_path, "FOREST") || strstr(g_bdb_path, "forest") ||
-           strstr(g_bdd_path, "FOREST") || strstr(g_bdd_path, "forest");
+    if (g_name[0])
+        return strcasecmp(g_name, "FOREST") == 0 || strcasecmp(g_name, "FOREST2") == 0;
+    if (g_bdb_path[0] || g_bdd_path[0])
+        return strstr(g_bdb_path, "FOREST") || strstr(g_bdb_path, "forest") ||
+               strstr(g_bdd_path, "FOREST") || strstr(g_bdd_path, "forest");
+    return g_stage_internal_name[0] &&
+           (strcasecmp(g_stage_internal_name, "FOREST") == 0 ||
+            strcasecmp(g_stage_internal_name, "FOREST2") == 0);
 }
 
 static bool mk2_current_stage_looks_like_tower_runtime(void)
 {
     if (mk2_current_stage_is_tower2()) return true;
-    if (g_name[0] && (strcasecmp(g_name, "TWGCLOUD") == 0 || strcasecmp(g_name, "TWGCLOUDS") == 0)) return true;
-    if (g_stage_internal_name[0] &&
-        (strcasecmp(g_stage_internal_name, "TWGCLOUD") == 0 || strcasecmp(g_stage_internal_name, "TWGCLOUDS") == 0))
-        return true;
-    return strstr(g_bdb_path, "TWGCLOUD") || strstr(g_bdb_path, "twgcloud") ||
-           strstr(g_bdd_path, "TWGCLOUD") || strstr(g_bdd_path, "twgcloud");
+    if (g_name[0])
+        return strcasecmp(g_name, "TWGCLOUD") == 0 || strcasecmp(g_name, "TWGCLOUDS") == 0;
+    if (g_bdb_path[0] || g_bdd_path[0])
+        return strstr(g_bdb_path, "TWGCLOUD") || strstr(g_bdb_path, "twgcloud") ||
+               strstr(g_bdd_path, "TWGCLOUD") || strstr(g_bdd_path, "twgcloud");
+    return g_stage_internal_name[0] &&
+           (strcasecmp(g_stage_internal_name, "TWGCLOUD") == 0 ||
+            strcasecmp(g_stage_internal_name, "TWGCLOUDS") == 0);
 }
 
 static int mk2_runtime_suggested_preset_for_stage(void)
@@ -79,14 +85,14 @@ const RuntimeExtraGuide g_tower_runtime_guide_defaults[] = {
     { "FlameA1", "Flame R", "MK6MIL.LOD", 822, -5, 36, 48, 0.75f, 0x46, 1, IM_COL32(255, 90, 40, 135) },
     { "cloud1a", "Cloud row 7", "MK6MIL.LOD", 410, 42, 370, 145, 0.625f, 0x32, 0, IM_COL32(140, 175, 220, 90) },
     { "cloud1a", "Cloud row 8", "MK6MIL.LOD", 458, 0, 370, 145, 0.625f, 0x32, 0, IM_COL32(150, 185, 235, 90) },
-    { "FL_TOW", "FL_TOW floor", "MK7MIL.LOD", 0, 181, 664, 75, 1.0f, 0x40, 0, IM_COL32(110, 210, 125, 95) },
+    { "FL_TOW", "FL_TOW floor", "MK7MIL.LOD", 0, 181, 1200, 75, 1.0f, 0x40, 0, IM_COL32(110, 210, 125, 95) },
     { "monktorso", "Big monk", "MK6MIL.LOD", 536, 72, 130, 160, 0.625f, 0x3C, 0, IM_COL32(185, 135, 230, 95) },
 };
 const int g_tower_runtime_guide_defaults_count =
     (int)(sizeof(g_tower_runtime_guide_defaults) / sizeof(g_tower_runtime_guide_defaults[0]));
 
 const RuntimeExtraGuide g_battle_runtime_guide_defaults[] = {
-    { "FL_BATTL", "FL_BATTL floor", "MK7MIL.LOD", 0, 210, 664, 45, 1.0f, 0x40, 0, IM_COL32(110, 210, 125, 95) },
+    { "FL_BATTL", "FL_BATTL floor", "MK7MIL.LOD", 0, 210, 1283, 45, 1.0f, 0x40, 0, IM_COL32(110, 210, 125, 95) },
     { "RUBLE1", "Rubble pile L", "BATTLE.IMG / MK7MIL.LOD", 92, 108, 116, 83, 0.5f, 0x43, 0, IM_COL32(190, 155, 110, 115) },
     { "BURN_vda", "Burning debris", "BATTLE.IMG / MK7MIL.LOD", 260, 112, 91, 64, 0.5f, 0x43, 0, IM_COL32(255, 110, 55, 130) },
     { "skulls", "Skull pile", "BATTLE.IMG / MK7MIL.LOD", 390, 112, 102, 59, 0.5f, 0x43, 0, IM_COL32(220, 210, 180, 115) },
@@ -99,7 +105,7 @@ const int g_battle_runtime_guide_defaults_count =
     (int)(sizeof(g_battle_runtime_guide_defaults) / sizeof(g_battle_runtime_guide_defaults[0]));
 
 const RuntimeExtraGuide g_forest_runtime_guide_defaults[] = {
-    { "FL_FORST", "FL_FORST floor", "MK7MIL.LOD", 0, 0xD7, 664, 39, 1.0f, 0x40, 0, IM_COL32(110, 210, 125, 95) },
+    { "FL_FORST", "FL_FORST floor", "MK7MIL.LOD", 0, 0xD7, 1279, 39, 1.0f, 0x40, 0, IM_COL32(110, 210, 125, 95) },
 };
 const int g_forest_runtime_guide_defaults_count =
     (int)(sizeof(g_forest_runtime_guide_defaults) / sizeof(g_forest_runtime_guide_defaults[0]));
@@ -240,34 +246,6 @@ static bool mk2_try_root_data_file(const char *root, const char *filename, char 
     return mk2_try_data_file(data_dir, filename, out, outsz);
 }
 
-static bool mk2_derive_workplace_root(const char *path, char *out, size_t outsz)
-{
-    if (!path || !path[0] || !out || outsz == 0) return false;
-    char clean[512];
-    snprintf(clean, sizeof clean, "%s", path);
-    for (char *p = clean; *p; p++)
-        if (*p == '/') *p = '\\';
-    const char *needle = "\\Workplace\\";
-    char *hit = strstr(clean, needle);
-    if (!hit) return false;
-    size_t n = (size_t)(hit - clean) + strlen("\\Workplace");
-    if (n >= outsz) n = outsz - 1;
-    memcpy(out, clean, n);
-    out[n] = '\0';
-    return out[0] != '\0';
-}
-
-static bool mk2_try_workplace_data_file(const char *workplace,
-                                        const char *relative_root,
-                                        const char *filename,
-                                        char *out,
-                                        size_t outsz)
-{
-    char root[512];
-    path_join(root, sizeof root, workplace, relative_root);
-    return mk2_try_root_data_file(root, filename, out, outsz);
-}
-
 bool mk2_find_sibling_data_file(const char *filename, char *out, size_t outsz)
 {
     if (!filename || !out || outsz == 0) return false;
@@ -282,16 +260,6 @@ bool mk2_find_sibling_data_file(const char *filename, char *out, size_t outsz)
 
     if (mk2_try_root_data_file(g_stage_mk2_root, filename, out, outsz))
         return true;
-
-    char workspace[512];
-    if (base_path && mk2_derive_workplace_root(base_path, workspace, sizeof workspace)) {
-        if (mk2_try_workplace_data_file(workspace, "mk2-readonly\\mk2-main", filename, out, outsz))
-            return true;
-        if (mk2_try_workplace_data_file(workspace, "mk2-main", filename, out, outsz))
-            return true;
-        if (mk2_try_workplace_data_file(workspace, "mk2-rebuild-main", filename, out, outsz))
-            return true;
-    }
 
     out[0] = '\0';
     return false;

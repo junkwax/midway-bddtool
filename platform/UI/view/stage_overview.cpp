@@ -1,3 +1,4 @@
+#include "bg_editor.h"
 #include "Core/editor_project_globals.h"
 #include "Core/image_lookup.h"
 #include "UI/sdl/sdl_context.h"
@@ -8,6 +9,7 @@
 #include <cstring>
 #include <cstdint>
 #include <cstdlib>
+#include <climits>
 
 static SDL_Texture *g_ov_tex = NULL;
 static bool g_ov_open = false;
@@ -34,20 +36,38 @@ static void ov_render(void)
         return;
     }
 
-    /* Canvas size: the stage's declared world size, expanded to fit any object
-       that extends past it. */
+    /* Canvas size: source render uses the declared world size. Runtime render
+       uses the same projected bounds as the editor canvas. */
     int world_w = 0, world_h = 0;
     if (g_bdb_header[0]) {
         char nm[64]; int d = 0, m = 0, p = 0, o = 0;
         sscanf(g_bdb_header, "%63s %d %d %d %d %d %d", nm, &world_w, &world_h, &d, &m, &p, &o);
     }
-    int W = world_w, H = world_h;
-    for (int i = 0; i < g_no; i++) {
-        Img *im = img_find(g_obj[i].ii);
-        if (!im) continue;
-        if (g_obj[i].depth + im->w > W) W = g_obj[i].depth + im->w;
-        if (g_obj[i].sy    + im->h > H) H = g_obj[i].sy    + im->h;
+    int wx_min = 0;
+    int wy_min = 0;
+    int wx_max = world_w;
+    int wy_max = world_h;
+    if (g_runtime_layout_view) {
+        bdd_get_editor_layout_bounds(&wx_min, &wx_max, &wy_min, &wy_max);
+    } else {
+        int bx_min = 0, bx_max = 0, by_min = 0, by_max = 0;
+        bdd_get_world_bounds(&bx_min, &bx_max, &by_min, &by_max);
+        if (bx_min != INT_MAX && bx_max != INT_MIN && by_min != INT_MAX && by_max != INT_MIN) {
+            if (bx_min < wx_min) wx_min = bx_min;
+            if (by_min < wy_min) wy_min = by_min;
+            if (bx_max > wx_max) wx_max = bx_max;
+            if (by_max > wy_max) wy_max = by_max;
+        }
     }
+    if (wx_min == INT_MAX || wx_max == INT_MIN || wy_min == INT_MAX || wy_max == INT_MIN ||
+        wx_max <= wx_min || wy_max <= wy_min) {
+        wx_min = 0;
+        wy_min = 0;
+        wx_max = world_w > 0 ? world_w : 1;
+        wy_max = world_h > 0 ? world_h : 1;
+    }
+    int W = wx_max - wx_min;
+    int H = wy_max - wy_min;
     if (W < 1) W = 1;
     if (H < 1) H = 1;
     if (W > 16384) W = 16384;
@@ -65,6 +85,10 @@ static void ov_render(void)
         int pal_idx = g_obj[i].fl;
         const Uint32 *pal = (pal_idx >= 0 && pal_idx < g_n_pals) ? g_pals[pal_idx] : NULL;
         int ox = g_obj[i].depth, oy = g_obj[i].sy;
+        if (g_runtime_layout_view)
+            bdd_object_editor_origin(i, &ox, &oy);
+        ox -= wx_min;
+        oy -= wy_min;
         int hfl = g_obj[i].hfl, vfl = g_obj[i].vfl;
         for (int yy = 0; yy < im->h; yy++) {
             int dy = oy + yy;

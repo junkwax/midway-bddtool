@@ -1,4 +1,5 @@
 #include "UI/panels/DocumentTabsPanel.h"
+#include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/editor_commands.h"
 
@@ -43,7 +44,6 @@ void doc_save(int idx)
 void doc_restore(int idx)
 {
     Document *d = &g_docs[idx];
-    int object_cap = editor_project_object_capacity();
     if (!d->loaded)
         return;
     project_snapshot_restore_current(&d->snapshot, true);
@@ -54,6 +54,11 @@ void doc_restore(int idx)
     g_need_rebuild = 1;
     g_hl_obj = -1;
     editor_project_clear_selection();
+    runtime_guides_clear_session();
+    bg_editor_autoload_lod_assets();
+    runtime_actor_autoload_for_stage();
+    g_dirty = d->dirty;
+    g_need_rebuild = 1;
 }
 
 void doc_add(void)

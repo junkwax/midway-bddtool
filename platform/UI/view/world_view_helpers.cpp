@@ -45,7 +45,7 @@ void bdd_game_view_screen_rect(int zoom, int window_w, int window_h,
         rect.h = 254 * zoom;
     }
     int canvas_top = bg_editor_canvas_top_px();
-    int bottom_reserved = g_preview_mode ? 0 : 152;
+    int bottom_reserved = g_preview_mode ? 0 : 188;
     int usable_h = window_h - canvas_top - bottom_reserved;
     if (usable_h < rect.h) usable_h = rect.h;
     rect.x = (window_w - rect.w) / 2;

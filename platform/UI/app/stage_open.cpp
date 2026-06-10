@@ -22,7 +22,7 @@ static void enter_edit_layout_after_stage_load(void)
         g_hl_obj = 0;
         g_sel_flags[0] = 1;
     }
-    bdd_center_game_preview_camera();
+    bdd_reset_game_preview_camera();
     g_anim_playing = false;
     g_anim_v_sweep = false;
     bg_editor_autoload_lod_assets();

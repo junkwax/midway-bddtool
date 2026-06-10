@@ -702,13 +702,49 @@ static bool runtime_actor_contains_ci(const char *haystack, const char *needle)
     return false;
 }
 
+int runtime_actor_count(void)
+{
+    return g_runtime_actor_count;
+}
+
+int runtime_actor_total_frame_count(void)
+{
+    int total = 0;
+    for (int i = 0; i < g_runtime_actor_count; i++)
+        total += g_runtime_actors[i].frame_count;
+    return total;
+}
+
+int runtime_actor_missing_frame_count(void)
+{
+    int missing = 0;
+    for (int i = 0; i < g_runtime_actor_count; i++) {
+        const RuntimeStageActor *actor = &g_runtime_actors[i];
+        for (int frame = 0; frame < actor->frame_count; frame++) {
+            if (runtime_actor_frame_image_index(actor, frame) < 0)
+                missing++;
+        }
+    }
+    return missing;
+}
+
+int runtime_actor_name_contains_count(const char *needle)
+{
+    int matches = 0;
+    for (int i = 0; i < g_runtime_actor_count; i++) {
+        if (runtime_actor_contains_ci(g_runtime_actors[i].name, needle))
+            matches++;
+    }
+    return matches;
+}
+
 static bool runtime_actor_stage_is_forest(void)
 {
-    if (runtime_actor_contains_ci(g_name, "FOREST")) return true;
-    if (runtime_actor_contains_ci(g_stage_internal_name, "FOREST")) return true;
-    if (runtime_actor_contains_ci(g_bdb_path, "FOREST")) return true;
-    if (runtime_actor_contains_ci(g_bdd_path, "FOREST")) return true;
-    return false;
+    if (g_name[0]) return runtime_actor_contains_ci(g_name, "FOREST");
+    if (g_bdb_path[0] || g_bdd_path[0])
+        return runtime_actor_contains_ci(g_bdb_path, "FOREST") ||
+               runtime_actor_contains_ci(g_bdd_path, "FOREST");
+    return runtime_actor_contains_ci(g_stage_internal_name, "FOREST");
 }
 
 static int runtime_actor_import_stage_runtime_art(void)
@@ -787,8 +823,15 @@ static int runtime_actor_add_forest_tree_actors(void)
         actor.scroll = 1.0f;
         actor.frame_ticks = 5;
         actor.frame_count = (int)(sizeof seq / sizeof seq[0]);
-        for (int fi = 0; fi < actor.frame_count; fi++)
+        for (int fi = 0; fi < actor.frame_count; fi++) {
+            int frame_img_i;
+            Img *frame_im;
             snprintf(actor.frames[fi], sizeof actor.frames[fi], "%s", seq[fi]);
+            frame_img_i = find_img_by_label_casefold(seq[fi]);
+            frame_im = (frame_img_i >= 0 && frame_img_i < g_ni) ? &g_img[frame_img_i] : NULL;
+            actor.frame_dx[fi] = ax - (frame_im ? img_anim_offset_x(frame_im, actor.hfl) : ax);
+            actor.frame_dy[fi] = ay - (frame_im ? img_anim_offset_y(frame_im, actor.vfl) : ay);
+        }
         g_runtime_actors[g_runtime_actor_count++] = actor;
         added++;
     }
@@ -1268,6 +1311,37 @@ static void runtime_actor_select_source_object(RuntimeStageActor *actor)
     g_view_changed = 1;
 }
 
+static void runtime_actor_project_base(const RuntimeStageActor *actor,
+                                       int *out_x, int *out_y, float *out_scroll)
+{
+    int x = actor ? actor->x : 0;
+    int y = actor ? actor->y : 0;
+    float scroll = actor ? actor->scroll : 1.0f;
+
+    if (actor && actor->source_object >= 0 && actor->source_object < g_no) {
+        const Obj *src = &g_obj[actor->source_object];
+        int src_x = src->depth;
+        int src_y = src->sy;
+        int dx = actor->x - src_x;
+        int dy = actor->y - src_y;
+        if (g_game_view) {
+            bdd_object_game_origin(actor->source_object, &x, &y);
+            scroll = bdd_object_game_scroll_factor(actor->source_object);
+        } else if (g_runtime_layout_view) {
+            bdd_object_editor_origin(actor->source_object, &x, &y);
+        } else {
+            x = src_x;
+            y = src_y;
+        }
+        x += dx;
+        y += dy;
+    }
+
+    if (out_x) *out_x = x;
+    if (out_y) *out_y = y;
+    if (out_scroll) *out_scroll = scroll;
+}
+
 bool runtime_actor_preview_hides_object(int obj_i)
 {
     if (!g_runtime_actor_preview || obj_i < 0) return false;
@@ -1632,6 +1706,15 @@ void runtime_actor_autoload_for_stage(void)
     g_runtime_actor_count = 0;
     g_runtime_actor_selected = -1;
     g_runtime_actor_preview = false;
+    if (!runtime_actor_preview_imports_loaded()) {
+        g_runtime_actor_preview_base_images = -1;
+        g_runtime_actor_preview_base_pals = -1;
+    } else if (g_runtime_actor_preview_base_images < 0 ||
+               g_runtime_actor_preview_base_images >= g_ni ||
+               !runtime_actor_image_is_preview_import(&g_img[g_runtime_actor_preview_base_images])) {
+        g_runtime_actor_preview_base_images = runtime_actor_first_preview_import();
+        g_runtime_actor_preview_base_pals = -1;
+    }
     runtime_actor_import_stage_runtime_art();
     if (!runtime_actor_sidecar_load()) {
         int known = runtime_actor_add_forest_tree_actors();
@@ -1649,8 +1732,12 @@ void draw_mk2_runtime_actor_overlay(void)
     ImDrawList *dl = ImGui::GetBackgroundDrawList();
     ImVec2 ds = ImGui::GetIO().DisplaySize;
     BddScreenRect viewport = {0, 0, (int)ds.x, (int)ds.y};
-    if (g_game_view)
+    if (g_game_view) {
         bdd_game_view_screen_rect(g_zoom, (int)ds.x, (int)ds.y, &viewport);
+        dl->PushClipRect(ImVec2((float)viewport.x, (float)viewport.y),
+                         ImVec2((float)(viewport.x + viewport.w),
+                                (float)(viewport.y + viewport.h)), true);
+    }
 
     for (int i = 0; i < g_runtime_actor_count; i++) {
         RuntimeStageActor *a = &g_runtime_actors[i];
@@ -1663,10 +1750,14 @@ void draw_mk2_runtime_actor_overlay(void)
         if (!tex || !im || im->w <= 0 || im->h <= 0) continue;
 
         float sx, sy;
-        int draw_x = a->x + a->frame_dx[frame];
-        int draw_y = a->y + a->frame_dy[frame];
+        int base_x = 0;
+        int base_y = 0;
+        float actor_scroll = 1.0f;
+        runtime_actor_project_base(a, &base_x, &base_y, &actor_scroll);
+        int draw_x = base_x + a->frame_dx[frame];
+        int draw_y = base_y + a->frame_dy[frame];
         if (g_game_view) {
-            sx = (float)viewport.x + ((float)draw_x - (float)g_scroll_pos * a->scroll) * (float)g_zoom;
+            sx = (float)viewport.x + ((float)draw_x - (float)g_scroll_pos * actor_scroll) * (float)g_zoom;
             sy = (float)viewport.y + ((float)draw_y - (float)g_game_view_y) * (float)g_zoom;
             if (sx > viewport.x + viewport.w + 200 || sy > viewport.y + viewport.h + 200 ||
                 sx + im->w * g_zoom < viewport.x - 200 || sy + im->h * g_zoom < viewport.y - 200)
@@ -1694,11 +1785,11 @@ void draw_mk2_runtime_actor_overlay(void)
                 Img *oim = &g_img[oimg_i];
                 SDL_Texture *otex = editor_texture_at(oimg_i);
                 if (!otex || !oim || oim->w <= 0 || oim->h <= 0) continue;
-                int odraw_x = a->x + a->frame_dx[of];
-                int odraw_y = a->y + a->frame_dy[of];
+                int odraw_x = base_x + a->frame_dx[of];
+                int odraw_y = base_y + a->frame_dy[of];
                 float osx, osy;
                 if (g_game_view) {
-                    osx = (float)viewport.x + ((float)odraw_x - (float)g_scroll_pos * a->scroll) * (float)g_zoom;
+                    osx = (float)viewport.x + ((float)odraw_x - (float)g_scroll_pos * actor_scroll) * (float)g_zoom;
                     osy = (float)viewport.y + ((float)odraw_y - (float)g_game_view_y) * (float)g_zoom;
                 } else {
                     osx = ((float)odraw_x - (float)g_view_x) * (float)g_zoom;
@@ -1732,6 +1823,8 @@ void draw_mk2_runtime_actor_overlay(void)
                         IM_COL32(150, 235, 255, 230), label);
         }
     }
+    if (g_game_view)
+        dl->PopClipRect();
 }
 
 void draw_mk2_runtime_actor_isolation_window(void)

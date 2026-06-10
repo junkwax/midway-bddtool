@@ -16,6 +16,8 @@ static int menu_bar_animation_metadata_count(void)
     int count = 0;
     for (int i = 0; i < g_ni; i++) {
         const Img *im = &g_img[i];
+        if (runtime_actor_image_is_preview_import(im))
+            continue;
         if (im->frm || im->opals || im->pttblnum ||
             im->anix || im->aniy || im->anix2 || im->aniy2 || im->aniz2)
             count++;

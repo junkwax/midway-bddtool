@@ -69,7 +69,7 @@ void fit_game_preview_zoom_to_window(void)
     ImVec2 ds = ImGui::GetIO().DisplaySize;
     int zx = (int)(ds.x * 0.68f / 400.0f);
     float top = (float)bg_editor_canvas_top_px();
-    float avail_y = ds.y - top - 156.0f;
+    float avail_y = ds.y - top - 188.0f;
     if (avail_y < 254.0f) avail_y = 254.0f;
     int zy = (int)(avail_y / 254.0f);
     g_zoom = (zx < zy) ? zx : zy;
@@ -94,7 +94,7 @@ void route_to_game_preview_screen(bool recenter_camera, bool fit_zoom)
 {
     if (!g_have_bdb || g_no <= 0) return;
     if (recenter_camera)
-        bdd_center_game_preview_camera();
+        bdd_reset_game_preview_camera();
     if (fit_zoom)
         fit_game_preview_zoom_to_window();
     focus_editor_on_game_preview_screen();

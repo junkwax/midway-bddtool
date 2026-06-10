@@ -1,5 +1,6 @@
 #include "bg_editor_globals.h"
 #include "undo_manager.h"
+#include "UI/tools/mk2_runtime_actor_tool.h"
 
 #include "imgui.h"
 
@@ -82,6 +83,180 @@ static int make_runtime_guide_image(const RuntimeExtraGuide *e)
             im->pix[y * im->w + x] = (Uint8)((edge || grid) ? 7 : fill);
         }
     }
+    return g_ni - 1;
+}
+
+static int runtime_max_image_idx(void)
+{
+    int max_idx = 0;
+    for (int i = 0; i < g_ni; i++)
+        if (g_img[i].idx > max_idx) max_idx = g_img[i].idx;
+    return max_idx;
+}
+
+static const char *const *runtime_floor_piece_labels(const char *asset, int *out_count)
+{
+    static const char *const tower[] = {
+        "CASFLOOR1", "CASFLOOR2", "CASFLOOR3",
+        "CASFLOOR4", "CASFLOOR5", "CASFLOOR6"
+    };
+    static const char *const forest[] = {
+        "FORFLOR1", "FORFLOR2", "FORFLOR3",
+        "FORFLOR4", "FORFLOR5", "FORFLOR6"
+    };
+    static const char *const battle[] = {
+        "BATGRND1", "BATGRND2", "BATGRND3",
+        "BATGRND4", "BATGRND5", "BATGRND6"
+    };
+    if (out_count) *out_count = 0;
+    if (!asset) return NULL;
+    if (strcasecmp(asset, "FL_TOW") == 0) {
+        if (out_count) *out_count = (int)(sizeof tower / sizeof tower[0]);
+        return tower;
+    }
+    if (strcasecmp(asset, "FL_FORST") == 0) {
+        if (out_count) *out_count = (int)(sizeof forest / sizeof forest[0]);
+        return forest;
+    }
+    if (strcasecmp(asset, "FL_BATTL") == 0) {
+        if (out_count) *out_count = (int)(sizeof battle / sizeof battle[0]);
+        return battle;
+    }
+    return NULL;
+}
+
+static bool runtime_floor_write_composite_pixels(Uint8 *dst, int dst_w, int dst_h,
+                                                 const int *piece_idx, int count)
+{
+    int dst_x = 0;
+    if (!dst || dst_w <= 0 || dst_h <= 0 || !piece_idx || count <= 0)
+        return false;
+
+    memset(dst, 0, (size_t)dst_w * (size_t)dst_h);
+    while (dst_x < dst_w) {
+        bool wrote = false;
+        for (int i = 0; i < count && dst_x < dst_w; i++) {
+            Img *piece = &g_img[piece_idx[i]];
+            int copy_w;
+            if (!piece->pix || piece->w <= 0 || piece->h <= 0)
+                return false;
+            copy_w = piece->w;
+            if (dst_x + copy_w > dst_w)
+                copy_w = dst_w - dst_x;
+            for (int y = 0; y < piece->h && y < dst_h; y++) {
+                memcpy(dst + (size_t)y * (size_t)dst_w + (size_t)dst_x,
+                       piece->pix + (size_t)y * (size_t)piece->w,
+                       (size_t)copy_w);
+            }
+            dst_x += copy_w;
+            wrote = true;
+        }
+        if (!wrote)
+            return false;
+    }
+    return true;
+}
+
+static int runtime_floor_desired_width(const RuntimeExtraGuide *e, int source_w)
+{
+    int desired = source_w;
+    if (e && e->w > desired)
+        desired = e->w;
+    return desired;
+}
+
+static bool runtime_floor_replace_preview_image(int img_i, const RuntimeExtraGuide *e,
+                                                int out_w, int out_h,
+                                                int pal_idx,
+                                                const int *piece_idx, int count)
+{
+    Uint8 *pix;
+    Img *im;
+
+    if (img_i < 0 || img_i >= g_ni || out_w <= 0 || out_h <= 0)
+        return false;
+    im = &g_img[img_i];
+    if (!runtime_actor_image_is_preview_import(im))
+        return false;
+
+    pix = (Uint8 *)malloc((size_t)out_w * (size_t)out_h);
+    if (!pix)
+        return false;
+    if (!runtime_floor_write_composite_pixels(pix, out_w, out_h, piece_idx, count)) {
+        free(pix);
+        return false;
+    }
+
+    free(im->pix);
+    im->pix = pix;
+    im->w = out_w;
+    im->h = out_h;
+    im->pal_idx = pal_idx;
+    im->lod_ref = 1;
+    snprintf(im->label, sizeof im->label, "%.63s", e->asset);
+    runtime_actor_mark_preview_import_range(img_i, -1, img_i, img_i + 1, "MK7MIL.LOD");
+    g_need_rebuild = 1;
+    g_view_changed = 1;
+    return true;
+}
+
+static int ensure_runtime_floor_composite(const RuntimeExtraGuide *e)
+{
+    int count = 0;
+    const char *const *labels = runtime_floor_piece_labels(e ? e->asset : NULL, &count);
+    if (!e || !labels || count <= 0) return -1;
+
+    int piece_idx[8] = {};
+    int total_w = 0;
+    int max_h = 0;
+    int pal_idx = -1;
+    for (int i = 0; i < count; i++) {
+        piece_idx[i] = find_img_by_label_casefold(labels[i]);
+        if (piece_idx[i] < 0 || piece_idx[i] >= g_ni)
+            return -1;
+        Img *piece = &g_img[piece_idx[i]];
+        if (!piece->pix || piece->w <= 0 || piece->h <= 0)
+            return -1;
+        total_w += piece->w;
+        if (piece->h > max_h) max_h = piece->h;
+        if (pal_idx < 0) pal_idx = piece->pal_idx;
+    }
+    if (total_w <= 0 || max_h <= 0 || pal_idx < 0)
+        return -1;
+
+    int out_w = runtime_floor_desired_width(e, total_w);
+    int out_h = max_h;
+    int existing = find_img_by_label_casefold(e->asset);
+    if (existing >= 0) {
+        Img *im = &g_img[existing];
+        if (im->pix && im->w == out_w && im->h == out_h)
+            return existing;
+        if (runtime_floor_replace_preview_image(existing, e, out_w, out_h,
+                                                pal_idx, piece_idx, count))
+            return existing;
+        return existing;
+    }
+
+    Img *im = editor_project_append_image_slot();
+    if (!im) return -1;
+    im->idx = runtime_max_image_idx() + 1;
+    im->w = out_w;
+    im->h = out_h;
+    im->pal_idx = pal_idx;
+    im->lod_ref = 1;
+    snprintf(im->label, sizeof im->label, "%.63s", e->asset);
+    snprintf(im->source, sizeof im->source, "MK7MIL.LOD");
+    im->pix = (Uint8 *)malloc((size_t)im->w * (size_t)im->h);
+    if (!im->pix) {
+        editor_project_delete_image_slot(g_ni - 1);
+        return -1;
+    }
+    if (!runtime_floor_write_composite_pixels(im->pix, im->w, im->h,
+                                              piece_idx, count)) {
+        editor_project_delete_image_slot(g_ni - 1);
+        return -1;
+    }
+    runtime_actor_mark_preview_import_range(g_ni - 1, -1, g_ni - 1, g_ni, "MK7MIL.LOD");
     return g_ni - 1;
 }
 
@@ -397,6 +572,8 @@ int mk2_bake_runtime_guides_to_bdb(bool save_undo, bool allow_guide_images)
             tried_lod_import = true;
             img_i = find_img_by_label_casefold(e->asset);
         }
+        if (img_i < 0)
+            img_i = ensure_runtime_floor_composite(e);
         if (img_i < 0 && allow_guide_images) img_i = make_runtime_guide_image(e);
         if (img_i < 0 || img_i >= g_ni) continue;
         Img *im = &g_img[img_i];

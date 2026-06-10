@@ -12,6 +12,7 @@
 #include "Core/stage_paths.h"
 #include "Core/world_module_utils.h"
 #include "UI/tools/mk2_budget_relief_suggestions.h"
+#include "UI/tools/mk2_runtime_actor_tool.h"
 #include "UI/tools/mk2_stage_config.h"
 #include "UI/tools/mk2_stage_fx_builder_tool.h"
 #include "UI/actions/object_actions.h"
@@ -68,6 +69,7 @@ static int mk2_object_visible_at_camera(int obj_idx, int camera_x, int camera_y,
     if (layer < min_layer || layer > max_layer) return 0;
     Img *im = img_find(o->ii);
     if (!im || im->w <= 0 || im->h <= 0) return 0;
+    if (runtime_actor_image_is_preview_import(im)) return 0;
 
     int ox = o->depth;
     int oy = o->sy;
@@ -152,15 +154,20 @@ void mk2_collect_diag(Mk2Diag *d)
     memset(d, 0, sizeof(*d));
     int world_w = 0, world_h = 0;
     int have_world = get_world_size(&world_w, &world_h);
+    int exportable_images = 0;
+    for (int i = 0; i < g_ni; i++) {
+        if (!runtime_actor_image_is_preview_import(&g_img[i]))
+            exportable_images++;
+    }
 
     if (g_n_pals > MK2_LOAD2_MAX_STAGE_PALETTES)
         d->load2_palette_overflow = g_n_pals - MK2_LOAD2_MAX_STAGE_PALETTES;
     if (g_bdb_num_modules > MK2_LOAD2_MAX_MODULES)
         d->load2_module_overflow = g_bdb_num_modules - MK2_LOAD2_MAX_MODULES;
-    if (g_ni > MK2_LOAD2_MAX_IMAGE_HEADERS)
-        d->load2_image_header_overflow = g_ni - MK2_LOAD2_MAX_IMAGE_HEADERS;
-    if (g_ni > MK2_LOAD2_MAX_BLOCKS)
-        d->load2_block_table_overflow = g_ni - MK2_LOAD2_MAX_BLOCKS;
+    if (exportable_images > MK2_LOAD2_MAX_IMAGE_HEADERS)
+        d->load2_image_header_overflow = exportable_images - MK2_LOAD2_MAX_IMAGE_HEADERS;
+    if (exportable_images > MK2_LOAD2_MAX_BLOCKS)
+        d->load2_block_table_overflow = exportable_images - MK2_LOAD2_MAX_BLOCKS;
 
     for (int m = 0; m < g_bdb_num_modules; m++) {
         int x1, x2, y1, y2;
@@ -174,6 +181,8 @@ void mk2_collect_diag(Mk2Diag *d)
 
     for (int i = 0; i < g_ni; i++) {
         Img *im = &g_img[i];
+        if (runtime_actor_image_is_preview_import(im))
+            continue;
         int bpp = 0;
         int block_bytes = load2_estimated_block_bytes(im, &bpp);
         if (block_bytes > MK2_LOAD2_MAX_DATA_BYTES) d->load2_oversize_images++;
@@ -212,6 +221,8 @@ void mk2_collect_diag(Mk2Diag *d)
             d->missing_images++;
             continue;
         }
+        if (runtime_actor_image_is_preview_import(im))
+            continue;
         if (o->fl < 0 || o->fl >= g_n_pals) d->bad_palettes++;
         if (o->fl >= 16) d->palette_high_nibble++;
         if (o->fl >= 0 && o->fl < palette_cap)

@@ -75,7 +75,7 @@ void bg_editor_render(void)
         if (g_have_bdb && g_bdb_path[0] && strcmp(g_bdb_path, s_last_bdb) != 0) {
             snprintf(s_last_bdb, sizeof s_last_bdb, "%s", g_bdb_path);
             if (g_no > 0)
-                bdd_center_game_preview_camera();
+                bdd_reset_game_preview_camera();
         }
     }
 
