@@ -1294,6 +1294,25 @@ static int bdd_stage_floor_draw_rank(void)
     return table ? table->floor_rank : -1;
 }
 
+/* Public: the loaded stage's floor descriptor from <stage>_floor_info, derived
+   from vanilla BGND.ASM. Returns 1 with label/palette/y/height filled when the
+   stage has a floor, 0 otherwise (e.g. dedpool). Any out pointer may be NULL. */
+int bdd_stage_floor_descriptor(char *label, int label_sz,
+                               char *palette, int palette_sz,
+                               int *floor_y, int *floor_height)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    if (!table || !table->floor_info_valid)
+        return 0;
+    if (label && label_sz > 0)
+        snprintf(label, (size_t)label_sz, "%s", table->floor_label);
+    if (palette && palette_sz > 0)
+        snprintf(palette, (size_t)palette_sz, "%s", table->floor_palette);
+    if (floor_y) *floor_y = table->floor_y;
+    if (floor_height) *floor_height = table->floor_height;
+    return 1;
+}
+
 int bdd_object_runtime_origin(int obj_index, int *rx, int *ry)
 {
     int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;

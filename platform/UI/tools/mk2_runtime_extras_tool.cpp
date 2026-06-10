@@ -1,3 +1,4 @@
+#include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "undo_manager.h"
 
@@ -8,11 +9,14 @@
 
 #ifdef _WIN32
 #define mk2_runtime_strcasecmp _stricmp
+#define mk2_runtime_strncasecmp _strnicmp
 #else
 #include <strings.h>
 #define mk2_runtime_strcasecmp strcasecmp
+#define mk2_runtime_strncasecmp strncasecmp
 #endif
 #define strcasecmp mk2_runtime_strcasecmp
+#define strncasecmp mk2_runtime_strncasecmp
 static bool mk2_current_stage_is_tower2(void)
 {
     if (g_name[0]) return strcasecmp(g_name, "TOWER2") == 0;
@@ -140,6 +144,26 @@ static const RuntimeExtraGuide *runtime_guide_defaults_for_stage(int kind, int *
     return NULL;
 }
 
+/* De-hardcode the floor guide: pull its label / screen-Y / height from the
+   loaded stage's vanilla <stage>_floor_info (BGND.ASM) instead of the static
+   table literals. No-op when the stage has no floor_info (e.g. dedpool). */
+static void runtime_apply_derived_floor(void)
+{
+    char label[64] = "";
+    int fy = 0, fh = 0;
+    if (!bdd_stage_floor_descriptor(label, (int)sizeof label, NULL, 0, &fy, &fh))
+        return;
+    for (int i = 0; i < g_tower_runtime_guide_n; i++) {
+        if (strncasecmp(g_tower_runtime_guides[i].asset, "FL_", 3) != 0)
+            continue;
+        snprintf(g_tower_runtime_guides[i].asset, sizeof g_tower_runtime_guides[i].asset,
+                 "%s", label);
+        g_tower_runtime_guides[i].y = fy;
+        g_tower_runtime_guides[i].h = fh;
+        return;
+    }
+}
+
 static const char *runtime_stage_display_name(int kind)
 {
     if (kind == 2) return "Wasteland/BATTLE";
@@ -175,6 +199,7 @@ void tower_runtime_guides_init_once(void)
     memset(g_tower_runtime_guides, 0, sizeof(g_tower_runtime_guides));
     memcpy(g_tower_runtime_guides, defs, sizeof(RuntimeExtraGuide) * (size_t)count);
     g_tower_runtime_guide_n = count;
+    runtime_apply_derived_floor();
     g_tower_runtime_stage_kind = kind;
     g_tower_runtime_guides_init = true;
     g_tower_runtime_guides_dirty = false;
@@ -207,6 +232,7 @@ static void runtime_guides_load_preset(int kind)
     memset(g_tower_runtime_guides, 0, sizeof(g_tower_runtime_guides));
     memcpy(g_tower_runtime_guides, defs, sizeof(RuntimeExtraGuide) * (size_t)count);
     g_tower_runtime_guide_n = count;
+    runtime_apply_derived_floor();
     g_tower_runtime_selected = 0;
     g_tower_runtime_stage_kind = kind;
     g_tower_runtime_guides_init = true;
