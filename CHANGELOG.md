@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-06-10
+
+### Added
+- Vanilla background-animation actor derivation from MK2 source, exposed via
+  two diagnostics and a C API:
+  - `bddview --mkbgani-info FILE.BDD LABEL...` dumps a sprite's vanilla
+    metadata (width, height, x/y offset, palette) from `src/MKBGANI.TBL`.
+  - `bddview --stage-actors FILE.BDD` derives a stage's frame-animated
+    background actors end to end: each calla `create pid_bani,<proc>` spawn,
+    its `a_*` frame-sequence table, the MKBGANI sprite frames, and the static
+    spawn coordinates decoded from `movi >y:x,a4` (set_xy_coordinates
+    semantics).
+  - `bdd_mkbgani_sprite_info()` and `bdd_stage_runtime_actors()`.
+  Forest decodes to tree_animator/a_treeroar (20 frames) at exactly
+  (328,73)/(624,73)/(913,73); Tower/Battle/Dead Pool correctly yield no
+  `pid_bani` frame actors (velocity scroll / colour cycle). Derivation only --
+  not yet wired into the runtime actor preview, so rendering is unchanged.
+
 ## [1.0.9] - 2026-06-10
 
 ### Changed
