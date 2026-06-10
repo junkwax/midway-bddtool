@@ -143,24 +143,43 @@ static int bdd_runtime_info_set(int *ox, int *oy, float *scroll,
     return 1;
 }
 
-static int bdd_module_name_contains(const char *needle)
+static int bdd_bdb_has_module_named(const char *name)
 {
+    if (!name || !name[0]) return 0;
     for (int i = 0; i < g_bdb_num_modules; i++) {
         BddCoreModule module = {};
         if (!bdd_core_parse_module_line(g_bdb_modules[i], &module))
             continue;
-        if (bdd_contains_ci(module.name, needle))
+        if (strcasecmp(module.name, name) == 0)
             return 1;
     }
     return 0;
 }
 
+/* Defined later, alongside the other BGND.ASM parse helpers. */
+static int bdd_discover_stage_mod_label(char *out, size_t outsz);
+
+/* Identify which BGND.ASM <stage>_mod block describes the loaded level by
+   matching each block's baklst <name>BMOD modules against the BDB's modules.
+   Fully data-driven so every MK2 stage is recognized, not a fixed shortlist.
+   Cached per loaded path + module count. */
 static const char *bdd_bgnd_stage_label(void)
 {
-    if (bdd_module_name_contains("WOOD")) return "forest_mod";
-    if (bdd_module_name_contains("PLANE")) return "tower_mod";
-    if (bdd_module_name_contains("BAT")) return "battle_mod";
-    if (bdd_module_name_contains("DPUL")) return "dedpool_mod";
+    static char cached_key[640] = "";
+    static char cached_label[64] = "";
+    static int cached_valid = 0;
+    char key[640];
+    const char *base = g_bdb_path[0] ? g_bdb_path : (g_bdd_path[0] ? g_bdd_path : "");
+
+    snprintf(key, sizeof key, "%d|%s", g_bdb_num_modules, base);
+    if (cached_valid && strcmp(cached_key, key) == 0)
+        return cached_label[0] ? cached_label : NULL;
+
+    snprintf(cached_key, sizeof cached_key, "%s", key);
+    cached_label[0] = '\0';
+    cached_valid = 1;
+    if (bdd_discover_stage_mod_label(cached_label, sizeof cached_label))
+        return cached_label;
     return NULL;
 }
 
@@ -1031,6 +1050,104 @@ static int bdd_resolve_bgnd_asm_path(const char *root, char *out, size_t outsz)
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
     path_join(path, sizeof path, root, "src-refactor\\src\\BGND.ASM");
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
+    return 0;
+}
+
+/* If the line is a column-0 label ending in "_mod", copy the label name. */
+static int bdd_line_extract_mod_label(const char *line, char *out, size_t outsz)
+{
+    char tok[64];
+    int n = 0;
+    size_t len;
+    if (!line || !out || outsz == 0) return 0;
+    /* Top-level labels start in column 0 (no leading whitespace). */
+    if (isspace((unsigned char)line[0]) || line[0] == ';' || line[0] == '*')
+        return 0;
+    while (line[n] && !isspace((unsigned char)line[n]) && line[n] != ':' &&
+           n < (int)sizeof tok - 1) {
+        tok[n] = line[n];
+        n++;
+    }
+    tok[n] = '\0';
+    len = strlen(tok);
+    if (len <= 4 || strcasecmp(tok + len - 4, "_mod") != 0)
+        return 0;
+    snprintf(out, outsz, "%s", tok);
+    return 1;
+}
+
+/* Single pass over BGND.ASM: for every <stage>_mod block, count how many of its
+   baklst <name>BMOD modules exist in the loaded BDB; return the best match. */
+static int bdd_discover_stage_mod_label(char *out, size_t outsz)
+{
+    char root[512];
+    char path[512];
+    FILE *f;
+    char line[512];
+    char cur_label[64] = "";
+    char best_label[64] = "";
+    int cur_long_seen = 0;
+    int cur_score = 0;
+    int best_score = 0;
+    int in_block = 0;
+
+    if (!out || outsz == 0) return 0;
+    out[0] = '\0';
+    if (g_bdb_num_modules <= 0) return 0;
+    bdd_stage_root_from_loaded_path(root, sizeof root);
+    if (!root[0] || !bdd_resolve_bgnd_asm_path(root, path, sizeof path))
+        return 0;
+
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        char lbl[64];
+        if (bdd_line_extract_mod_label(line, lbl, sizeof lbl)) {
+            if (cur_label[0] && cur_score > best_score) {
+                best_score = cur_score;
+                snprintf(best_label, sizeof best_label, "%s", cur_label);
+            }
+            snprintf(cur_label, sizeof cur_label, "%s", lbl);
+            cur_long_seen = 0;
+            cur_score = 0;
+            in_block = 1;
+            continue;
+        }
+        if (!in_block)
+            continue;
+
+        if (bdd_bgnd_asm_active_directive(line, ".long")) {
+            char token[64];
+            if (!bdd_bgnd_asm_long_token(line, token, sizeof token))
+                continue;
+            cur_long_seen++;
+            if (cur_long_seen <= BDD_BGND_MOD_HEADER_LONGS)
+                continue;   /* calla, scroll, dlists, bak1mods */
+            if (token[0] == '>' || isdigit((unsigned char)token[0])) {
+                in_block = 0;   /* end marker; rest of block is non-baklst */
+                continue;
+            }
+            {
+                size_t tl = strlen(token);
+                if (tl > 4 && strcasecmp(token + tl - 4, "BMOD") == 0) {
+                    char want[32];
+                    bdd_strip_bmod_suffix(token, want, sizeof want);
+                    if (bdd_bdb_has_module_named(want))
+                        cur_score++;
+                }
+            }
+        }
+    }
+    if (cur_label[0] && cur_score > best_score) {
+        best_score = cur_score;
+        snprintf(best_label, sizeof best_label, "%s", cur_label);
+    }
+    fclose(f);
+
+    if (best_score > 0) {
+        snprintf(out, outsz, "%s", best_label);
+        return 1;
+    }
     return 0;
 }
 
