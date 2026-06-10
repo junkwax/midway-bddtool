@@ -863,6 +863,87 @@ static int runtime_actor_add_forest_tree_actors(void)
     return added;
 }
 
+static bool runtime_actor_frames_all_loaded(char frames[][32], int n)
+{
+    for (int i = 0; i < n; i++)
+        if (find_img_by_label_casefold(frames[i]) < 0)
+            return false;
+    return true;
+}
+
+/* Create runtime actors from the stage's vanilla BGND.ASM derivation
+   (bdd_stage_runtime_actors: spawn proc -> a_* frame sequence -> positions).
+   Skips actors whose frame sprites are not loaded. Returns the count added. */
+static int runtime_actor_add_derived_actors(void)
+{
+    BddStageActor derived[BDD_STAGE_ACTOR_MAX];
+    int na = bdd_stage_runtime_actors(derived, BDD_STAGE_ACTOR_MAX);
+    int added = 0;
+
+    /* Import the derived frame sprites from MK6MIL.LOD (which packages
+       MKBGANI.IMG) so the actors below can resolve their labels. */
+    {
+        const char *labels[BDD_STAGE_ACTOR_MAX * BDD_STAGE_ACTOR_FRAME_MAX];
+        int nl = 0;
+        for (int a = 0; a < na; a++) {
+            for (int fi = 0; fi < derived[a].frame_count &&
+                              nl < (int)(sizeof labels / sizeof labels[0]); fi++) {
+                if (find_img_by_label_casefold(derived[a].frames[fi]) < 0)
+                    labels[nl++] = derived[a].frames[fi];
+            }
+        }
+        if (nl > 0)
+            import_runtime_lod_source_labels("MK6MIL.LOD", labels, nl, false);
+    }
+
+    for (int a = 0; a < na; a++) {
+        BddStageActor *d = &derived[a];
+        int fc = d->frame_count;
+        if (fc <= 0 || d->pos_count <= 0)
+            continue;   /* no frames or positions computed dynamically */
+        if (fc > MAX_RUNTIME_ACTOR_FRAMES) fc = MAX_RUNTIME_ACTOR_FRAMES;
+        if (!runtime_actor_frames_all_loaded(d->frames, fc))
+            continue;   /* sprites not imported for this stage */
+
+        int base_i = find_img_by_label_casefold(d->frames[0]);
+        Img *base_im = (base_i >= 0 && base_i < g_ni) ? &g_img[base_i] : NULL;
+        int ax = base_im ? img_anim_offset_x(base_im, 0) : 0;
+        int ay = base_im ? img_anim_offset_y(base_im, 0) : 0;
+
+        for (int p = 0; p < d->pos_count && g_runtime_actor_count < MAX_RUNTIME_ACTORS; p++) {
+            RuntimeStageActor actor;
+            runtime_actor_init_default(&actor);
+            snprintf(actor.name, sizeof actor.name, "%s_%d", d->proc, p + 1);
+            runtime_actor_make_code_label(actor.name, actor.code_label, sizeof actor.code_label);
+            snprintf(actor.trigger, sizeof actor.trigger, "stage");
+            snprintf(actor.frame_driver, sizeof actor.frame_driver, "%s", d->sequence);
+            actor.x = d->pos_x[p] - ax;
+            actor.y = d->pos_y[p] - ay;
+            actor.layer = 0x40;
+            actor.scroll = 1.0f;
+            actor.frame_ticks = 5;
+            actor.frame_count = fc;
+            for (int fi = 0; fi < fc; fi++) {
+                snprintf(actor.frames[fi], sizeof actor.frames[fi], "%s", d->frames[fi]);
+                int fi_img = find_img_by_label_casefold(d->frames[fi]);
+                Img *fim = (fi_img >= 0 && fi_img < g_ni) ? &g_img[fi_img] : NULL;
+                actor.frame_dx[fi] = ax - (fim ? img_anim_offset_x(fim, actor.hfl) : ax);
+                actor.frame_dy[fi] = ay - (fim ? img_anim_offset_y(fim, actor.vfl) : ay);
+            }
+            g_runtime_actors[g_runtime_actor_count++] = actor;
+            added++;
+        }
+    }
+
+    if (added > 0) {
+        runtime_actor_select(0);
+        g_runtime_actor_preview = true;
+        snprintf(g_runtime_actor_status, sizeof g_runtime_actor_status,
+                 "Derived %d runtime actor(s) from BGND.ASM", added);
+    }
+    return added;
+}
+
 static void runtime_actor_import_deadpool_imgs(void)
 {
     char dir[512];
@@ -1746,6 +1827,8 @@ void runtime_actor_autoload_for_stage(void)
     runtime_actor_import_stage_runtime_art();
     if (!runtime_actor_sidecar_load()) {
         int known = runtime_actor_add_forest_tree_actors();
+        if (known <= 0)
+            known = runtime_actor_add_derived_actors();
         if (known <= 0)
             runtime_actor_import_inferred_level_animations();
     }

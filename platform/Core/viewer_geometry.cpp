@@ -1542,7 +1542,9 @@ static int bdd_parse_anim_sequence(const char *path, const char *seq_label,
             char tok[32];
             if (bdd_bgnd_asm_long_token(line, tok, sizeof tok)) {
                 if (tok[0] == '>' || isdigit((unsigned char)tok[0]))
-                    break;   /* numeric end marker */
+                    break;   /* numeric end marker (e.g. .long 0) */
+                if (strncasecmp(tok, "ani_", 4) == 0)
+                    break;   /* animation control opcode, e.g. ani_jump */
                 if (n < maxf) snprintf(frames[n++], 32, "%s", tok);
             }
             continue;
