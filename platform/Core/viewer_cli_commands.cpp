@@ -648,9 +648,10 @@ int bdd_viewer_run_cli_command(int argc, char **argv, int *exit_code)
         fprintf(stderr, "stage-actors: %s -> %d animated actor(s)\n",
                 g_name[0] ? g_name : argv[2], n);
         for (int i = 0; i < n; i++) {
-            fprintf(stderr, "  proc=%-18s seq=%-16s frames=%d positions=%d\n",
+            fprintf(stderr, "  proc=%-18s seq=%-16s frames=%d positions=%d motion_x=%d(%.2fpx/f)\n",
                     actors[i].proc, actors[i].sequence, actors[i].frame_count,
-                    actors[i].pos_count);
+                    actors[i].pos_count, actors[i].motion_x,
+                    actors[i].motion_x / 65536.0);
             for (int p = 0; p < actors[i].pos_count; p++)
                 fprintf(stderr, "      @ (x=%d, y=%d)\n",
                         actors[i].pos_x[p], actors[i].pos_y[p]);

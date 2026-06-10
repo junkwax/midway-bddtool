@@ -96,6 +96,8 @@ typedef struct {
     int pos_count;                 /* static y:x spawn coords found in the proc */
     int pos_x[BDD_STAGE_ACTOR_POS_MAX];
     int pos_y[BDD_STAGE_ACTOR_POS_MAX];
+    int motion_x;                  /* oxvel px/frame (movi >v,a0 -> oxvel), 0 if static */
+    int motion_y;                  /* oyvel px/frame, 0 if static */
 } BddStageActor;
 int bdd_stage_runtime_actors(BddStageActor *out, int max_actors);
 

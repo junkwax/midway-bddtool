@@ -922,6 +922,8 @@ static int runtime_actor_add_derived_actors(void)
             actor.layer = 0x40;
             actor.scroll = 1.0f;
             actor.frame_ticks = 5;
+            actor.motion_x = d->motion_x;   /* oxvel (16.16), 0 if static */
+            actor.motion_y = d->motion_y;
             actor.frame_count = fc;
             for (int fi = 0; fi < fc; fi++) {
                 snprintf(actor.frames[fi], sizeof actor.frames[fi], "%s", d->frames[fi]);
@@ -1834,6 +1836,24 @@ void runtime_actor_autoload_for_stage(void)
     }
 }
 
+/* Time-based travel offset for actors with a derived oxvel/oyvel (e.g. bats
+   flying across). Loops over a stage-width travel distance. ImGui-time based,
+   so it only animates in the live GUI (headless render-png leaves it at 0). */
+static void runtime_actor_motion_offset(const RuntimeStageActor *a,
+                                        int *off_x, int *off_y)
+{
+    if (off_x) *off_x = 0;
+    if (off_y) *off_y = 0;
+    if (!a || (!a->motion_x && !a->motion_y) || g_runtime_actor_timeline_paused)
+        return;
+    double t = ImGui::GetTime() * 53.0 * (double)g_runtime_actor_playback_speed;
+    const double wrap = 1500.0;
+    if (off_x && a->motion_x)
+        *off_x = (int)fmod((double)a->motion_x / 65536.0 * t, wrap);
+    if (off_y && a->motion_y)
+        *off_y = (int)fmod((double)a->motion_y / 65536.0 * t, wrap);
+}
+
 void draw_mk2_runtime_actor_overlay(void)
 {
     if (!g_runtime_actor_preview || g_runtime_actor_count <= 0 || !g_have_bdb || g_zoom <= 0)
@@ -1865,8 +1885,10 @@ void draw_mk2_runtime_actor_overlay(void)
         int base_y = 0;
         float actor_scroll = 1.0f;
         runtime_actor_project_base(a, &base_x, &base_y, &actor_scroll);
-        int draw_x = base_x + a->frame_dx[frame];
-        int draw_y = base_y + a->frame_dy[frame];
+        int motion_ox = 0, motion_oy = 0;
+        runtime_actor_motion_offset(a, &motion_ox, &motion_oy);
+        int draw_x = base_x + a->frame_dx[frame] + motion_ox;
+        int draw_y = base_y + a->frame_dy[frame] + motion_oy;
         if (g_game_view) {
             int screen_y = a->screen_space_y ? draw_y : (draw_y - g_game_view_y);
             sx = (float)viewport.x + ((float)draw_x - (float)g_scroll_pos * actor_scroll) * (float)g_zoom;

@@ -1620,6 +1620,55 @@ static int bdd_proc_positions(const char *path, const char *proc,
     return n;
 }
 
+/* Find the proc's x-velocity: the first "movi >v,a0" / "movi ->v,a0" whose
+   magnitude is velocity-like (>= 0x1000), which get_bat_obj stores as oxvel.
+   Returns the raw signed 16.16 value, 0 if none (static actor). */
+static int bdd_proc_velocity(const char *path, const char *proc,
+                             char siblings[][48], int sibling_count)
+{
+    FILE *f;
+    char line[512];
+    int in = 0, lines = 0;
+    if (!path || !proc || !proc[0]) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in) {
+            if (bdd_line_is_label(line, proc)) in = 1;
+            continue;
+        }
+        if (++lines > 60) break;
+        if (bdd_line_is_any_of(line, siblings, sibling_count, proc))
+            break;
+        const char *m = strstr(line, "movi");
+        const char *semi = strchr(line, ';');
+        if (!m || (semi && semi < m)) continue;
+        const char *op = m + 4;
+        int neg = 0;
+        long v;
+        char *end = NULL;
+        const char *reg;
+        while (*op && isspace((unsigned char)*op)) op++;
+        if (*op == '-') { neg = 1; op++; }
+        if (*op != '>') continue;
+        v = strtol(op + 1, &end, 16);
+        if (end == op + 1) continue;
+        while (*end && *end != ',') end++;
+        if (*end != ',') continue;
+        reg = end + 1;
+        while (*reg && isspace((unsigned char)*reg)) reg++;
+        if (!(reg[0] == 'a' && reg[1] == '0' &&
+              !(isalnum((unsigned char)reg[2]) || reg[2] == '_')))
+            continue;                 /* velocity is loaded into a0 (oxvel) */
+        if (v < 0x1000) continue;        /* skip small counts/flags */
+        if ((v & 0xFF) != 0) continue;   /* real 16.16 velocities have a clean low byte */
+        fclose(f);
+        return neg ? -(int)v : (int)v;
+    }
+    fclose(f);
+    return 0;
+}
+
 /* Public: derive the loaded stage's background animation actors from BGND.ASM:
    each calla pid_bani proc that drives an a_* frame sequence. */
 int bdd_stage_runtime_actors(BddStageActor *out, int max_actors)
@@ -1647,6 +1696,8 @@ int bdd_stage_runtime_actors(BddStageActor *out, int max_actors)
                                               procs, np,
                                               out[n].pos_x, out[n].pos_y,
                                               BDD_STAGE_ACTOR_POS_MAX);
+        out[n].motion_x = bdd_proc_velocity(table->source_path, procs[i], procs, np);
+        out[n].motion_y = 0;
         n++;
     }
     return n;
