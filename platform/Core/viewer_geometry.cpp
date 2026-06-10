@@ -181,26 +181,31 @@ static int bdd_parse_signed16_hex_token(const char *tok, int *out)
 static int bdd_bgnd_lst_word_value(const char *line, int *out)
 {
     char prefix[256];
-    char *word;
-    char *ctx = NULL;
-    char *tok;
-    char *last = NULL;
+    const char *word;
+    const char *start;
+    const char *end;
+    char tok[64];
     size_t n;
+    size_t tok_len;
 
     if (!line || !out) return 0;
-    word = strstr((char *)line, ".word");
+    word = strstr(line, ".word");
     if (!word) return 0;
     n = (size_t)(word - line);
     if (n >= sizeof prefix) n = sizeof prefix - 1;
     memcpy(prefix, line, n);
     prefix[n] = '\0';
 
-    tok = strtok_s(prefix, " \t\r\n", &ctx);
-    while (tok) {
-        last = tok;
-        tok = strtok_s(NULL, " \t\r\n", &ctx);
-    }
-    return bdd_parse_signed16_hex_token(last, out);
+    end = prefix + n;
+    while (end > prefix && isspace((unsigned char)end[-1])) end--;
+    if (end <= prefix) return 0;
+    start = end;
+    while (start > prefix && !isspace((unsigned char)start[-1])) start--;
+    tok_len = (size_t)(end - start);
+    if (tok_len == 0 || tok_len >= sizeof tok) return 0;
+    memcpy(tok, start, tok_len);
+    tok[tok_len] = '\0';
+    return bdd_parse_signed16_hex_token(tok, out);
 }
 
 struct BddAsmExprParser {

@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boxes/labels while leaving the animated sprites visible.
 - Runtime preview smoke tests now assert floor screen-Y projection without
   touching ImGui state in headless mode.
+- BGND list parsing now uses portable token scanning so Linux/macOS release
+  builds match the Windows build.
 
 ## [1.0.5] - 2026-06-09
 
