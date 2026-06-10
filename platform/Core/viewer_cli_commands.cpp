@@ -602,6 +602,34 @@ int bdd_viewer_run_cli_command(int argc, char **argv, int *exit_code)
         *exit_code = rc;
         return 1;
     }
+    if (argc >= 2 && strcmp(argv[1], "--mkbgani-info") == 0) {
+        if (argc < 4) {
+            fprintf(stderr, "usage: bddview --mkbgani-info FILE.BDB|FILE.BDD LABEL [LABEL...]\n");
+            *exit_code = 1;
+            return 1;
+        }
+        char bdb_path[512] = "", bdd_path[512] = "";
+        if (!bdd_viewer_load_stage_for_path(argv[2], bdb_path, sizeof bdb_path,
+                                            bdd_path, sizeof bdd_path)) {
+            fprintf(stderr, "mkbgani-info: failed to load %s\n", argv[2]);
+            *exit_code = 1;
+            return 1;
+        }
+        int rc = 0;
+        for (int i = 3; i < argc; i++) {
+            int w = 0, h = 0, xo = 0, yo = 0;
+            char pal[32] = "";
+            if (bdd_mkbgani_sprite_info(argv[i], &w, &h, &xo, &yo, pal, sizeof pal))
+                fprintf(stderr, "mkbgani-info: %-12s w=%d h=%d xoff=%d yoff=%d pal=%s\n",
+                        argv[i], w, h, xo, yo, pal);
+            else {
+                fprintf(stderr, "mkbgani-info: %-12s NOT FOUND in MKBGANI.TBL\n", argv[i]);
+                rc = 1;
+            }
+        }
+        *exit_code = rc;
+        return 1;
+    }
     if (argc >= 2 && strcmp(argv[1], "--roundtrip-save") == 0) {
         if (argc < 4) {
             fprintf(stderr, "usage: bddview --roundtrip-save FILE.BDB|FILE.BDD OUT_PREFIX\n");

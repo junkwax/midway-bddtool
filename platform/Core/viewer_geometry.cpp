@@ -1313,6 +1313,104 @@ int bdd_stage_floor_descriptor(char *label, int label_sz,
     return 1;
 }
 
+/* Parse up to maxn comma-separated values from a ".word" line. */
+static int bdd_parse_word_csv(const char *line, int *out, int maxn)
+{
+    const char *operand = bdd_bgnd_asm_active_directive(line, ".word");
+    BddAsmExprParser ep;
+    int n = 0;
+    if (!operand || !out) return 0;
+    ep.p = operand;
+    ep.scrrgt = 0;
+    ep.wy_offset = 0;
+    while (n < maxn) {
+        int v = 0;
+        if (!bdd_expr_parse_expr(&ep, &v)) break;
+        out[n++] = v;
+        bdd_expr_skip_ws(&ep);
+        if (*ep.p != ',') break;
+        ep.p++;
+    }
+    return n;
+}
+
+/* Resolve src\MKBGANI.TBL (or the src-refactor copy) for the loaded stage. */
+static int bdd_resolve_mkbgani_tbl(char *out, size_t outsz)
+{
+    char root[512];
+    char path[512];
+    if (!out || outsz == 0) return 0;
+    bdd_stage_root_from_loaded_path(root, sizeof root);
+    if (!root[0]) return 0;
+    path_join(path, sizeof path, root, "src\\MKBGANI.TBL");
+    if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
+    path_join(path, sizeof path, root, "src-refactor\\src\\MKBGANI.TBL");
+    if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
+    return 0;
+}
+
+/* Public: look up a background-animation sprite's vanilla metadata in
+   MKBGANI.TBL. Each entry is:
+       LABEL:
+           .word  w, h, xoff, yoff
+           .long  <sag>
+           .word  <flags/bpp>
+           .long  <palette>
+   Returns 1 with the requested fields filled, else 0. Any out may be NULL. */
+int bdd_mkbgani_sprite_info(const char *label, int *w, int *h,
+                            int *xoff, int *yoff, char *palette, int palette_sz)
+{
+    char path[512];
+    FILE *f;
+    char line[512];
+    int in_entry = 0;
+    int word_count = 0;
+    int long_count = 0;
+    int dims[4] = {0, 0, 0, 0};
+    int got_dims = 0;
+
+    if (palette && palette_sz > 0) palette[0] = '\0';
+    if (!label || !label[0]) return 0;
+    if (!bdd_resolve_mkbgani_tbl(path, sizeof path)) return 0;
+
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in_entry) {
+            if (bdd_line_is_label(line, label)) in_entry = 1;
+            continue;
+        }
+        /* A new column-0 label ends this entry. The entry layout is:
+           .word w,h,xoff,yoff / .long sag / .word flags / [.long palette].
+           Some frames omit the palette .long; their palette comes from the
+           usage context (BDD object), not a neighbouring table entry. */
+        if (!isspace((unsigned char)line[0]) && line[0] != '.' &&
+            line[0] != ';' && line[0] != '*')
+            break;
+        if (bdd_bgnd_asm_active_directive(line, ".word")) {
+            if (++word_count == 1)
+                got_dims = bdd_parse_word_csv(line, dims, 4) >= 2;
+            continue;
+        }
+        if (bdd_bgnd_asm_active_directive(line, ".long")) {
+            char tok[64];
+            if (++long_count == 2) {
+                if (bdd_bgnd_asm_long_token(line, tok, sizeof tok) &&
+                    palette && palette_sz > 0)
+                    snprintf(palette, (size_t)palette_sz, "%s", tok);
+                break;
+            }
+        }
+    }
+    fclose(f);
+    if (!got_dims) return 0;
+    if (w) *w = dims[0];
+    if (h) *h = dims[1];
+    if (xoff) *xoff = dims[2];
+    if (yoff) *yoff = dims[3];
+    return 1;
+}
+
 int bdd_object_runtime_origin(int obj_index, int *rx, int *ry)
 {
     int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;

@@ -79,6 +79,8 @@ int bdd_object_game_screen_y(int obj_index, int game_y);
 int bdd_stage_floor_descriptor(char *label, int label_sz,
                                char *palette, int palette_sz,
                                int *floor_y, int *floor_height);
+int bdd_mkbgani_sprite_info(const char *label, int *w, int *h,
+                            int *xoff, int *yoff, char *palette, int palette_sz);
 
 typedef struct BddScreenRect {
     int x, y, w, h;
