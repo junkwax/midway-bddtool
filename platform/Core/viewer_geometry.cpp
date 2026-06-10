@@ -17,6 +17,7 @@
 
 #ifdef _WIN32
 #define strcasecmp _stricmp
+#define strncasecmp _strnicmp
 #else
 #include <strings.h>
 #endif
@@ -626,49 +627,490 @@ static int bdd_read_bgnd_stage_scroll_limits(const char *label,
     return 0;
 }
 
-static int bdd_stage_module_runtime_info(const char *name, int *ox, int *oy, float *scroll)
+/* Runtime parallax for a stage's background planes is authored in MK2's
+   BGND.ASM, not hardcoded here:
+     - The <stage>_mod block lists each baklst plane as ".long <name>BMOD"
+       followed by ".word x,y" giving the plane's screen-placement offset.
+     - The <stage>_scroll table holds one 16.16 fixed-point scroll rate per
+       baklst index (read top-to-bottom as index 8..0). The playfield scrolls
+       at BDD_BGND_PLAYFIELD_SCROLL, so a plane's parallax factor is
+       scroll[index] / playfield.
+   We parse that block once per stage and cache it, so the offsets/rates stay
+   in sync with the source instead of a transcribed constant table. */
+#define BDD_STAGE_PLANE_MAX 16
+#define BDD_BGND_PLAYFIELD_SCROLL 0x20000
+#define BDD_BGND_MOD_HEADER_LONGS 4   /* calla, scroll table, dlists, bak1mods */
+#define BDD_BGND_SCROLL_ENTRIES 9     /* baklst index 8..0 */
+
+typedef struct {
+    char name[32];   /* module name, trailing "BMOD" stripped */
+    int baklst;      /* baklst plane index (1..8) */
+    int ox;
+    int oy;
+    float scroll;
+    int draw_rank;   /* runtime draw order from the dlists, -1 if not placed */
+} BddStagePlane;
+
+typedef struct {
+    char label[64];          /* <stage>_mod label this table was built for */
+    char source_path[512];   /* resolved BGND.ASM path */
+    int valid;
+    BddStagePlane planes[BDD_STAGE_PLANE_MAX];
+    int plane_count;
+    int floor_rank;          /* draw rank of the -1/floor_code dlists slot, -1 if none */
+    char floor_label[32];    /* floor SAG label from <stage>_floor_info, "" if none */
+} BddStageModuleTable;
+
+static BddStageModuleTable g_stage_module_cache;
+
+static void bdd_strip_bmod_suffix(const char *in, char *out, size_t outsz)
 {
-    if (!name)
+    size_t len;
+    if (!out || outsz == 0) return;
+    out[0] = '\0';
+    if (!in) return;
+    snprintf(out, outsz, "%s", in);
+    len = strlen(out);
+    if (len >= 4 && strcasecmp(out + len - 4, "BMOD") == 0)
+        out[len - 4] = '\0';
+}
+
+/* Find an ".op" directive that is not commented out, returning the operand
+   text (first non-space after the directive) or NULL. */
+static const char *bdd_bgnd_asm_active_directive(const char *line, const char *op)
+{
+    const char *dir;
+    const char *semi;
+    if (!line || !op) return NULL;
+    dir = strstr(line, op);
+    if (!dir) return NULL;
+    semi = strchr(line, ';');
+    if (semi && semi < dir) return NULL;
+    dir += strlen(op);
+    while (*dir && isspace((unsigned char)*dir)) dir++;
+    return dir;
+}
+
+/* Copy the first operand token of a ".long" line (label or numeric literal). */
+static int bdd_bgnd_asm_long_token(const char *line, char *out, size_t outsz)
+{
+    const char *operand = bdd_bgnd_asm_active_directive(line, ".long");
+    size_t n = 0;
+    if (!operand || !out || outsz == 0) return 0;
+    while (operand[n] && operand[n] != ',' && operand[n] != ';' &&
+           !isspace((unsigned char)operand[n])) {
+        if (n + 1 >= outsz) break;
+        out[n] = operand[n];
+        n++;
+    }
+    out[n] = '\0';
+    return n > 0;
+}
+
+/* Parse a numeric ".long" operand (">" hex or decimal) into a 32-bit value. */
+static int bdd_bgnd_asm_long_number(const char *line, long *out)
+{
+    const char *operand = bdd_bgnd_asm_active_directive(line, ".long");
+    char *end = NULL;
+    long v;
+    if (!operand || !out) return 0;
+    if (*operand == '>') {
+        v = strtol(operand + 1, &end, 16);
+    } else if (isdigit((unsigned char)*operand)) {
+        v = strtol(operand, &end, 10);
+    } else {
+        return 0;
+    }
+    if (end == operand + (*operand == '>' ? 1 : 0)) return 0;
+    *out = v;
+    return 1;
+}
+
+/* Parse the two comma-separated values of a baklst ".word x,y" offset line. */
+static int bdd_bgnd_asm_word_pair_value(const char *line, int scrrgt,
+                                        int wy_offset, int *a, int *b)
+{
+    const char *operand = bdd_bgnd_asm_active_directive(line, ".word");
+    BddAsmExprParser ep;
+    int va = 0, vb = 0;
+    if (!operand || !a || !b) return 0;
+    ep.p = operand;
+    ep.scrrgt = scrrgt;
+    ep.wy_offset = wy_offset;
+    if (!bdd_expr_parse_expr(&ep, &va)) return 0;
+    bdd_expr_skip_ws(&ep);
+    if (*ep.p != ',') return 0;
+    ep.p++;
+    if (!bdd_expr_parse_expr(&ep, &vb)) return 0;
+    if (va > 32767) va = (va & 0xffff) - 0x10000;
+    if (vb > 32767) vb = (vb & 0xffff) - 0x10000;
+    *a = va;
+    *b = vb;
+    return 1;
+}
+
+/* Walk the <stage>_mod block: capture each baklst plane's name/offset/index and
+   the name of the stage's scroll table. */
+static int bdd_parse_stage_mod_block(const char *path, const char *label,
+                                     BddStageModuleTable *table,
+                                     char *scroll_label, size_t scroll_label_sz,
+                                     char *dlists_label, size_t dlists_label_sz,
+                                     char *calla_label, size_t calla_label_sz)
+{
+    FILE *f;
+    char line[512];
+    int in_block = 0;
+    int long_seen = 0;
+    int baklst_num = 0;
+    int pending = -1;
+
+    if (!path || !label || !table) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+
+    table->plane_count = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in_block) {
+            if (bdd_line_is_label(line, label))
+                in_block = 1;
+            continue;
+        }
+
+        const char *long_op = bdd_bgnd_asm_active_directive(line, ".long");
+        if (long_op) {
+            char token[64];
+            if (!bdd_bgnd_asm_long_token(line, token, sizeof token))
+                continue;
+            long_seen++;
+            if (long_seen <= BDD_BGND_MOD_HEADER_LONGS) {
+                /* Header longs: calla(1), scroll table(2), dlists(3), bak1mods(4). */
+                if (long_seen == 1 && calla_label)
+                    snprintf(calla_label, calla_label_sz, "%s", token);
+                if (long_seen == 2 && scroll_label)
+                    snprintf(scroll_label, scroll_label_sz, "%s", token);
+                if (long_seen == 3 && dlists_label)
+                    snprintf(dlists_label, dlists_label_sz, "%s", token);
+                continue;
+            }
+            /* baklst entries: symbol names only; a numeric (e.g. >ffffffff) ends. */
+            if (token[0] == '>' || isdigit((unsigned char)token[0]))
+                break;
+            baklst_num++;
+            if (strcasecmp(token, "skip_bakmod") == 0)
+                continue;
+            {
+                size_t tl = strlen(token);
+                if (tl < 4 || strcasecmp(token + tl - 4, "BMOD") != 0)
+                    break;   /* unexpected non-module symbol ends the list */
+            }
+            if (table->plane_count < BDD_STAGE_PLANE_MAX) {
+                BddStagePlane *p = &table->planes[table->plane_count];
+                bdd_strip_bmod_suffix(token, p->name, sizeof p->name);
+                p->baklst = baklst_num;
+                p->ox = 0;
+                p->oy = 0;
+                p->scroll = 0.0f;
+                p->draw_rank = -1;
+                pending = table->plane_count;
+                table->plane_count++;
+            }
+            continue;
+        }
+
+        if (pending >= 0 && bdd_bgnd_asm_active_directive(line, ".word")) {
+            int ox = 0, oy = 0;
+            if (bdd_bgnd_asm_word_pair_value(line, 399, 0xe0, &ox, &oy)) {
+                table->planes[pending].ox = ox;
+                table->planes[pending].oy = oy;
+            }
+            pending = -1;
+        }
+    }
+    fclose(f);
+    return table->plane_count > 0;
+}
+
+/* Read the <stage>_scroll table's 9 ".long" rates (index 8..0, top to bottom). */
+static int bdd_parse_stage_scroll_table(const char *path, const char *scroll_label,
+                                        long out[BDD_BGND_SCROLL_ENTRIES])
+{
+    FILE *f;
+    char line[512];
+    int in_block = 0;
+    int count = 0;
+
+    if (!path || !scroll_label || !scroll_label[0]) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in_block) {
+            if (bdd_line_is_label(line, scroll_label))
+                in_block = 1;
+            continue;
+        }
+        long v = 0;
+        if (bdd_bgnd_asm_long_number(line, &v)) {
+            if (count < BDD_BGND_SCROLL_ENTRIES)
+                out[count] = v;
+            count++;
+            if (count >= BDD_BGND_SCROLL_ENTRIES)
+                break;
+        } else if (bdd_bgnd_asm_active_directive(line, ".long")) {
+            break;   /* non-numeric .long ends the table */
+        }
+    }
+    fclose(f);
+    return count >= BDD_BGND_SCROLL_ENTRIES;
+}
+
+/* Walk the dlists_<stage> display list and assign a runtime draw rank to each
+   present background plane and to the floor slot, in display order (far plane
+   first). Ranks step by 10 so gameplay-object overlays can interleave. */
+static void bdd_parse_stage_dlists(const char *path, const char *dlists_label,
+                                   BddStageModuleTable *table)
+{
+    FILE *f;
+    char line[512];
+    int in_block = 0;
+    int rank = 10;
+
+    table->floor_rank = -1;
+    if (!path || !dlists_label || !dlists_label[0] || !table) return;
+    f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        char token[64];
+        if (!in_block) {
+            if (bdd_line_is_label(line, dlists_label))
+                in_block = 1;
+            continue;
+        }
+        if (!bdd_bgnd_asm_active_directive(line, ".long"))
+            continue;
+        if (!bdd_bgnd_asm_long_token(line, token, sizeof token))
+            continue;
+
+        if (strcasecmp(token, "-1") == 0) {
+            /* floor_code slot */
+            table->floor_rank = rank;
+            rank += 10;
+            continue;
+        }
+        if (strncasecmp(token, "baklst", 6) == 0) {
+            int baklst = atoi(token + 6);
+            int placed = 0;
+            for (int i = 0; i < table->plane_count; i++) {
+                if (table->planes[i].baklst == baklst) {
+                    table->planes[i].draw_rank = rank;
+                    placed = 1;
+                    break;
+                }
+            }
+            /* Skipped planes (no module of that index) consume no rank slot. */
+            if (placed)
+                rank += 10;
+            continue;
+        }
+        /* -2 (shadows), objlst, 0, or any non-plane entry ends the background. */
+        break;
+    }
+    fclose(f);
+}
+
+/* Copy the first operand token (up to ',' or whitespace) of a "movi" line. */
+static int bdd_bgnd_asm_movi_token(const char *line, char *out, size_t outsz)
+{
+    const char *operand = bdd_bgnd_asm_active_directive(line, "movi");
+    size_t n = 0;
+    if (!operand || !out || outsz == 0) return 0;
+    while (operand[n] && operand[n] != ',' && operand[n] != ';' &&
+           !isspace((unsigned char)operand[n])) {
+        if (n + 1 >= outsz) break;
+        out[n] = operand[n];
+        n++;
+    }
+    out[n] = '\0';
+    return n > 0;
+}
+
+/* Derive the floor SAG label: <stage>_mod's calla routine does
+   "movi <stage>_floor_info,a0", and <stage>_floor_info's first ".long" is the
+   floor sprite label (e.g. FL_FORST). */
+static void bdd_parse_stage_floor_label(const char *path, const char *calla_label,
+                                        char *out, size_t outsz)
+{
+    FILE *f;
+    char line[512];
+    char floor_info_label[64] = "";
+    int in_calla = 0;
+    int in_info = 0;
+
+    if (out && outsz) out[0] = '\0';
+    if (!path || !calla_label || !calla_label[0] || !out) return;
+
+    /* Pass 1: find the *_floor_info label referenced inside the calla routine. */
+    f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        if (!in_calla) {
+            if (bdd_line_is_label(line, calla_label))
+                in_calla = 1;
+            continue;
+        }
+        char tok[64];
+        if (bdd_bgnd_asm_movi_token(line, tok, sizeof tok)) {
+            size_t tl = strlen(tok);
+            const char *suffix = "_floor_info";
+            size_t sl = strlen(suffix);
+            if (tl > sl && strcasecmp(tok + tl - sl, suffix) == 0) {
+                snprintf(floor_info_label, sizeof floor_info_label, "%s", tok);
+                break;
+            }
+        }
+        /* End of the calla routine without finding a floor info reference. */
+        if (bdd_bgnd_asm_active_directive(line, "rets"))
+            break;
+    }
+    fclose(f);
+    if (!floor_info_label[0]) return;
+
+    /* Pass 2: first ".long" of the floor_info block is the floor SAG label. */
+    f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        if (!in_info) {
+            if (bdd_line_is_label(line, floor_info_label))
+                in_info = 1;
+            continue;
+        }
+        char tok[64];
+        if (bdd_bgnd_asm_long_token(line, tok, sizeof tok)) {
+            snprintf(out, outsz, "%s", tok);
+            break;
+        }
+    }
+    fclose(f);
+}
+
+static int bdd_resolve_bgnd_asm_path(const char *root, char *out, size_t outsz)
+{
+    char path[512];
+    if (!root || !root[0] || !out || outsz == 0) return 0;
+    path_join(path, sizeof path, root, "src\\BGND.ASM");
+    if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
+    path_join(path, sizeof path, root, "src-refactor\\src\\BGND.ASM");
+    if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
+    return 0;
+}
+
+static int bdd_build_stage_module_table(BddStageModuleTable *table)
+{
+    const char *label = bdd_bgnd_stage_label();
+    char root[512];
+    char path[512];
+    char scroll_label[64] = "";
+    char dlists_label[64] = "";
+    char calla_label[64] = "";
+    long scroll[BDD_BGND_SCROLL_ENTRIES] = {0};
+
+    if (!table) return 0;
+    table->valid = 0;
+    table->plane_count = 0;
+    table->floor_rank = -1;
+    table->floor_label[0] = '\0';
+    if (!label) { table->label[0] = '\0'; return 0; }
+
+    bdd_stage_root_from_loaded_path(root, sizeof root);
+    if (!root[0] || !bdd_resolve_bgnd_asm_path(root, path, sizeof path))
         return 0;
 
-    if (bdd_current_stage_is_battle()) {
-        if (strcasecmp(name, "BAT1") == 0 || strcasecmp(name, "BAT1BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 0, 0x93, 0.8125f);
-        if (strcasecmp(name, "BAT2") == 0 || strcasecmp(name, "BAT2BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 249, 0x04, 0.5f);
-        if (strcasecmp(name, "BAT4") == 0 || strcasecmp(name, "BAT4BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 222, 0x61, 0.25f);
-        if (strcasecmp(name, "BAT5") == 0 || strcasecmp(name, "BAT5BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 667, 0x40, 0.09375f);
-        if (strcasecmp(name, "BAT6") == 0 || strcasecmp(name, "BAT6BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 401, 0x5a, 0.0625f);
-        if (strcasecmp(name, "BAT7") == 0 || strcasecmp(name, "BAT7BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 424, 0x1a, 0.0f);
+    if (!bdd_parse_stage_mod_block(path, label, table, scroll_label, sizeof scroll_label,
+                                   dlists_label, sizeof dlists_label,
+                                   calla_label, sizeof calla_label))
+        return 0;
+    if (!bdd_parse_stage_scroll_table(path, scroll_label, scroll))
+        return 0;
+    bdd_parse_stage_dlists(path, dlists_label, table);
+    bdd_parse_stage_floor_label(path, calla_label, table->floor_label,
+                                sizeof table->floor_label);
+
+    for (int i = 0; i < table->plane_count; i++) {
+        int pos = 8 - table->planes[i].baklst;   /* scroll table row for this plane */
+        if (pos >= 0 && pos < BDD_BGND_SCROLL_ENTRIES)
+            table->planes[i].scroll = (float)scroll[pos] / (float)BDD_BGND_PLAYFIELD_SCROLL;
+        else
+            table->planes[i].scroll = 0.0f;
     }
 
-    if (bdd_current_stage_is_tower_runtime()) {
-        if (strcasecmp(name, "PLANE4") == 0 || strcasecmp(name, "PLANE4BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 0x16d, -0x1f, 0.6875f);
-        if (strcasecmp(name, "PLANE5") == 0 || strcasecmp(name, "PLANE5BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 0, -0x21, 0.625f);
-    }
+    snprintf(table->label, sizeof table->label, "%s", label);
+    snprintf(table->source_path, sizeof table->source_path, "%s", path);
+    table->valid = 1;
+    return 1;
+}
 
-    if (bdd_current_stage_is_forest()) {
-        if (strcasecmp(name, "wood1") == 0 || strcasecmp(name, "wood1BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 0, -0x36, 1.0f);
-        if (strcasecmp(name, "wood2") == 0 || strcasecmp(name, "wood2BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 135, -0x1a, 0.75f);
-        if (strcasecmp(name, "wood4") == 0 || strcasecmp(name, "wood4BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 111, 0x14, 0.625f);
-        if (strcasecmp(name, "wood5") == 0 || strcasecmp(name, "wood5BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 215, 0x21, 0.5f);
-        if (strcasecmp(name, "wood6") == 0 || strcasecmp(name, "wood6BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 281, 0x3a, 0.3125f);
-        if (strcasecmp(name, "wood7") == 0 || strcasecmp(name, "wood7BMOD") == 0)
-            return bdd_runtime_info_set(ox, oy, scroll, 378, 0x52, 0.0f);
+static const BddStageModuleTable *bdd_get_stage_module_table(void)
+{
+    const char *label = bdd_bgnd_stage_label();
+    if (!label) {
+        g_stage_module_cache.valid = 0;
+        g_stage_module_cache.label[0] = '\0';
+        return NULL;
     }
+    if (g_stage_module_cache.valid &&
+        strcasecmp(g_stage_module_cache.label, label) == 0)
+        return &g_stage_module_cache;
 
+    if (bdd_build_stage_module_table(&g_stage_module_cache))
+        return &g_stage_module_cache;
+    return NULL;
+}
+
+static int bdd_stage_module_runtime_info(const char *name, int *ox, int *oy, float *scroll)
+{
+    const BddStageModuleTable *table;
+    char want[32];
+
+    if (!name)
+        return 0;
+    table = bdd_get_stage_module_table();
+    if (!table)
+        return 0;
+
+    bdd_strip_bmod_suffix(name, want, sizeof want);
+    for (int i = 0; i < table->plane_count; i++) {
+        if (strcasecmp(table->planes[i].name, want) == 0)
+            return bdd_runtime_info_set(ox, oy, scroll,
+                                        table->planes[i].ox,
+                                        table->planes[i].oy,
+                                        table->planes[i].scroll);
+    }
     return 0;
+}
+
+/* dlists-derived runtime draw rank for a background module plane, or -1. */
+static int bdd_stage_module_draw_rank(const char *name)
+{
+    const BddStageModuleTable *table;
+    char want[32];
+
+    if (!name)
+        return -1;
+    table = bdd_get_stage_module_table();
+    if (!table)
+        return -1;
+
+    bdd_strip_bmod_suffix(name, want, sizeof want);
+    for (int i = 0; i < table->plane_count; i++) {
+        if (strcasecmp(table->planes[i].name, want) == 0)
+            return table->planes[i].draw_rank;
+    }
+    return -1;
+}
+
+static int bdd_stage_floor_draw_rank(void)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    return table ? table->floor_rank : -1;
 }
 
 int bdd_object_runtime_origin(int obj_index, int *rx, int *ry)
@@ -1075,12 +1517,9 @@ static int bdd_object_image_label_is_any(int obj_index, const char *const *label
 
 static int bdd_object_is_stage_floor(int obj_index)
 {
-    if (bdd_current_stage_is_battle())
-        return bdd_object_image_label_equals(obj_index, "FL_BATTL");
-    if (bdd_current_stage_is_forest())
-        return bdd_object_image_label_equals(obj_index, "FL_FORST");
-    if (bdd_current_stage_is_tower_runtime())
-        return bdd_object_image_label_equals(obj_index, "FL_TOW");
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    if (table && table->floor_label[0])
+        return bdd_object_image_label_equals(obj_index, table->floor_label);
     return 0;
 }
 
@@ -1106,7 +1545,10 @@ int bdd_object_game_screen_y(int obj_index, int game_y)
 }
 
 /* Draw rank follows the BGND display-list plane order for runtime preview:
-   far background first, floor at its -1/floor_code slot, foreground later. */
+   far background first, floor at its -1/floor_code slot, foreground later.
+   Forest/Battle plane and floor ranks are derived from dlists_<stage>; Tower
+   keeps hand-tuned ranks because its clouds/monk/statue objects interleave with
+   the background in a way the BGND display list alone does not express. */
 int bdd_object_runtime_draw_rank(int obj_index)
 {
     int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
@@ -1122,44 +1564,31 @@ int bdd_object_runtime_draw_rank(int obj_index)
         };
         if (bdd_object_module_info(obj_index, module_name, (int)sizeof module_name,
                                    &mx1, &mx2, &my1, &my2)) {
-            if (strcasecmp(module_name, "BAT7") == 0 || strcasecmp(module_name, "BAT7BMOD") == 0)
-                return 10;
-            if (strcasecmp(module_name, "BAT6") == 0 || strcasecmp(module_name, "BAT6BMOD") == 0)
-                return 20;
-            if (strcasecmp(module_name, "BAT5") == 0 || strcasecmp(module_name, "BAT5BMOD") == 0)
-                return 30;
-            if (strcasecmp(module_name, "BAT4") == 0 || strcasecmp(module_name, "BAT4BMOD") == 0)
-                return 40;
-            if (strcasecmp(module_name, "BAT2") == 0 || strcasecmp(module_name, "BAT2BMOD") == 0)
-                return 50;
-            if (strcasecmp(module_name, "BAT1") == 0 || strcasecmp(module_name, "BAT1BMOD") == 0)
-                return 70;
+            int rank = bdd_stage_module_draw_rank(module_name);
+            if (rank >= 0)
+                return rank;
         }
+        /* Loose props share the mid-ground tier (BAT2/baklst3 slot). */
         if (bdd_object_image_label_is_any(obj_index, battle_props,
                                           (int)(sizeof battle_props / sizeof battle_props[0])))
             return 50;
-        if (bdd_object_is_stage_floor(obj_index))
-            return 60;
+        if (bdd_object_is_stage_floor(obj_index)) {
+            int rank = bdd_stage_floor_draw_rank();
+            return rank >= 0 ? rank : 60;
+        }
     }
 
     if (bdd_current_stage_is_forest()) {
         if (bdd_object_module_info(obj_index, module_name, (int)sizeof module_name,
                                    &mx1, &mx2, &my1, &my2)) {
-            if (strcasecmp(module_name, "wood7") == 0 || strcasecmp(module_name, "wood7BMOD") == 0)
-                return 10;
-            if (strcasecmp(module_name, "wood6") == 0 || strcasecmp(module_name, "wood6BMOD") == 0)
-                return 20;
-            if (strcasecmp(module_name, "wood5") == 0 || strcasecmp(module_name, "wood5BMOD") == 0)
-                return 30;
-            if (strcasecmp(module_name, "wood4") == 0 || strcasecmp(module_name, "wood4BMOD") == 0)
-                return 40;
-            if (strcasecmp(module_name, "wood2") == 0 || strcasecmp(module_name, "wood2BMOD") == 0)
-                return 50;
-            if (strcasecmp(module_name, "wood1") == 0 || strcasecmp(module_name, "wood1BMOD") == 0)
-                return 70;
+            int rank = bdd_stage_module_draw_rank(module_name);
+            if (rank >= 0)
+                return rank;
         }
-        if (bdd_object_is_stage_floor(obj_index))
-            return 60;
+        if (bdd_object_is_stage_floor(obj_index)) {
+            int rank = bdd_stage_floor_draw_rank();
+            return rank >= 0 ? rank : 60;
+        }
     }
 
     if (bdd_current_stage_is_tower_runtime()) {
