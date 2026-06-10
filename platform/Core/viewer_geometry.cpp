@@ -1713,9 +1713,10 @@ int bdd_object_game_screen_y(int obj_index, int game_y)
 
 /* Draw rank follows the BGND display-list plane order for runtime preview:
    far background first, floor at its -1/floor_code slot, foreground later.
-   Forest/Battle plane and floor ranks are derived from dlists_<stage>; Tower
-   keeps hand-tuned ranks because its clouds/monk/statue objects interleave with
-   the background in a way the BGND display list alone does not express. */
+   Background plane and floor ranks are derived from dlists_<stage> for every
+   stage. Tower keeps hand-tuned ranks because its clouds/monk/statue objects
+   interleave with the background in a way the BGND display list alone does not
+   express; Battle's loose props share a fixed mid-ground tier. */
 int bdd_object_runtime_draw_rank(int obj_index)
 {
     int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
@@ -1724,40 +1725,7 @@ int bdd_object_runtime_draw_rank(int obj_index)
     if (obj_index < 0 || obj_index >= g_no)
         return 1000000;
 
-    if (bdd_current_stage_is_battle()) {
-        static const char *const battle_props[] = {
-            "RUBLE1", "BURN_VDA", "SKULLS", "SKELTS",
-            "ROCK_VDA", "BURN6_VDA", "RUBLE2"
-        };
-        if (bdd_object_module_info(obj_index, module_name, (int)sizeof module_name,
-                                   &mx1, &mx2, &my1, &my2)) {
-            int rank = bdd_stage_module_draw_rank(module_name);
-            if (rank >= 0)
-                return rank;
-        }
-        /* Loose props share the mid-ground tier (BAT2/baklst3 slot). */
-        if (bdd_object_image_label_is_any(obj_index, battle_props,
-                                          (int)(sizeof battle_props / sizeof battle_props[0])))
-            return 50;
-        if (bdd_object_is_stage_floor(obj_index)) {
-            int rank = bdd_stage_floor_draw_rank();
-            return rank >= 0 ? rank : 60;
-        }
-    }
-
-    if (bdd_current_stage_is_forest()) {
-        if (bdd_object_module_info(obj_index, module_name, (int)sizeof module_name,
-                                   &mx1, &mx2, &my1, &my2)) {
-            int rank = bdd_stage_module_draw_rank(module_name);
-            if (rank >= 0)
-                return rank;
-        }
-        if (bdd_object_is_stage_floor(obj_index)) {
-            int rank = bdd_stage_floor_draw_rank();
-            return rank >= 0 ? rank : 60;
-        }
-    }
-
+    /* Tower: hand-tuned interleaving of gameplay objects with the background. */
     if (bdd_current_stage_is_tower_runtime()) {
         static const char *const tower_clouds[] = { "CLOUD1A", "CLOUD1B", "CLOUD1C", "CLOUD1D" };
         static const char *const tower_monk[] = {
@@ -1782,6 +1750,31 @@ int bdd_object_runtime_draw_rank(int obj_index)
             bdd_object_image_label_equals(obj_index, "STATUE1") ||
             bdd_object_image_label_equals(obj_index, "FLAMEA1"))
             return 55;
+        return 500 + obj_index;
+    }
+
+    /* Generic: background plane order straight from dlists_<stage>. */
+    if (bdd_object_module_info(obj_index, module_name, (int)sizeof module_name,
+                               &mx1, &mx2, &my1, &my2)) {
+        int rank = bdd_stage_module_draw_rank(module_name);
+        if (rank >= 0)
+            return rank;
+    }
+
+    /* Battle loose props share the mid-ground tier (BAT2/baklst3 slot). */
+    if (bdd_current_stage_is_battle()) {
+        static const char *const battle_props[] = {
+            "RUBLE1", "BURN_VDA", "SKULLS", "SKELTS",
+            "ROCK_VDA", "BURN6_VDA", "RUBLE2"
+        };
+        if (bdd_object_image_label_is_any(obj_index, battle_props,
+                                          (int)(sizeof battle_props / sizeof battle_props[0])))
+            return 50;
+    }
+
+    if (bdd_object_is_stage_floor(obj_index)) {
+        int rank = bdd_stage_floor_draw_rank();
+        return rank >= 0 ? rank : 60;
     }
 
     return 500 + obj_index;
