@@ -24,6 +24,7 @@
 #include "Core/bdd_format.h"
 #include "bg_editor.h"
 #include "Core/app_diagnostics.h"
+#include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
 #include "Core/editor_project_storage.h"
 #include "Core/image_lookup.h"
@@ -55,22 +56,33 @@
 #define BDDVIEW_VERSION "0.0.0-dev"
 #endif
 
-/* Headless capture of the runtime layout view to a PNG, for visual review of a
-   stage without launching the GUI. Handles "--render-png <BDD> <out.png>".
+/* Headless capture of a stage to a PNG, for visual review without the GUI.
+   Handles "--render-png <BDD> <out.png> [game|layout] [zoom]".
+     layout (default): the whole runtime layout at 1:1.
+     game: the in-game 400x254 view at the BGND camera start (parallax
+           composited) -- the true arcade framing. Default zoom 2.
    Returns true if it consumed the flag (handled), with *exit_code set. */
 static bool bdd_viewer_render_png(int argc, char *argv[], int *exit_code)
 {
     const char *bdd_arg = nullptr;
     const char *out_arg = nullptr;
+    bool game_mode = false;
+    int zoom = 0;   /* 0 = mode default */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--render-png") == 0) {
             if (i + 2 < argc) { bdd_arg = argv[i + 1]; out_arg = argv[i + 2]; }
+            for (int j = i + 3; j < argc; j++) {
+                if (strcmp(argv[j], "game") == 0) game_mode = true;
+                else if (strcmp(argv[j], "layout") == 0) game_mode = false;
+                else { int z = atoi(argv[j]); if (z >= 1 && z <= 8) zoom = z; }
+            }
             break;
         }
     }
     if (!bdd_arg || !out_arg)
         return false;
     *exit_code = 1;
+    if (zoom <= 0) zoom = game_mode ? 2 : 1;
 
     char bdb_p[512] = "", bdd_p[512] = "";
     if (!bdd_viewer_load_stage_for_path(bdd_arg, bdb_p, sizeof bdb_p, bdd_p, sizeof bdd_p)) {
@@ -78,24 +90,40 @@ static bool bdd_viewer_render_png(int argc, char *argv[], int *exit_code)
         return true;
     }
     runtime_actor_autoload_for_stage();
-
-    g_runtime_layout_view = 1;
-    g_game_view = 0;
     g_show_objects = 1;
 
-    int x0 = 0, x1 = 400, y0 = 0, y1 = 254;
-    bdd_get_runtime_layout_bounds(&x0, &x1, &y0, &y1);
-    if (x0 == INT_MAX || x1 == INT_MIN || y0 == INT_MAX || y1 == INT_MIN) {
-        x0 = 0; x1 = 400; y0 = 0; y1 = 254;
+    int x0 = 0, x1 = 400, y0 = 0, y1 = 254;   /* layout bounds (layout mode) */
+    int ww, wh, vx, vy;
+    if (game_mode) {
+        g_preview_mode = 1;        /* canvas_top = 0, no ImGui in viewport calc */
+        g_runtime_layout_view = 1; /* game origin uses runtime (parallax) origins */
+        g_game_view = 1;
+        ww = 400 * zoom;
+        wh = 254 * zoom;
+        vx = 0;
+        vy = 0;
+    } else {
+        g_runtime_layout_view = 1;
+        g_game_view = 0;
+        bdd_get_runtime_layout_bounds(&x0, &x1, &y0, &y1);
+        if (x0 == INT_MAX || x1 == INT_MIN || y0 == INT_MAX || y1 == INT_MIN) {
+            x0 = 0; x1 = 400; y0 = 0; y1 = 254;
+        }
+        const int pad = 8;
+        x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+        ww = (x1 - x0) * zoom;
+        wh = (y1 - y0) * zoom;
+        vx = x0;
+        vy = y0;
     }
-    const int pad = 8;
-    x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
-    int ww = x1 - x0, wh = y1 - y0;
     const int MAXDIM = 8192;
     if (ww < 16) ww = 16;
     if (wh < 16) wh = 16;
     if (ww > MAXDIM) ww = MAXDIM;
     if (wh > MAXDIM) wh = MAXDIM;
+
+    if (game_mode)
+        bdd_reset_game_preview_camera();   /* frame at the BGND stage start camera */
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "render-png: SDL_Init: %s\n", SDL_GetError());
@@ -122,7 +150,7 @@ static bool bdd_viewer_render_png(int argc, char *argv[], int *exit_code)
         SDL_SetRenderTarget(r, target);
         SDL_SetRenderDrawColor(r, g_bg_color[0], g_bg_color[1], g_bg_color[2], 255);
         SDL_RenderClear(r);
-        bdd_world_objects_draw(r, x0, y0, 1, ww, wh, 0, 0, 0, 0, 0);
+        bdd_world_objects_draw(r, vx, vy, zoom, ww, wh, 0, 0, 0, 0, 0);
 
         unsigned char *buf = (unsigned char *)malloc((size_t)ww * wh * 4);
         if (buf && SDL_RenderReadPixels(r, nullptr, SDL_PIXELFORMAT_ABGR8888,
@@ -142,8 +170,12 @@ static bool bdd_viewer_render_png(int argc, char *argv[], int *exit_code)
     SDL_Quit();
 
     if (ok) {
-        fprintf(stderr, "render-png: wrote %s (%dx%d, layout x[%d,%d] y[%d,%d])\n",
-                out_arg, ww, wh, x0, x1, y0, y1);
+        if (game_mode)
+            fprintf(stderr, "render-png: wrote %s (%dx%d, game view zoom=%d cam=(%d,%d))\n",
+                    out_arg, ww, wh, zoom, g_scroll_pos, g_game_view_y);
+        else
+            fprintf(stderr, "render-png: wrote %s (%dx%d, layout x[%d,%d] y[%d,%d])\n",
+                    out_arg, ww, wh, x0, x1, y0, y1);
         *exit_code = 0;
     } else {
         fprintf(stderr, "render-png: failed to write %s\n", out_arg);
