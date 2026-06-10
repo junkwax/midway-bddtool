@@ -911,6 +911,10 @@ static int runtime_actor_add_derived_actors(void)
         int ay = base_im ? img_anim_offset_y(base_im, 0) : 0;
 
         for (int p = 0; p < d->pos_count && g_runtime_actor_count < MAX_RUNTIME_ACTORS; p++) {
+            /* Screen-anchored movers spawn at one on-screen position and travel;
+               skip their off-screen initial-spawn coord. */
+            if (d->screen_anchored && (d->pos_x[p] < -256 || d->pos_x[p] > 1400))
+                continue;
             RuntimeStageActor actor;
             runtime_actor_init_default(&actor);
             snprintf(actor.name, sizeof actor.name, "%s_%d", d->proc, p + 1);
@@ -920,7 +924,8 @@ static int runtime_actor_add_derived_actors(void)
             actor.x = d->pos_x[p] - ax;
             actor.y = d->pos_y[p] - ay;
             actor.layer = 0x40;
-            actor.scroll = 1.0f;
+            actor.scroll = d->scroll;        /* insertion-plane parallax (0 = screen-fixed) */
+            actor.screen_space_y = d->screen_anchored ? true : false;
             actor.frame_ticks = 5;
             actor.motion_x = d->motion_x;   /* oxvel (16.16), 0 if static */
             actor.motion_y = d->motion_y;

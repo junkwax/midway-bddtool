@@ -98,6 +98,9 @@ typedef struct {
     int pos_y[BDD_STAGE_ACTOR_POS_MAX];
     int motion_x;                  /* oxvel px/frame (movi >v,a0 -> oxvel), 0 if static */
     int motion_y;                  /* oyvel px/frame, 0 if static */
+    int insert_baklst;             /* baklst plane the proc inserts into, -1 if unknown */
+    float scroll;                  /* parallax factor of that baklst (0 = screen-fixed) */
+    int screen_anchored;           /* coord is worldtlx-relative (mover) -> screen-fixed */
 } BddStageActor;
 int bdd_stage_runtime_actors(BddStageActor *out, int max_actors);
 

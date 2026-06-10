@@ -687,6 +687,7 @@ typedef struct {
     int limits_valid;        /* <stage>_mod words 5,6 captured (scroll left/right) */
     int scroll_left, scroll_right;
     char calla_label[64];    /* <stage>_mod calla routine (header long #1) */
+    float baklst_scroll[BDD_BGND_SCROLL_ENTRIES]; /* parallax factor per baklst 0..8 */
 } BddStageModuleTable;
 
 /* scrrgt/wy_offset substituted into <stage>_mod header expressions, matching the
@@ -1225,6 +1226,13 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
         else
             table->planes[i].scroll = 0.0f;
     }
+    /* Parallax factor per baklst index (N maps to scroll-table row 8-N). */
+    for (int n = 0; n < BDD_BGND_SCROLL_ENTRIES; n++) {
+        int pos = 8 - n;
+        table->baklst_scroll[n] = (pos >= 0 && pos < BDD_BGND_SCROLL_ENTRIES)
+                                  ? (float)scroll[pos] / (float)BDD_BGND_PLAYFIELD_SCROLL
+                                  : 0.0f;
+    }
 
     snprintf(table->label, sizeof table->label, "%s", label);
     snprintf(table->source_path, sizeof table->source_path, "%s", path);
@@ -1669,6 +1677,53 @@ static int bdd_proc_velocity(const char *path, const char *proc,
     return 0;
 }
 
+/* Parse "movi baklstN,b4" -> N (the display-list plane an object inserts into). */
+static int bdd_extract_baklst_b4(const char *line)
+{
+    const char *m = strstr(line, "movi");
+    const char *bk = strstr(line, "baklst");
+    const char *semi = strchr(line, ';');
+    const char *comma, *reg;
+    int n;
+    if (!m || !bk || bk < m) return -1;
+    if (semi && semi < bk) return -1;
+    comma = strchr(bk, ',');
+    if (!comma) return -1;
+    reg = comma + 1;
+    while (*reg && isspace((unsigned char)*reg)) reg++;
+    if (!(reg[0] == 'b' && reg[1] == '4' &&
+          !(isalnum((unsigned char)reg[2]) || reg[2] == '_')))
+        return -1;
+    n = atoi(bk + 6);
+    return (n >= 1 && n <= 8) ? n : -1;
+}
+
+/* Find the baklst plane the proc inserts its object into (direct "movi
+   baklstN,b4" in the proc body). Returns N, or -1 if it inserts via a helper. */
+static int bdd_proc_insert_baklst(const char *path, const char *proc,
+                                  char siblings[][48], int sibling_count)
+{
+    FILE *f;
+    char line[512];
+    int in = 0, lines = 0;
+    if (!path || !proc || !proc[0]) return -1;
+    f = fopen(path, "r");
+    if (!f) return -1;
+    while (fgets(line, sizeof line, f)) {
+        if (!in) {
+            if (bdd_line_is_label(line, proc)) in = 1;
+            continue;
+        }
+        if (++lines > 120) break;
+        if (bdd_line_is_any_of(line, siblings, sibling_count, proc))
+            break;
+        int n = bdd_extract_baklst_b4(line);
+        if (n > 0) { fclose(f); return n; }
+    }
+    fclose(f);
+    return -1;
+}
+
 /* Public: derive the loaded stage's background animation actors from BGND.ASM:
    each calla pid_bani proc that drives an a_* frame sequence. */
 int bdd_stage_runtime_actors(BddStageActor *out, int max_actors)
@@ -1698,6 +1753,18 @@ int bdd_stage_runtime_actors(BddStageActor *out, int max_actors)
                                               BDD_STAGE_ACTOR_POS_MAX);
         out[n].motion_x = bdd_proc_velocity(table->source_path, procs[i], procs, np);
         out[n].motion_y = 0;
+        out[n].insert_baklst = bdd_proc_insert_baklst(table->source_path, procs[i],
+                                                      procs, np);
+        /* Movers use worldtlx-relative coords -> screen-fixed; static actors use
+           their insertion plane's parallax factor. */
+        out[n].screen_anchored = (out[n].motion_x != 0 || out[n].motion_y != 0) ? 1 : 0;
+        if (out[n].screen_anchored)
+            out[n].scroll = 0.0f;
+        else if (out[n].insert_baklst >= 0 &&
+                 out[n].insert_baklst < BDD_BGND_SCROLL_ENTRIES)
+            out[n].scroll = table->baklst_scroll[out[n].insert_baklst];
+        else
+            out[n].scroll = 1.0f;
         n++;
     }
     return n;
