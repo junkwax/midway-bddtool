@@ -37,7 +37,8 @@ static void bdd_build_object_draw_order(std::vector<int> &order)
    plane's parallax scroll -- exactly as BGND draws it. Planes are walked in
    dlists draw-rank order; only ranks in [rank_lo, rank_hi) are drawn so the
    caller can interleave the floor at its -1/floor_code slot. */
-static void bdd_block_background_draw(SDL_Renderer *rend, int clip_x, int clip_y,
+static void bdd_block_background_draw(SDL_Renderer *rend,
+                                      int view_x, int view_y, int clip_x, int clip_y,
                                       int zoom, int game_scroll,
                                       int rank_lo, int rank_hi)
 {
@@ -79,11 +80,15 @@ static void bdd_block_background_draw(SDL_Renderer *rend, int clip_x, int clip_y
             if (im->w <= 0 || im->h <= 0) continue;
             int world_x = ox + blocks[b].x;
             int world_y = oy + blocks[b].y;
-            SDL_Rect dst = {
-                clip_x + (world_x - (int)(game_scroll * scroll)) * zoom,
-                clip_y + (world_y - g_game_view_y) * zoom,
-                im->w * zoom, im->h * zoom
-            };
+            int sx, sy;
+            if (g_game_view) {
+                sx = clip_x + (world_x - (int)(game_scroll * scroll)) * zoom;
+                sy = clip_y + (world_y - g_game_view_y) * zoom;
+            } else {   /* runtime layout view: editor-canvas projection */
+                sx = (world_x - view_x) * zoom;
+                sy = (world_y - view_y) * zoom;
+            }
+            SDL_Rect dst = { sx, sy, im->w * zoom, im->h * zoom };
             /* MK2 block flip bits (see mk2_analysis: wx |= 0x10/0x20). */
             SDL_RendererFlip flip = SDL_FLIP_NONE;
             if (blocks[b].flags & 0x0010) flip = (SDL_RendererFlip)(flip | SDL_FLIP_HORIZONTAL);
@@ -172,11 +177,14 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
         }
 
         /* Block-table background: draw the far planes (rank below the floor's
-           dlists slot) before the floor/objects, exactly as BGND orders them. */
-        int block_bg = g_game_view && g_block_background_render && bdd_stage_plane_count() > 0;
+           dlists slot) before the floor/objects, exactly as BGND orders them.
+           Active in both the game preview and the runtime layout review view. */
+        int block_bg = (g_game_view || g_runtime_layout_view) &&
+                       g_block_background_render && bdd_stage_plane_count() > 0;
         int floor_rank = block_bg ? bdd_stage_floor_rank() : 0;
         if (block_bg)
-            bdd_block_background_draw(rend, cx, cy, zoom, g_scroll_pos, INT_MIN, floor_rank);
+            bdd_block_background_draw(rend, view_x, view_y, cx, cy, zoom, g_scroll_pos,
+                                      INT_MIN, floor_rank);
 
         for (size_t oi = 0; oi < draw_order.size(); oi++) {
             int i = draw_order[oi];
@@ -226,7 +234,8 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
         /* Foreground planes (rank at/after the floor slot, e.g. the big wood1
            trees) draw over the floor, beneath the runtime actors. */
         if (block_bg)
-            bdd_block_background_draw(rend, cx, cy, zoom, g_scroll_pos, floor_rank, INT_MAX);
+            bdd_block_background_draw(rend, view_x, view_y, cx, cy, zoom, g_scroll_pos,
+                                      floor_rank, INT_MAX);
 
         if (g_game_view) {
             SDL_RenderSetClipRect(rend, NULL);
