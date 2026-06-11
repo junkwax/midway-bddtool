@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.11] - 2026-06-10
+## [1.0.12] - 2026-06-10
+
+### Changed
+- Derived runtime actors now carry motion and per-plane parallax, derived from
+  their BGND.ASM spawn proc:
+  - x-velocity from the proc's `movi >v,a0` (oxvel); movers (bats) travel across
+    the screen in the GUI preview.
+  - the insertion baklst (direct `movi baklstN,b4` or one level through a
+    `callr`/`calla`/`jsrp` helper such as `get_bat_obj`/`make_a_mad_tree`)
+    selects the actor's parallax factor instead of a fixed 1.0 -- e.g. SPIRAL
+    warplite baklst7 = 0.0 (screen-fixed), ARMORY lava baklst3 = 0.656, BRIDGE
+    fighters baklst4 = 0.125. `worldtlx`-relative movers are screen-anchored.
+  - proc-body scans stop at the `a_*` data table, so a non-spawning "frame
+    driver" (e.g. SPIRAL `lil_monk_animator`) is identified and no longer
+    emits a stray actor at a spurious position.
 
 ### Added
 - The runtime preview now spawns vanilla-derived background actors:
