@@ -83,6 +83,38 @@ int bdd_stage_floor_descriptor(char *label, int label_sz,
 int bdd_mkbgani_sprite_info(const char *label, int *w, int *h,
                             int *xoff, int *yoff, char *palette, int palette_sz);
 
+/* One block from a module's <module>BLKS table in BGNDTBL.ASM. x/y are the
+   block's module-local placement; hdr indexes st2HDRS == our loaded g_img/
+   g_textures order (verified 1:1). flags carry the block's flip/render bits. */
+typedef struct {
+    int x, y;
+    int hdr;     /* st2HDRS index == g_img index */
+    int flags;
+} BddBgndBlock;
+
+/* Parse the <module>BLKS block table for a background module (BMOD suffix
+   optional) straight from vanilla BGNDTBL.ASM, exactly as the game renders it.
+   Returns the block count (capped at max), 0 if not found. */
+int bdd_stage_module_blocks(const char *module, BddBgndBlock *out, int max);
+
+/* Enumerate the loaded stage's background planes (BGND.ASM <stage>_mod order).
+   bdd_stage_plane_info fills the plane's module name, placement offset, parallax
+   scroll and dlists draw rank. Any out pointer may be NULL. */
+int bdd_stage_plane_count(void);
+int bdd_stage_plane_info(int index, char *name, int name_sz,
+                         int *ox, int *oy, float *scroll, int *draw_rank);
+
+/* 1 when an object belongs to a known background plane (so the block-table
+   renderer draws it from *BLKS and the BDB object copy is suppressed). */
+int bdd_object_in_background_plane(int obj_index);
+
+/* Draw rank of the floor's -1/floor_code dlists slot (INT_MAX if the stage has
+   no floor), so block planes can be split far/near around it. */
+int bdd_stage_floor_rank(void);
+
+/* Master toggle for the block-table background renderer (default on). */
+extern int g_block_background_render;
+
 /* A background animation actor derived from the loaded stage's BGND.ASM:
    the calla spawns `proc` (create pid_bani,proc), which cycles the `sequence`
    (a_*) frame table of MKBGANI sprite labels. */

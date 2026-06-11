@@ -7,6 +7,7 @@
 #include "bg_editor_globals.h"
 
 #include <algorithm>
+#include <climits>
 #include <vector>
 
 static void bdd_build_object_draw_order(std::vector<int> &order)
@@ -28,6 +29,68 @@ static void bdd_build_object_draw_order(std::vector<int> &order)
         if (oa != ob) return oa < ob;
         return a < b;
     });
+}
+
+/* Render the loaded stage's background straight from the game's *BLKS block
+   tables (BGNDTBL.ASM) instead of the reconstructed BDB objects: each block is
+   drawn at its module-local placement + the plane's baklst offset, with the
+   plane's parallax scroll -- exactly as BGND draws it. Planes are walked in
+   dlists draw-rank order; only ranks in [rank_lo, rank_hi) are drawn so the
+   caller can interleave the floor at its -1/floor_code slot. */
+static void bdd_block_background_draw(SDL_Renderer *rend, int clip_x, int clip_y,
+                                      int zoom, int game_scroll,
+                                      int rank_lo, int rank_hi)
+{
+    int n = bdd_stage_plane_count();
+    if (n <= 0) return;
+
+    /* Plane indices sorted by draw rank (far first); small n, simple insertion. */
+    int order[BDD_STAGE_ACTOR_MAX];
+    int count = 0;
+    for (int i = 0; i < n && count < (int)(sizeof order / sizeof order[0]); i++) {
+        int rank = 0;
+        if (!bdd_stage_plane_info(i, NULL, 0, NULL, NULL, NULL, &rank)) continue;
+        if (rank < rank_lo || rank >= rank_hi) continue;
+        int pos = count++;
+        order[pos] = i;
+        while (pos > 0) {
+            int ra = 0, rb = 0;
+            bdd_stage_plane_info(order[pos - 1], NULL, 0, NULL, NULL, NULL, &ra);
+            bdd_stage_plane_info(order[pos], NULL, 0, NULL, NULL, NULL, &rb);
+            if (ra <= rb) break;
+            int t = order[pos - 1]; order[pos - 1] = order[pos]; order[pos] = t;
+            pos--;
+        }
+    }
+
+    static BddBgndBlock blocks[512];
+    for (int oi = 0; oi < count; oi++) {
+        char mod[32];
+        int ox = 0, oy = 0;
+        float scroll = 1.0f;
+        if (!bdd_stage_plane_info(order[oi], mod, sizeof mod, &ox, &oy, &scroll, NULL))
+            continue;
+        int nb = bdd_stage_module_blocks(mod, blocks, (int)(sizeof blocks / sizeof blocks[0]));
+        for (int b = 0; b < nb; b++) {
+            int hdr = blocks[b].hdr;
+            if (hdr < 0 || hdr >= g_ni) continue;
+            if (!g_textures || !g_textures[hdr]) continue;
+            Img *im = &g_img[hdr];
+            if (im->w <= 0 || im->h <= 0) continue;
+            int world_x = ox + blocks[b].x;
+            int world_y = oy + blocks[b].y;
+            SDL_Rect dst = {
+                clip_x + (world_x - (int)(game_scroll * scroll)) * zoom,
+                clip_y + (world_y - g_game_view_y) * zoom,
+                im->w * zoom, im->h * zoom
+            };
+            /* MK2 block flip bits (see mk2_analysis: wx |= 0x10/0x20). */
+            SDL_RendererFlip flip = SDL_FLIP_NONE;
+            if (blocks[b].flags & 0x0010) flip = (SDL_RendererFlip)(flip | SDL_FLIP_HORIZONTAL);
+            if (blocks[b].flags & 0x0020) flip = (SDL_RendererFlip)(flip | SDL_FLIP_VERTICAL);
+            SDL_RenderCopyEx(rend, g_textures[hdr], NULL, &dst, 0.0, NULL, flip);
+        }
+    }
 }
 
 void bdd_world_objects_draw(SDL_Renderer *rend,
@@ -108,9 +171,18 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
             SDL_RenderFillRect(rend, &clip_rect);
         }
 
+        /* Block-table background: draw the far planes (rank below the floor's
+           dlists slot) before the floor/objects, exactly as BGND orders them. */
+        int block_bg = g_game_view && g_block_background_render && bdd_stage_plane_count() > 0;
+        int floor_rank = block_bg ? bdd_stage_floor_rank() : 0;
+        if (block_bg)
+            bdd_block_background_draw(rend, cx, cy, zoom, g_scroll_pos, INT_MIN, floor_rank);
+
         for (size_t oi = 0; oi < draw_order.size(); oi++) {
             int i = draw_order[oi];
             if (g_obj_hidden[i] || runtime_actor_preview_hides_object(i)) continue;
+            /* Background-plane objects are drawn from their *BLKS block tables. */
+            if (block_bg && bdd_object_in_background_plane(i)) continue;
             Obj *o = &g_obj[i];
             Img *im = img_find(o->ii);
             if (!im) continue;
@@ -150,6 +222,11 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
                 SDL_RenderDrawRect(rend, &dst);
             }
         }
+
+        /* Foreground planes (rank at/after the floor slot, e.g. the big wood1
+           trees) draw over the floor, beneath the runtime actors. */
+        if (block_bg)
+            bdd_block_background_draw(rend, cx, cy, zoom, g_scroll_pos, floor_rank, INT_MAX);
 
         if (g_game_view) {
             SDL_RenderSetClipRect(rend, NULL);

@@ -52,6 +52,7 @@ int  g_hover_obj = -1;
 int  g_game_view = 0;
 int  g_scroll_pos = 0;
 int  g_game_view_y = 0;
+int  g_block_background_render = 1;
 int  g_split_view = 0;
 int  g_split_scroll_a = 0;
 int  g_runtime_layout_view = 1;

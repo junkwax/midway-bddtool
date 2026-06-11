@@ -630,6 +630,32 @@ int bdd_viewer_run_cli_command(int argc, char **argv, int *exit_code)
         *exit_code = rc;
         return 1;
     }
+    if (argc >= 2 && strcmp(argv[1], "--stage-blocks") == 0) {
+        if (argc < 4) {
+            fprintf(stderr, "usage: bddview --stage-blocks FILE.BDB|FILE.BDD MODULE\n");
+            *exit_code = 1;
+            return 1;
+        }
+        char bdb_path[512] = "", bdd_path[512] = "";
+        if (!bdd_viewer_load_stage_for_path(argv[2], bdb_path, sizeof bdb_path,
+                                            bdd_path, sizeof bdd_path)) {
+            fprintf(stderr, "stage-blocks: failed to load %s\n", argv[2]);
+            *exit_code = 1;
+            return 1;
+        }
+        static BddBgndBlock blocks[256];
+        int n = bdd_stage_module_blocks(argv[3], blocks, 256);
+        fprintf(stderr, "stage-blocks: %s -> %d blocks\n", argv[3], n);
+        for (int i = 0; i < n; i++) {
+            int hdr = blocks[i].hdr;
+            int iw = (hdr >= 0 && hdr < g_ni) ? g_img[hdr].w : -1;
+            int ih = (hdr >= 0 && hdr < g_ni) ? g_img[hdr].h : -1;
+            fprintf(stderr, "  blk %3d  local(%4d,%4d)  hdr=%2d img=%dx%d flags=0x%04X\n",
+                    i, blocks[i].x, blocks[i].y, hdr, iw, ih, blocks[i].flags);
+        }
+        *exit_code = (n > 0) ? 0 : 1;
+        return 1;
+    }
     if (argc >= 2 && strcmp(argv[1], "--stage-actors") == 0) {
         if (argc < 3) {
             fprintf(stderr, "usage: bddview --stage-actors FILE.BDB|FILE.BDD\n");

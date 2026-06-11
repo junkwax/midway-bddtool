@@ -1319,6 +1319,50 @@ static int bdd_stage_module_runtime_info(const char *name, int *ox, int *oy, flo
     return 0;
 }
 
+/* Public: enumerate the loaded stage's background planes (from <stage>_mod /
+   dlists), so the block-table renderer can walk plane -> *BLKS -> blocks. */
+int bdd_stage_plane_count(void)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    return table ? table->plane_count : 0;
+}
+
+int bdd_stage_plane_info(int index, char *name, int name_sz,
+                         int *ox, int *oy, float *scroll, int *draw_rank)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    if (!table || index < 0 || index >= table->plane_count)
+        return 0;
+    const BddStagePlane *p = &table->planes[index];
+    if (name && name_sz > 0) snprintf(name, (size_t)name_sz, "%s", p->name);
+    if (ox) *ox = p->ox;
+    if (oy) *oy = p->oy;
+    if (scroll) *scroll = p->scroll;
+    if (draw_rank) *draw_rank = p->draw_rank;
+    return 1;
+}
+
+/* Public: draw rank of the floor's -1/floor_code dlists slot, INT_MAX if none. */
+int bdd_stage_floor_rank(void)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    return (table && table->floor_rank >= 0) ? table->floor_rank : INT_MAX;
+}
+
+/* Public: 1 when the object belongs to a known background plane module (and so
+   is rendered from its *BLKS block table, not its reconstructed BDB depth). */
+int bdd_object_in_background_plane(int obj_index)
+{
+    char module_name[64];
+    int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+    if (obj_index < 0 || obj_index >= g_no)
+        return 0;
+    if (!bdd_object_module_info(obj_index, module_name, (int)sizeof module_name,
+                                &mx1, &mx2, &my1, &my2))
+        return 0;
+    return bdd_stage_module_runtime_info(module_name, NULL, NULL, NULL);
+}
+
 /* dlists-derived runtime draw rank for a background module plane, or -1. */
 static int bdd_stage_module_draw_rank(const char *name)
 {
@@ -1460,6 +1504,79 @@ int bdd_mkbgani_sprite_info(const char *label, int *w, int *h,
     if (xoff) *xoff = dims[2];
     if (yoff) *yoff = dims[3];
     return 1;
+}
+
+/* Resolve src\BGNDTBL.ASM (or the src-refactor copy) for the loaded stage. */
+static int bdd_resolve_bgndtbl_path(char *out, size_t outsz)
+{
+    char root[512];
+    char path[512];
+    if (!out || outsz == 0) return 0;
+    bdd_stage_root_from_loaded_path(root, sizeof root);
+    if (!root[0]) return 0;
+    path_join(path, sizeof path, root, "src\\BGNDTBL.ASM");
+    if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
+    path_join(path, sizeof path, root, "src-refactor\\src\\BGNDTBL.ASM");
+    if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
+    return 0;
+}
+
+/* Public: parse a module's <module>BLKS block table from BGNDTBL.ASM. Each
+   block is four .word values (flags, x, y, pal|hdr); the first block spreads
+   them across separate .word lines, later blocks pack four per line, so we
+   read every .word value flat and regroup into 4-tuples until 0FFFFH. */
+int bdd_stage_module_blocks(const char *module, BddBgndBlock *out, int max)
+{
+    char path[512];
+    char want[64];
+    char label[72];
+    FILE *f;
+    char line[512];
+    int in = 0, count = 0;
+    int buf[4], bn = 0;
+    size_t len;
+
+    if (!module || !module[0] || !out || max <= 0) return 0;
+    bdd_strip_bmod_suffix(module, want, sizeof want);
+    len = strlen(want);
+    if (len + 4 >= sizeof label) return 0;
+    snprintf(label, sizeof label, "%sBLKS", want);
+
+    if (!bdd_resolve_bgndtbl_path(path, sizeof path)) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in) {
+            if (bdd_line_is_label(line, label)) in = 1;
+            continue;
+        }
+        if (!bdd_bgnd_asm_active_directive(line, ".word")) {
+            /* A new column-0 label ends the table; comments/blank lines skip. */
+            if (!isspace((unsigned char)line[0]) && line[0] != ';' &&
+                line[0] != '*' && line[0] != '.' && line[0] != '\0')
+                break;
+            continue;
+        }
+        int vals[8];
+        int nv = bdd_parse_word_csv(line, vals, 8);
+        for (int i = 0; i < nv; i++) {
+            if ((vals[i] & 0xFFFF) == 0xFFFF) { in = 0; goto done; }  /* end marker */
+            buf[bn++] = vals[i];
+            if (bn == 4) {
+                if (count < max) {
+                    out[count].flags = buf[0];
+                    out[count].x = buf[1];
+                    out[count].y = buf[2];
+                    out[count].hdr = buf[3] & 0x0FFF;
+                    count++;
+                }
+                bn = 0;
+            }
+        }
+    }
+done:
+    fclose(f);
+    return count;
 }
 
 /* Extract the proc name from a "create pid_bani,<proc>" line. */
