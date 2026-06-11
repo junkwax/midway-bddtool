@@ -68,12 +68,14 @@ static bool bdd_viewer_render_png(int argc, char *argv[], int *exit_code)
     const char *out_arg = nullptr;
     bool game_mode = false;
     int zoom = 0;   /* 0 = mode default */
+    int cam_override = INT_MIN;   /* game-mode camera X override (cam=N) */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--render-png") == 0) {
             if (i + 2 < argc) { bdd_arg = argv[i + 1]; out_arg = argv[i + 2]; }
             for (int j = i + 3; j < argc; j++) {
                 if (strcmp(argv[j], "game") == 0) game_mode = true;
                 else if (strcmp(argv[j], "layout") == 0) game_mode = false;
+                else if (strncmp(argv[j], "cam=", 4) == 0) cam_override = atoi(argv[j] + 4);
                 else { int z = atoi(argv[j]); if (z >= 1 && z <= 8) zoom = z; }
             }
             break;
@@ -122,8 +124,11 @@ static bool bdd_viewer_render_png(int argc, char *argv[], int *exit_code)
     if (ww > MAXDIM) ww = MAXDIM;
     if (wh > MAXDIM) wh = MAXDIM;
 
-    if (game_mode)
+    if (game_mode) {
         bdd_reset_game_preview_camera();   /* frame at the BGND stage start camera */
+        if (cam_override != INT_MIN)
+            g_scroll_pos = cam_override;   /* pan to an explicit camera X for review */
+    }
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "render-png: SDL_Init: %s\n", SDL_GetError());
