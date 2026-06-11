@@ -136,6 +136,14 @@ int bdd_object_screen_rect(int obj_index, int image_w, int image_h,
         rect.y = rect.clip_y + screen_y * zoom;
     } else {
         bdd_object_editor_origin(obj_index, &ox, &oy);
+        /* Runtime layout review draws the background from game-accurate block
+           tables; give the floor the same start_y bias the game-view floor uses
+           (bdd_runtime_floor_screen_y) so it meets the trunk bases, not BDB Y. */
+        if (g_runtime_layout_view && bdd_object_uses_runtime_floor_y(obj_index)) {
+            int start_x = 0, start_y = 0;
+            if (bdd_get_stage_start_camera(&start_x, &start_y))
+                oy += start_y;
+        }
         rect.x = (ox - view_x) * zoom;
         rect.y = (oy - view_y) * zoom;
     }
