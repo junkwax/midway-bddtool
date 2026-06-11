@@ -127,7 +127,23 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
             SDL_RendererFlip flip = SDL_FLIP_NONE;
             if (o->hfl) flip = (SDL_RendererFlip)(flip | SDL_FLIP_HORIZONTAL);
             if (o->vfl) flip = (SDL_RendererFlip)(flip | SDL_FLIP_VERTICAL);
-            SDL_RenderCopyEx(rend, g_textures[ti], NULL, &dst, 0.0, NULL, flip);
+
+            /* The MK2 floor shears per scanline as the camera pans (skew_calla):
+               line i leans by i*shear source px. Replicate by drawing the floor
+               one source scanline at a time at the sheared x. */
+            int floor_shear = (g_game_view && bdd_object_uses_runtime_floor_y(i))
+                              ? bdd_runtime_floor_shear_per_line() : 0;
+            if (floor_shear != 0 && im->h > 0) {
+                for (int row = 0; row < im->h; row++) {
+                    SDL_Rect ssrc = { 0, row, im->w, 1 };
+                    SDL_Rect sdst = { screen_rect.x + floor_shear * row * zoom,
+                                      screen_rect.y + row * zoom,
+                                      im->w * zoom, zoom };
+                    SDL_RenderCopyEx(rend, g_textures[ti], &ssrc, &sdst, 0.0, NULL, flip);
+                }
+            } else {
+                SDL_RenderCopyEx(rend, g_textures[ti], NULL, &dst, 0.0, NULL, flip);
+            }
 
             if (g_show_borders && !g_game_view) {
                 SDL_SetRenderDrawColor(rend, 60, 60, 90, 180);

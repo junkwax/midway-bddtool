@@ -682,6 +682,7 @@ typedef struct {
     int floor_info_valid;    /* floor_y/floor_height were parsed from floor_info */
     int floor_y;             /* skew Y position word from <stage>_floor_info */
     int floor_height;        /* floor height word from <stage>_floor_info */
+    int floor_skew_shift;    /* sra N in the floor's skew_calla (shear = -dx>>N), 0 = none */
     int camera_valid;        /* <stage>_mod words 3,4 captured (init worldy/worldx) */
     int camera_x, camera_y;
     int limits_valid;        /* <stage>_mod words 5,6 captured (scroll left/right) */
@@ -1037,7 +1038,9 @@ static void bdd_parse_stage_floor_info(const char *path, const char *calla_label
     fclose(f);
     if (!floor_info_label[0]) return;
 
-    /* Pass 2: label(.long #1), palette(.long #2), skew_y(.word #1), height(.word #2). */
+    /* Pass 2: label(.long #1), palette(.long #2), skew_y(.word #1),
+       height(.word #2), scroll(.long #3), skew_calla(.long #4). */
+    char skew_calla_label[64] = "";
     f = fopen(path, "r");
     if (!f) return;
     while (fgets(line, sizeof line, f)) {
@@ -1046,6 +1049,9 @@ static void bdd_parse_stage_floor_info(const char *path, const char *calla_label
                 in_info = 1;
             continue;
         }
+        if (!isspace((unsigned char)line[0]) && line[0] != '.' &&
+            line[0] != ';' && line[0] != '*')
+            break;   /* next label ends the floor_info block */
         char tok[64];
         if (bdd_bgnd_asm_active_directive(line, ".long") &&
             bdd_bgnd_asm_long_token(line, tok, sizeof tok)) {
@@ -1054,22 +1060,55 @@ static void bdd_parse_stage_floor_info(const char *path, const char *calla_label
                 snprintf(table->floor_label, sizeof table->floor_label, "%s", tok);
             else if (long_seen == 2)
                 snprintf(table->floor_palette, sizeof table->floor_palette, "%s", tok);
+            else if (long_seen == 4) {
+                snprintf(skew_calla_label, sizeof skew_calla_label, "%s", tok);
+                break;
+            }
             continue;
         }
         int v = 0;
         if (bdd_bgnd_asm_active_directive(line, ".word") &&
             bdd_bgnd_asm_word_expr_value(line, BDD_BGND_SCRRGT, BDD_BGND_WY_OFFSET, &v)) {
             word_seen++;
-            if (word_seen == 1) {
+            if (word_seen == 1)
                 table->floor_y = v;
-            } else if (word_seen == 2) {
+            else if (word_seen == 2) {
                 table->floor_height = v;
                 table->floor_info_valid = 1;
-                break;
             }
         }
     }
     fclose(f);
+
+    /* The skew_calla routine shears the floor: "sra N,a9 ; sub a9,a11" makes the
+       per-line dx = -scroll>>N. Capture N so the preview can reproduce the lean. */
+    if (skew_calla_label[0]) {
+        FILE *sf = fopen(path, "r");
+        if (sf) {
+            int in_sc = 0, sc_lines = 0;
+            while (fgets(line, sizeof line, sf)) {
+                if (!in_sc) {
+                    if (bdd_line_is_label(line, skew_calla_label)) in_sc = 1;
+                    continue;
+                }
+                if (++sc_lines > 12) break;
+                const char *s = strstr(line, "sra");
+                const char *semi = strchr(line, ';');
+                if (s && (!semi || semi > s) &&
+                    !(isalnum((unsigned char)s[3]) || s[3] == '_')) {
+                    const char *p = s + 3;
+                    while (*p && isspace((unsigned char)*p)) p++;
+                    int n = atoi(p);
+                    if (n > 0 && n < 31) table->floor_skew_shift = n;
+                    break;
+                }
+                if (bdd_bgnd_asm_active_directive(line, "rets") ||
+                    bdd_bgnd_asm_active_directive(line, "jauc"))
+                    break;
+            }
+            fclose(sf);
+        }
+    }
 }
 
 static int bdd_resolve_bgnd_asm_path(const char *root, char *out, size_t outsz)
@@ -1200,6 +1239,7 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
     table->floor_info_valid = 0;
     table->floor_y = 0;
     table->floor_height = 0;
+    table->floor_skew_shift = 0;
     table->camera_valid = 0;
     table->limits_valid = 0;
     table->calla_label[0] = '\0';
@@ -2289,6 +2329,22 @@ int bdd_runtime_floor_screen_y(int floor_y)
     if (bdd_get_stage_start_camera(&start_x, &start_y))
         return floor_y + start_y - g_game_view_y;
     return floor_y - g_game_view_y;
+}
+
+/* Per-scanline horizontal shear of the floor, in source pixels: the game's
+   skew_calla accumulates skew_dx = -(camera displacement) >> N, so floor line i
+   leans by i*shear. 0 when the stage floor has no skew or the camera is at the
+   start. */
+int bdd_runtime_floor_shear_per_line(void)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    int start_x = 0, start_y = 0;
+    if (!table || table->floor_skew_shift <= 0)
+        return 0;
+    if (!bdd_get_stage_start_camera(&start_x, &start_y))
+        return 0;
+    int dx = g_scroll_pos - start_x;
+    return -(dx >> table->floor_skew_shift);
 }
 
 int bdd_object_game_screen_y(int obj_index, int game_y)
