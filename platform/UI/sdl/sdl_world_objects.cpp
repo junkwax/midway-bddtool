@@ -69,8 +69,12 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
         char mod[32];
         int ox = 0, oy = 0;
         float scroll = 1.0f;
-        if (!bdd_stage_plane_info(order[oi], mod, sizeof mod, &ox, &oy, &scroll, NULL))
+        int prank = 0;
+        if (!bdd_stage_plane_info(order[oi], mod, sizeof mod, &ox, &oy, &scroll, &prank))
             continue;
+        if (getenv("BDD_DBG_SCROLL"))
+            fprintf(stderr, "plane %-8s ox=%d oy=%d scroll=%.4f rank=%d\n",
+                    mod, ox, oy, scroll, prank);
         int nb = bdd_stage_module_blocks(mod, blocks, (int)(sizeof blocks / sizeof blocks[0]));
         for (int b = 0; b < nb; b++) {
             int hdr = blocks[b].hdr;
