@@ -45,6 +45,12 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
     int n = bdd_stage_plane_count();
     if (n <= 0) return;
 
+    /* MK2 anchors every plane's worldtlx at the stage-start camera and scrolls
+       the delta by the plane's factor: a factor-0 plane stays locked to the
+       screen, all planes align at the start view. */
+    int start_x = 0, start_y = 0;
+    bdd_get_stage_start_camera(&start_x, &start_y);
+
     /* Plane indices sorted by draw rank (far first); small n, simple insertion. */
     int order[BDD_STAGE_ACTOR_MAX];
     int count = 0;
@@ -69,12 +75,8 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
         char mod[32];
         int ox = 0, oy = 0;
         float scroll = 1.0f;
-        int prank = 0;
-        if (!bdd_stage_plane_info(order[oi], mod, sizeof mod, &ox, &oy, &scroll, &prank))
+        if (!bdd_stage_plane_info(order[oi], mod, sizeof mod, &ox, &oy, &scroll, NULL))
             continue;
-        if (getenv("BDD_DBG_SCROLL"))
-            fprintf(stderr, "plane %-8s ox=%d oy=%d scroll=%.4f rank=%d\n",
-                    mod, ox, oy, scroll, prank);
         int nb = bdd_stage_module_blocks(mod, blocks, (int)(sizeof blocks / sizeof blocks[0]));
         for (int b = 0; b < nb; b++) {
             int hdr = blocks[b].hdr;
@@ -86,7 +88,8 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
             int world_y = oy + blocks[b].y;
             int sx, sy;
             if (g_game_view) {
-                sx = clip_x + (world_x - (int)(game_scroll * scroll)) * zoom;
+                int parallax = start_x + (int)((float)(game_scroll - start_x) * scroll);
+                sx = clip_x + (world_x - parallax) * zoom;
                 sy = clip_y + (world_y - g_game_view_y) * zoom;
             } else {   /* runtime layout view: editor-canvas projection */
                 sx = (world_x - view_x) * zoom;
