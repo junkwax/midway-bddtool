@@ -20,6 +20,8 @@ static const char *save_error_hint(const char *detail)
         return "The editor could not create the temporary save file. Check folder permissions and available disk space.";
     if (strstr(detail, "backup failed"))
         return "The editor could not make its safety backup. Check folder permissions before retrying.";
+    if (strstr(detail, "runtime preview sprite"))
+        return "Open MK2 > Runtime Animation Actors, save the runtime sidecar if you changed actors, then click Discard Preview IMG Imports before saving the BDD.";
     return "The detailed save error is in save_errors.log.";
 }
 

@@ -75,6 +75,12 @@ static RuntimeStageActor g_runtime_actors[MAX_RUNTIME_ACTORS];
 static int  g_runtime_actor_count = 0;
 static int  g_runtime_actor_selected = -1;
 static bool g_runtime_actor_preview = true;
+/* When the user manually discards the runtime preview IMG imports, suppress the
+   auto-import on subsequent autoloads of the SAME stage (stage open/tab switch),
+   so the discard "sticks" instead of being immediately re-imported. Cleared when
+   a different stage file is opened (or via re-enabling preview). */
+static bool g_runtime_actor_autoimport_suppressed = false;
+static char g_runtime_actor_last_autoload_path[520] = "";
 static bool g_runtime_actor_labels = true;
 static bool g_runtime_actor_timeline_paused = false;
 static bool g_runtime_actor_onion_skin = false;
@@ -654,6 +660,32 @@ static bool runtime_actor_preview_imports_are_tail(void)
     return true;
 }
 
+static int runtime_actor_remap_image_slot_after_delete(int slot,
+                                                       const int *slot_remap,
+                                                       int old_ni)
+{
+    if (slot < 0) return -1;
+    if (slot < old_ni) return slot_remap ? slot_remap[slot] : -1;
+    return g_ni > 0 ? g_ni - 1 : -1;
+}
+
+static void runtime_actor_remap_image_slot_globals_after_delete(const int *slot_remap,
+                                                                int old_ni)
+{
+    g_place_tool_img = runtime_actor_remap_image_slot_after_delete(g_place_tool_img,
+                                                                   slot_remap, old_ni);
+    g_tile_img = runtime_actor_remap_image_slot_after_delete(g_tile_img,
+                                                             slot_remap, old_ni);
+    g_last_import_img = runtime_actor_remap_image_slot_after_delete(g_last_import_img,
+                                                                    slot_remap, old_ni);
+    g_img_edit_idx = runtime_actor_remap_image_slot_after_delete(g_img_edit_idx,
+                                                                 slot_remap, old_ni);
+    g_block_edit_img = runtime_actor_remap_image_slot_after_delete(g_block_edit_img,
+                                                                   slot_remap, old_ni);
+    if (g_block_edit_img < 0)
+        g_block_edit_open = false;
+}
+
 void runtime_actor_preview_import_status(char *out, size_t outsz)
 {
     if (!out || outsz == 0) return;
@@ -1020,24 +1052,71 @@ static void runtime_actor_discard_preview_imports(void)
         runtime_actor_status("No runtime preview sprites are loaded");
         return;
     }
-    if (!runtime_actor_preview_imports_are_tail() ||
-        g_runtime_actor_preview_base_images < 0 ||
-        g_runtime_actor_preview_base_pals < 0) {
-        runtime_actor_status("Cannot safely discard preview imports after other image changes; close without saving and reopen NUPOOL.BDB");
-        return;
-    }
+
+    /* Keep the discard from being undone by the next autoload of this stage. */
+    g_runtime_actor_autoimport_suppressed = true;
+    g_runtime_actor_preview = false;
 
     int old_dirty = g_dirty;
     bool old_palette_dirty = g_mk2_palette_sync_dirty;
-    editor_project_truncate_images(g_runtime_actor_preview_base_images);
-    editor_project_truncate_palettes(g_runtime_actor_preview_base_pals);
+    if (runtime_actor_preview_imports_are_tail() &&
+        g_runtime_actor_preview_base_images >= 0 &&
+        g_runtime_actor_preview_base_images <= g_ni &&
+        g_runtime_actor_preview_base_pals >= 0 &&
+        g_runtime_actor_preview_base_pals <= g_n_pals) {
+        editor_project_truncate_images(g_runtime_actor_preview_base_images);
+        editor_project_truncate_palettes(g_runtime_actor_preview_base_pals);
+        if (g_place_tool_img >= g_ni) g_place_tool_img = g_ni - 1;
+        if (g_tile_img >= g_ni) g_tile_img = g_ni - 1;
+        if (g_last_import_img >= g_ni) g_last_import_img = g_ni - 1;
+        if (g_img_edit_idx >= g_ni) g_img_edit_idx = -1;
+        if (g_block_edit_img >= g_ni) {
+            g_block_edit_img = -1;
+            g_block_edit_open = false;
+        }
+    } else {
+        int image_cap = editor_project_image_capacity();
+        int old_ni = g_ni;
+        unsigned char *del_img = NULL;
+        int *slot_remap = NULL;
+        if (image_cap <= 0 || old_ni <= 0) {
+            runtime_actor_status("Could not discard runtime preview IMG imports");
+            return;
+        }
+        del_img = (unsigned char *)calloc((size_t)image_cap, sizeof(del_img[0]));
+        slot_remap = (int *)malloc((size_t)image_cap * sizeof(slot_remap[0]));
+        if (!del_img || !slot_remap) {
+            free(del_img);
+            free(slot_remap);
+            runtime_actor_status("Could not allocate preview discard buffers");
+            return;
+        }
+        for (int i = 0; i < image_cap; i++)
+            slot_remap[i] = -1;
+        for (int i = 0; i < old_ni; i++) {
+            if (runtime_actor_image_is_preview_import(&g_img[i]))
+                del_img[i] = 1;
+        }
+        int next_slot = 0;
+        for (int i = 0; i < old_ni; i++) {
+            if (!del_img[i])
+                slot_remap[i] = next_slot++;
+        }
+        int removed = editor_project_delete_marked_images(del_img, image_cap);
+        runtime_actor_remap_image_slot_globals_after_delete(slot_remap, old_ni);
+        free(del_img);
+        free(slot_remap);
+        count = removed;
+    }
     g_runtime_actor_preview_base_images = -1;
     g_runtime_actor_preview_base_pals = -1;
     g_dirty = old_dirty;
     g_mk2_palette_sync_dirty = old_palette_dirty;
     g_need_rebuild = 1;
     g_last_import_img = g_ni > 0 ? g_ni - 1 : -1;
-    runtime_actor_status("Discarded runtime preview IMG imports");
+    char msg[128];
+    snprintf(msg, sizeof msg, "Discarded %d runtime preview IMG import(s)", count);
+    runtime_actor_status(msg);
 }
 
 static RuntimeStageActor *runtime_actor_selected_ptr(void)
@@ -1819,9 +1898,23 @@ int runtime_actor_import_inferred_level_animations(void)
 
 void runtime_actor_autoload_for_stage(void)
 {
+    const char *path = g_bdd_path[0] ? g_bdd_path : (g_bdb_path[0] ? g_bdb_path : "");
+    if (strncmp(path, g_runtime_actor_last_autoload_path,
+                sizeof g_runtime_actor_last_autoload_path) != 0) {
+        g_runtime_actor_autoimport_suppressed = false;   /* different file: re-enable preview */
+        snprintf(g_runtime_actor_last_autoload_path,
+                 sizeof g_runtime_actor_last_autoload_path, "%s", path);
+    }
     g_runtime_actor_count = 0;
     g_runtime_actor_selected = -1;
     g_runtime_actor_preview = false;
+    if (g_runtime_actor_autoimport_suppressed) {
+        /* User discarded the preview IMG imports for this stage; do not let a
+           re-autoload (tab switch / re-open of the same file) bring them back. */
+        g_runtime_actor_preview_base_images = -1;
+        g_runtime_actor_preview_base_pals = -1;
+        return;
+    }
     if (!runtime_actor_preview_imports_loaded()) {
         g_runtime_actor_preview_base_images = -1;
         g_runtime_actor_preview_base_pals = -1;
@@ -2211,7 +2304,13 @@ void draw_mk2_runtime_actor_tool(void)
     char sidecar[640];
     runtime_actor_default_sidecar_path(sidecar, sizeof sidecar);
     ImGui::TextWrapped("Sidecar: %s", sidecar);
-    ImGui::Checkbox("Preview actors", &g_runtime_actor_preview);
+    if (ImGui::Checkbox("Preview actors", &g_runtime_actor_preview) &&
+        g_runtime_actor_preview && g_runtime_actor_autoimport_suppressed) {
+        /* Re-enabling preview after a discard reloads the runtime art. */
+        g_runtime_actor_autoimport_suppressed = false;
+        g_runtime_actor_last_autoload_path[0] = '\0';
+        runtime_actor_autoload_for_stage();
+    }
     ImGui::SameLine();
     ImGui::Checkbox("Labels", &g_runtime_actor_labels);
     if (ImGui::Button("Open Isolated Animation Window", ImVec2(-1, 0)))

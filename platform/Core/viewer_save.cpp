@@ -289,7 +289,7 @@ int bdd_save(void)
         char msg[256];
         runtime_actor_preview_import_status(msg, sizeof msg);
         fprintf(stderr, "bdd: save blocked, runtime preview imports loaded: %s\n", msg);
-        bdd_save_logf("BDD save blocked: %s Save Runtime Sidecar or Discard Preview IMG Imports first.", msg);
+        bdd_save_logf("BDD save blocked: %s Save Runtime Sidecar if needed, then Discard Preview IMG Imports.", msg);
         stage_set_toast("BDD save blocked: discard runtime preview sprites first");
         return 0;
     }
