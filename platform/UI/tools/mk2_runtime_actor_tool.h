@@ -14,6 +14,7 @@ bool runtime_actor_preview_imports_loaded(void);
 bool runtime_actor_image_is_preview_import(const Img *im);
 int runtime_actor_preview_import_count(void);
 void runtime_actor_preview_import_status(char *out, size_t outsz);
+void runtime_actor_discard_preview_imports(void);
 int runtime_actor_count(void);
 int runtime_actor_total_frame_count(void);
 int runtime_actor_missing_frame_count(void);

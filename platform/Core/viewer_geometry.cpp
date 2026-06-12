@@ -1568,6 +1568,9 @@ int bdd_stage_module_blocks(const char *module, BddBgndBlock *out, int max)
                     out[count].x = buf[1];
                     out[count].y = buf[2];
                     out[count].hdr = buf[3] & 0x0FFF;
+                    /* LOAD2 packs the block palette as flags bits 3-0 plus
+                       hdr-word bits 15-12 (pal>>4), see ldbgnd2.c read_bgnd. */
+                    out[count].pal = (buf[0] & 0xF) | (((buf[3] >> 12) & 0xF) << 4);
                     count++;
                 }
                 bn = 0;

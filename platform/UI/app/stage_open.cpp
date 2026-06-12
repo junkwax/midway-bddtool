@@ -85,6 +85,9 @@ void open_mk2_tool(int tool)
     case 10:
         g_mk2_workflow_section = 0;
         break;
+    case 11:
+        g_mk2_workflow_section = 7; /* FX section hosts the Animation Planner */
+        break;
     default:
         g_mk2_workflow_section = g_have_bdb ? 3 : 0;
         break;

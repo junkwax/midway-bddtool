@@ -194,7 +194,7 @@ void draw_mk2_workflow(void)
         if (mk2_tool_header("Pan Coverage Scanner"))
             draw_mk2_pan_coverage_scanner();
         ImGui::Separator();
-        if (mk2_tool_header("Animation Planner"))
+        if (mk2_tool_header("Animation Planner", g_mk2_focus_tool == 11))
             draw_mk2_animation_planner_tool();
         ImGui::Separator();
         if (mk2_tool_header("Stage Template Wizard"))

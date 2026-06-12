@@ -81,7 +81,8 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
         for (int b = 0; b < nb; b++) {
             int hdr = blocks[b].hdr;
             if (hdr < 0 || hdr >= g_ni) continue;
-            if (!g_textures || !g_textures[hdr]) continue;
+            SDL_Texture *tex = bdd_texture_for_placement(hdr, blocks[b].pal);
+            if (!tex) continue;
             Img *im = &g_img[hdr];
             if (im->w <= 0 || im->h <= 0) continue;
             int world_x = ox + blocks[b].x;
@@ -100,7 +101,7 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
             SDL_RendererFlip flip = SDL_FLIP_NONE;
             if (blocks[b].flags & 0x0010) flip = (SDL_RendererFlip)(flip | SDL_FLIP_HORIZONTAL);
             if (blocks[b].flags & 0x0020) flip = (SDL_RendererFlip)(flip | SDL_FLIP_VERTICAL);
-            SDL_RenderCopyEx(rend, g_textures[hdr], NULL, &dst, 0.0, NULL, flip);
+            SDL_RenderCopyEx(rend, tex, NULL, &dst, 0.0, NULL, flip);
         }
     }
 }
@@ -141,7 +142,8 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
                 Img *im = img_find(o->ii);
                 if (!im) continue;
                 int ti = (int)(im - g_img);
-                if (!g_textures || !g_textures[ti]) continue;
+                SDL_Texture *tex2 = bdd_texture_for_placement(ti, o->fl);
+                if (!tex2) continue;
                 BddScreenRect screen_rect;
                 if (!bdd_object_screen_rect(i, im->w, im->h, view_x, view_y,
                                             zoom, ww, wh, cur_scroll, &screen_rect))
@@ -153,7 +155,7 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
                 SDL_RendererFlip flip2 = SDL_FLIP_NONE;
                 if (o->hfl) flip2 = (SDL_RendererFlip)(flip2 | SDL_FLIP_HORIZONTAL);
                 if (o->vfl) flip2 = (SDL_RendererFlip)(flip2 | SDL_FLIP_VERTICAL);
-                SDL_RenderCopyEx(rend, g_textures[ti], NULL, &dst2, 0.0, NULL, flip2);
+                SDL_RenderCopyEx(rend, tex2, NULL, &dst2, 0.0, NULL, flip2);
             }
         }
         SDL_RenderSetClipRect(rend, NULL);
@@ -203,7 +205,8 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
             if (!im) continue;
 
             int ti = (int)(im - g_img);
-            if (!g_textures || !g_textures[ti]) continue;
+            SDL_Texture *tex = bdd_texture_for_placement(ti, o->fl);
+            if (!tex) continue;
 
             BddScreenRect screen_rect;
             if (!bdd_object_screen_rect(i, im->w, im->h, view_x, view_y,
@@ -226,10 +229,10 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
                     SDL_Rect sdst = { screen_rect.x + floor_shear * row * zoom,
                                       screen_rect.y + row * zoom,
                                       im->w * zoom, zoom };
-                    SDL_RenderCopyEx(rend, g_textures[ti], &ssrc, &sdst, 0.0, NULL, flip);
+                    SDL_RenderCopyEx(rend, tex, &ssrc, &sdst, 0.0, NULL, flip);
                 }
             } else {
-                SDL_RenderCopyEx(rend, g_textures[ti], NULL, &dst, 0.0, NULL, flip);
+                SDL_RenderCopyEx(rend, tex, NULL, &dst, 0.0, NULL, flip);
             }
 
             if (g_show_borders && !g_game_view) {

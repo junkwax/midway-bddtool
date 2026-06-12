@@ -1045,7 +1045,7 @@ static void runtime_actor_import_deadpool_imgs(void)
     runtime_actor_status(msg);
 }
 
-static void runtime_actor_discard_preview_imports(void)
+void runtime_actor_discard_preview_imports(void)
 {
     int count = runtime_actor_preview_import_count();
     if (count <= 0) {

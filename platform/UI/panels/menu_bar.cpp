@@ -748,6 +748,8 @@ void MenuBarPanel::render()
                 editor_emit_open_mk2_tool(8);
             if (ImGui::MenuItem("ROM Preview Diff", NULL, false, g_have_bdb && g_no > 0))
                 editor_emit_open_mk2_tool(9);
+            if (ImGui::MenuItem("Runtime Animation Actors", NULL, false, g_have_bdb && g_no > 0))
+                editor_emit_open_mk2_tool(11);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Help")) {

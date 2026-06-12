@@ -90,6 +90,7 @@ typedef struct {
     int x, y;
     int hdr;     /* st2HDRS index == g_img index */
     int flags;
+    int pal;     /* block palette: flags bits 3-0 + hdr-word bits 15-12 as 7-4 */
 } BddBgndBlock;
 
 /* Parse the <module>BLKS block table for a background module (BMOD suffix
