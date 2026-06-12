@@ -656,6 +656,7 @@ extern bool g_mk2_palette_prompt_after_img_import;
 extern bool g_mk2_palette_auto_sync_on_save;
 extern bool g_mk2_palette_sync_dirty;
 extern bool g_mk2_palette_sync_popup;
+extern bool g_mk2_lod_stale_warn_after_save;
 extern char g_mk2_palette_sync_reason[128];
 extern char g_mk2_palette_sync_asm[512];
 extern char g_mk2_palette_sync_table[64];
@@ -698,6 +699,8 @@ bool create_mk2_simple_four_image_level(const char *bg_path,
 void mk2_palette_sync_request_prompt(const char *reason, bool allow_if_unknown_path = false);
 bool mk2_palette_sync_auto_apply_if_ready(const char *reason);
 void draw_mk2_palette_sync_prompt(void);
+void mk2_lod_stale_check_after_save(void);
+void draw_mk2_lod_stale_warning(void);
 bool save_all_project(void);
 bool file_dialog_save(const char *title, const char *filter, char *out, int outsz);
 void set_project_save_paths_from_any(const char *path);

@@ -92,6 +92,7 @@ void bg_editor_render(void)
     g_panel_manager.render_panels(EditorPanelRegion::DocumentTabs);
     editor_process_commands();
     draw_mk2_palette_sync_prompt();
+    draw_mk2_lod_stale_warning();
     draw_save_error_popup();
     draw_unsaved_action_prompt();
     draw_img_import_picker();

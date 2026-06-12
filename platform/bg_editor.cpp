@@ -479,6 +479,7 @@ bool g_mk2_palette_prompt_after_img_import = true;
 bool g_mk2_palette_auto_sync_on_save = false;
 bool g_mk2_palette_sync_dirty = false;
 bool g_mk2_palette_sync_popup = false;
+bool g_mk2_lod_stale_warn_after_save = true;
 char g_mk2_palette_sync_reason[128] = "";
 char g_mk2_palette_sync_asm[512] = "";
 char g_mk2_palette_sync_table[64] = "";

@@ -112,6 +112,7 @@ add_executable(bddview
     platform/UI/tools/mk2_layer_presets.cpp
     platform/UI/tools/mk2_level_start_helper_tool.cpp
     platform/UI/tools/mk2_load2_doctor_tool.cpp
+    platform/UI/tools/mk2_lod_stale_warning.cpp
     platform/UI/tools/mk2_mirrored_asset_tool.cpp
     platform/UI/tools/mk2_one_click_validation_run.cpp
     platform/UI/tools/mk2_palette_animation_tools.cpp

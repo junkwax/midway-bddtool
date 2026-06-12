@@ -236,6 +236,7 @@ bool save_all_project(void)
                 !mk2_palette_sync_auto_apply_if_ready("Saved BDD palettes"))
                 mk2_palette_sync_request_prompt("Saved BDD palettes");
         }
+        mk2_lod_stale_check_after_save();
         return true;
     } else if (want_bdb || want_bdd) {
         char detail[1024] = "";
