@@ -495,6 +495,8 @@ void MenuBarPanel::render()
                 Img *rim = img_find(g_obj[active_obj].ii);
                 if (rim) open_sprite_resize((int)(rim - g_img), true);
             }
+            if (ImGui::MenuItem("Resize Selected Sprites...", NULL, false, sel_n > 1))
+                open_group_sprite_resize();
             if (ImGui::MenuItem("Split Object...", NULL, false, has_obj))
                 open_split_object_dialog(active_obj);
             if (ImGui::MenuItem("Lower Selected Bit Depth...", NULL, false, selected_count() > 0))

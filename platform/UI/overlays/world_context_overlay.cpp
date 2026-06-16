@@ -95,6 +95,9 @@ void draw_world_context_overlay(void)
                     Img *rim = img_find(g_obj[active].ii);
                     if (rim) open_sprite_resize((int)(rim - g_img), true);
                 }
+                if (ctx_valid && ImGui::MenuItem("Resize Selected Sprites...", NULL, false,
+                                                 selected_count() > 1))
+                    open_group_sprite_resize();
                 if (ctx_valid && ImGui::MenuItem("Split Object...", NULL, false, has_obj)) {
                     open_split_object_dialog(active);
                     ImGui::CloseCurrentPopup();

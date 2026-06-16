@@ -825,6 +825,7 @@ void open_object_properties(int idx);
 bool obj_properties_take_focus_request(void);
 void edit_block_for_object(int idx);
 void open_sprite_resize(int img_idx, bool selected_only_default);
+void open_group_sprite_resize(void);
 void draw_sprite_resize_dialog(void);
 void open_split_object_dialog(int obj_idx);
 void draw_split_object_dialog(void);
