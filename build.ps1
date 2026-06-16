@@ -1,4 +1,4 @@
-# build.ps1 — Build midway-bddtool (Windows/SDL2 port) using VS 2022
+# build.ps1 — Build midway-bddtool (Windows/SDL2 port) using Visual Studio
 param(
     [string]$SourceDir  = $PSScriptRoot,
     [string]$BuildRoot  = "$env:LOCALAPPDATA\bddview-build",
@@ -22,14 +22,24 @@ if ($Arch -eq "x86") {
     $vcvarsArch = "x64"
 }
 
-# Locate VS 2022
+# Locate Visual Studio with the C++ toolchain.
 $vsRoot = $null
+$vsInstallVersion = ""
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (Test-Path $vswhere) {
-    $path = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if ($path -and (Test-Path "$path\VC\Auxiliary\Build\vcvarsall.bat")) { $vsRoot = $path }
+    $instances = & $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json | ConvertFrom-Json
+    $instance = $instances | Sort-Object -Property installationVersion -Descending | Select-Object -First 1
+    if ($instance -and (Test-Path "$($instance.installationPath)\VC\Auxiliary\Build\vcvarsall.bat")) {
+        $vsRoot = $instance.installationPath
+        $vsInstallVersion = $instance.installationVersion
+    }
 }
 $vsRoots = @(
+    "C:\Program Files\Microsoft Visual Studio\2026\Community",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2026\BuildTools",
+    "C:\Program Files\Microsoft Visual Studio\2026\BuildTools",
+    "C:\Program Files\Microsoft Visual Studio\2026\Professional",
+    "C:\Program Files\Microsoft Visual Studio\2026\Enterprise",
     "C:\Program Files\Microsoft Visual Studio\2022\Community",
     "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools",
     "C:\Program Files\Microsoft Visual Studio\2022\Professional",
@@ -38,10 +48,20 @@ $vsRoots = @(
 if (-not $vsRoot) {
     $vsRoot = $vsRoots | Where-Object { Test-Path "$_\VC\Auxiliary\Build\vcvarsall.bat" } | Select-Object -First 1
 }
-if (-not $vsRoot) { Write-Error "VS 2022 not found"; exit 1 }
+if (-not $vsRoot) { Write-Error "Visual Studio C++ toolchain not found"; exit 1 }
+if (-not $vsInstallVersion) {
+    if ($vsRoot -match '\\2026\\') { $vsInstallVersion = "18.0" }
+    elseif ($vsRoot -match '\\2022\\') { $vsInstallVersion = "17.0" }
+}
+$vsMajor = 17
+if ($vsInstallVersion -match '^(\d+)\.') {
+    $vsMajor = [int]$Matches[1]
+}
+$cmakeGenerator = if ($vsMajor -ge 18) { "Visual Studio 18 2026" } else { "Visual Studio 17 2022" }
 $vcvarsall = "$vsRoot\VC\Auxiliary\Build\vcvarsall.bat"
 $cmakeRel  = "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-$vsCmake   = ($vsRoots | ForEach-Object { "$_\$cmakeRel" } | Where-Object { Test-Path $_ } | Select-Object -First 1)
+$cmakeRoots = @($vsRoot) + $vsRoots
+$vsCmake   = ($cmakeRoots | ForEach-Object { "$_\$cmakeRel" } | Where-Object { Test-Path $_ } | Select-Object -First 1)
 if ($vsCmake) { $vsCmake = Split-Path $vsCmake } else { $vsCmake = "" }
 
 # Resolve SDL2 version
@@ -74,7 +94,21 @@ if (-not (Test-Path $sdl2Root)) {
 
 # CMake configure + build
 Write-Host "[3/4] Configuring..." -ForegroundColor Cyan
-$cmakeConfigure = "cmake -B `"$buildDir`" -G `"Visual Studio 17 2022`" -A $cmakeArch -DSDL2_DIR=`"$sdl2Cmake`""
+$cacheFile = Join-Path $buildDir "CMakeCache.txt"
+if (Test-Path $cacheFile) {
+    $cachedGenerator = Select-String -Path $cacheFile -Pattern '^CMAKE_GENERATOR:INTERNAL=(.+)$' |
+        Select-Object -First 1 |
+        ForEach-Object { $_.Matches[0].Groups[1].Value }
+    if ($cachedGenerator -and $cachedGenerator -ne $cmakeGenerator) {
+        Write-Host "CMake generator changed ($cachedGenerator -> $cmakeGenerator); clearing cache." -ForegroundColor Yellow
+        Remove-Item -LiteralPath $cacheFile -Force
+        $cmakeFiles = Join-Path $buildDir "CMakeFiles"
+        if (Test-Path $cmakeFiles) {
+            Remove-Item -LiteralPath $cmakeFiles -Recurse -Force
+        }
+    }
+}
+$cmakeConfigure = "cmake -B `"$buildDir`" -G `"$cmakeGenerator`" -A $cmakeArch -DSDL2_DIR=`"$sdl2Cmake`""
 if ($releaseVersion) {
     $cmakeConfigure += " -DBDDVIEW_RELEASE_VERSION=`"$releaseVersion`""
 }
