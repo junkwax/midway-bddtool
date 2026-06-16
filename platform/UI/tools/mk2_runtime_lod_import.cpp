@@ -606,6 +606,10 @@ static int mark_runtime_guide_images_as_lod_refs(void)
 
 extern "C" int bg_editor_autoload_lod_assets(void)
 {
+    settings_load_runtime_autoload_pref_once();
+    if (!g_pref_autoload_runtime_extras)
+        return 0;
+
     if (!g_have_bdb)
         return 0;
     mk2_runtime_autoload_stage_recipe();

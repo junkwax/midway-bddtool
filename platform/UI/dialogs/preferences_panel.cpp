@@ -1,6 +1,8 @@
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
+#include "bg_editor.h"
 #include "UI/dialogs/preferences_panel.h"
+#include "UI/tools/mk2_runtime_actor_tool.h"
 #include "UI/view/right_panel_layout.h"
 #include "UI/app/settings.h"
 #include "imgui.h"
@@ -28,6 +30,19 @@ void draw_preferences(void)
     if (ImGui::InputInt("Auto-save interval (s, 0=off)", &g_pref_autosave_s)) {
         if (g_pref_autosave_s < 0) g_pref_autosave_s = 0;
         changed = true;
+    }
+
+    ImGui::SeparatorText("Runtime Preview");
+    if (ImGui::Checkbox("Auto-load runtime extras and animations", &g_pref_autoload_runtime_extras)) {
+        changed = true;
+        if (g_pref_autoload_runtime_extras) {
+            bg_editor_autoload_lod_assets();
+            runtime_actor_autoload_for_stage();
+        } else {
+            if (runtime_actor_preview_imports_loaded())
+                runtime_actor_discard_preview_imports();
+            runtime_actor_autoload_for_stage();
+        }
     }
 
     ImGui::SeparatorText("UI");

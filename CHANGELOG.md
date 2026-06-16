@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-06-16
+
+### Added
+- Block Editor can edit the active palette color directly, apply basic
+  brightness/contrast adjustment to the block palette, and auto-fit zoom to the
+  active block size.
+- Palette panel now includes a live preview of the selected palette on related
+  stage art, plus local undo/redo controls.
+
+### Changed
+- Runtime preview extras and animation imports now respect a preference instead
+  of always auto-loading when a stage opens.
+
 ## [1.0.12] - 2026-06-10
 
 ### Changed

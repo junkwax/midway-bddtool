@@ -79,6 +79,7 @@ extern int  g_pref_grid_sy;
 extern int  g_pref_snap_dist;
 extern int  g_pref_autosave_s;
 extern float g_pref_font_scale;
+extern bool g_pref_autoload_runtime_extras;
 extern bool g_snap_visible_pixels;
 
 extern int  g_tile_img;

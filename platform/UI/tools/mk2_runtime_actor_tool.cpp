@@ -1908,6 +1908,12 @@ void runtime_actor_autoload_for_stage(void)
     g_runtime_actor_count = 0;
     g_runtime_actor_selected = -1;
     g_runtime_actor_preview = false;
+    settings_load_runtime_autoload_pref_once();
+    if (!g_pref_autoload_runtime_extras) {
+        g_runtime_actor_preview_base_images = -1;
+        g_runtime_actor_preview_base_pals = -1;
+        return;
+    }
     if (g_runtime_actor_autoimport_suppressed) {
         /* User discarded the preview IMG imports for this stage; do not let a
            re-autoload (tab switch / re-open of the same file) bring them back. */

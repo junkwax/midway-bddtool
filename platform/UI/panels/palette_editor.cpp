@@ -9,6 +9,8 @@
 #include "imgui.h"
 #include "Core/bdd_format.h"
 
+#include <vector>
+
 struct PaletteSlotUndoCapture {
     int active;
     int pal_i;
@@ -67,6 +69,169 @@ static void palette_usage_stats(int pal_i, int *out_images, int *out_objects)
     }
     if (out_images) *out_images = images;
     if (out_objects) *out_objects = objects;
+}
+
+struct PalettePreviewSource {
+    Img *im = NULL;
+    int obj_i = -1;
+    bool hfl = false;
+    bool vfl = false;
+    char label[128] = "";
+};
+
+static void palette_editor_draw_checkerboard_background(ImVec2 min, ImVec2 max, float cell)
+{
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const ImU32 c0 = IM_COL32(48, 48, 52, 255);
+    const ImU32 c1 = IM_COL32(92, 92, 96, 255);
+    int row = 0;
+    for (float y = min.y; y < max.y; y += cell, row++) {
+        int col = 0;
+        float y2 = y + cell;
+        if (y2 > max.y) y2 = max.y;
+        for (float x = min.x; x < max.x; x += cell, col++) {
+            float x2 = x + cell;
+            if (x2 > max.x) x2 = max.x;
+            dl->AddRectFilled(ImVec2(x, y), ImVec2(x2, y2), ((row + col) & 1) ? c1 : c0);
+        }
+    }
+}
+
+static void palette_editor_draw_backdrop_image(SDL_Texture *tex, ImVec2 size)
+{
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    palette_editor_draw_checkerboard_background(p, ImVec2(p.x + size.x, p.y + size.y), 8.0f);
+    ImGui::Image(tex, size);
+}
+
+static PalettePreviewSource palette_preview_source_for_palette(int pal_i)
+{
+    PalettePreviewSource src;
+    if (g_hl_obj >= 0 && g_hl_obj < g_no) {
+        Img *im = img_find(g_obj[g_hl_obj].ii);
+        if (im && im->pix) {
+            src.im = im;
+            src.obj_i = g_hl_obj;
+            src.hfl = g_obj[g_hl_obj].hfl != 0;
+            src.vfl = g_obj[g_hl_obj].vfl != 0;
+            snprintf(src.label, sizeof src.label,
+                     "Selected object #%d shown with palette %d",
+                     g_hl_obj, pal_i);
+            return src;
+        }
+    }
+
+    for (int oi = 0; oi < g_no; oi++) {
+        Img *im = img_find(g_obj[oi].ii);
+        if (!im || !im->pix) continue;
+        if (object_palette_for_image(&g_obj[oi], im) != pal_i) continue;
+        src.im = im;
+        src.obj_i = oi;
+        src.hfl = g_obj[oi].hfl != 0;
+        src.vfl = g_obj[oi].vfl != 0;
+        snprintf(src.label, sizeof src.label,
+                 "First object using palette %d: #%d",
+                 pal_i, oi);
+        return src;
+    }
+
+    for (int ii = 0; ii < g_ni; ii++) {
+        Img *im = &g_img[ii];
+        if (!im->pix || im->pal_idx != pal_i) continue;
+        src.im = im;
+        snprintf(src.label, sizeof src.label,
+                 "First image using palette %d: 0x%02X",
+                 pal_i, im->idx);
+        return src;
+    }
+
+    if (g_ni > 0 && g_img[0].pix) {
+        src.im = &g_img[0];
+        snprintf(src.label, sizeof src.label,
+                 "Image 0x%02X shown with palette %d",
+                 g_img[0].idx, pal_i);
+    }
+    return src;
+}
+
+static SDL_Texture *create_palette_preview_texture(const PalettePreviewSource *src,
+                                                   int pal_i, int *out_w, int *out_h)
+{
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!src || !src->im || !src->im->pix || !g_rend)
+        return NULL;
+    Img *im = src->im;
+    if (im->w <= 0 || im->h <= 0)
+        return NULL;
+    if ((size_t)im->w * (size_t)im->h > 2097152u)
+        return NULL;
+
+    std::vector<Uint32> px((size_t)im->w * (size_t)im->h, 0u);
+    for (int y = 0; y < im->h; y++) {
+        int sy = src->vfl ? (im->h - 1 - y) : y;
+        for (int x = 0; x < im->w; x++) {
+            int sx = src->hfl ? (im->w - 1 - x) : x;
+            int v = im->pix[(size_t)sy * (size_t)im->w + (size_t)sx];
+            if (v > 0)
+                px[(size_t)y * (size_t)im->w + (size_t)x] = palette_argb_at(pal_i, v);
+        }
+    }
+
+    SDL_Texture *tex = SDL_CreateTexture(g_rend, SDL_PIXELFORMAT_ARGB8888,
+                                         SDL_TEXTUREACCESS_STATIC, im->w, im->h);
+    if (!tex) return NULL;
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    SDL_UpdateTexture(tex, NULL, px.data(), im->w * (int)sizeof(Uint32));
+    if (out_w) *out_w = im->w;
+    if (out_h) *out_h = im->h;
+    return tex;
+}
+
+static void draw_palette_preview(int pal_i)
+{
+    static SDL_Texture *s_preview_tex = NULL;
+    static int s_preview_frame = -1;
+    static int s_preview_w = 0;
+    static int s_preview_h = 0;
+
+    PalettePreviewSource src = palette_preview_source_for_palette(pal_i);
+    int frame = ImGui::GetFrameCount();
+    if (s_preview_frame != frame) {
+        if (s_preview_tex) {
+            SDL_DestroyTexture(s_preview_tex);
+            s_preview_tex = NULL;
+        }
+        s_preview_w = s_preview_h = 0;
+        s_preview_tex = create_palette_preview_texture(&src, pal_i,
+                                                       &s_preview_w, &s_preview_h);
+        s_preview_frame = frame;
+    }
+
+    float panel_h = 172.0f;
+    if (s_preview_w > 0 && s_preview_h > s_preview_w * 2)
+        panel_h = 220.0f;
+    ImGui::BeginChild("palette_preview_view", ImVec2(0, panel_h), true);
+    if (!src.im || !s_preview_tex || s_preview_w <= 0 || s_preview_h <= 0) {
+        ImGui::TextDisabled("No previewable image for this palette.");
+        ImGui::EndChild();
+        return;
+    }
+
+    ImGui::TextDisabled("%s", src.label);
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    float avail_h = ImGui::GetContentRegionAvail().y - 6.0f;
+    if (avail_w < 64.0f) avail_w = 64.0f;
+    if (avail_h < 64.0f) avail_h = 64.0f;
+    float scale = avail_w / (float)s_preview_w;
+    float scale_y = avail_h / (float)s_preview_h;
+    if (scale > scale_y) scale = scale_y;
+    if (scale > 8.0f) scale = 8.0f;
+    if (scale < 0.1f) scale = 0.1f;
+    palette_editor_draw_backdrop_image(s_preview_tex,
+                                       ImVec2(s_preview_w * scale,
+                                              s_preview_h * scale));
+    ImGui::EndChild();
 }
 
 static void draw_palette_slot_table(int selected_object_palette)
@@ -165,8 +330,11 @@ void draw_selected_palette_swatches(int pal_idx)
                 Uint32 next = 0xFF000000u | ((Uint32)r << 16)
                                          | ((Uint32)g_ << 8)
                                          | b;
-                if (editor_project_set_palette_color(pal_idx, i, next))
+                if (editor_project_set_palette_color(pal_idx, i, next)) {
                     g_dirty = 1;
+                    g_need_rebuild = 1;
+                    g_mk2_palette_sync_dirty = true;
+                }
             }
             ImGui::EndPopup();
         }
@@ -251,6 +419,19 @@ void draw_palette(void)
                       ImGuiWindowFlags_HorizontalScrollbar);
     draw_selected_palette_swatches(g_sel_pal);
     ImGui::EndChild();
+
+    bool undo_disabled = !undo_is_available();
+    if (undo_disabled) ImGui::BeginDisabled();
+    if (ImGui::SmallButton("Undo")) undo_restore();
+    if (undo_disabled) ImGui::EndDisabled();
+    ImGui::SameLine();
+    bool redo_disabled = !redo_is_available();
+    if (redo_disabled) ImGui::BeginDisabled();
+    if (ImGui::SmallButton("Redo")) redo_restore();
+    if (redo_disabled) ImGui::EndDisabled();
+
+    if (ImGui::CollapsingHeader("Preview", ImGuiTreeNodeFlags_DefaultOpen))
+        draw_palette_preview(g_sel_pal);
 
     if (ImGui::Button("+")) {
         undo_save();

@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <vector>
 
 bool g_block_edit_open = false;
@@ -13,11 +14,16 @@ int  g_block_edit_col  = 0;
 
 static int   g_block_edit_bg   = 0; /* 0=checker, 1=hot pink, 2=neon green, 3=black, 4=white */
 static bool  g_block_edit_grid = true;
+static bool  g_block_edit_auto_fit = true;
+static int   g_block_edit_last_img = -1;
 static int   g_block_match_ref_obj = -1;
 static bool  g_block_match_used_colors_only = true;
 static bool  g_block_match_all_uses = true;
 static float g_block_match_shade_weight = 0.55f;
 static char  g_block_match_status[160] = "";
+static bool  g_block_tone_used_colors_only = true;
+static float g_block_tone_brightness = 0.0f;
+static float g_block_tone_contrast = 0.0f;
 
 struct BlockPixelUndoCapture {
     bool active = false;
@@ -28,6 +34,21 @@ struct BlockPixelUndoCapture {
 };
 
 static BlockPixelUndoCapture g_block_pixel_undo;
+
+struct BlockPaletteUndoCapture {
+    bool active = false;
+    int pal_i = -1;
+    int color_i = -1;
+    int count = 0;
+    char name[64] = "";
+    Uint32 colors[256] = {};
+    Uint16 rgb555[256] = {};
+    int rgb555_valid = 0;
+    int rgb555_count = 0;
+};
+
+static BlockPaletteUndoCapture g_block_palette_color_undo;
+static BlockPaletteUndoCapture g_block_palette_tone_undo;
 
 /* Brush-stroke state so a drag paints a continuous line instead of only the
    per-frame hovered cell. Without this, fast drags skip the pixels between
@@ -84,6 +105,40 @@ static void block_pixel_undo_commit(void)
     g_block_pixel_undo = BlockPixelUndoCapture{};
 }
 
+static void block_palette_undo_capture(BlockPaletteUndoCapture *cap, int pal_i, int color_i)
+{
+    if (!cap) return;
+    *cap = BlockPaletteUndoCapture{};
+    if (pal_i < 0 || pal_i >= g_n_pals) return;
+    cap->active = true;
+    cap->pal_i = pal_i;
+    cap->color_i = color_i;
+    cap->count = g_pal_count[pal_i];
+    snprintf(cap->name, sizeof cap->name, "%s", g_pal_name[pal_i]);
+    memcpy(cap->colors, g_pals[pal_i], sizeof cap->colors);
+    cap->rgb555_valid = editor_project_get_palette_rgb555_cache(pal_i, cap->rgb555, 256);
+    cap->rgb555_count = cap->rgb555_valid ? g_pal_count[pal_i] : 0;
+}
+
+static int block_palette_undo_commit(BlockPaletteUndoCapture *cap, const char *label)
+{
+    int saved = 0;
+    if (!cap || !cap->active) return 0;
+    saved = undo_save_palette_slot_delta(cap->pal_i, cap->colors, cap->count,
+                                         cap->name, cap->rgb555,
+                                         cap->rgb555_valid, cap->rgb555_count,
+                                         label);
+    *cap = BlockPaletteUndoCapture{};
+    return saved;
+}
+
+static void block_palette_mark_changed(void)
+{
+    g_dirty = 1;
+    g_need_rebuild = 1;
+    g_mk2_palette_sync_dirty = true;
+}
+
 static void block_editor_draw_checkerboard_background(ImVec2 min, ImVec2 max, float cell)
 {
     ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -120,6 +175,101 @@ static void block_editor_clamp_state(int palette_count)
     if (g_block_edit_col < 0) g_block_edit_col = 0;
     if (g_block_edit_col >= palette_count) g_block_edit_col = palette_count - 1;
     if (g_block_edit_bg < 0 || g_block_edit_bg > 4) g_block_edit_bg = 0;
+}
+
+static int block_editor_fit_zoom(const Img *im, float canvas_w, float work_h)
+{
+    if (!im || im->w <= 0 || im->h <= 0)
+        return 8;
+    float usable_w = canvas_w - 28.0f;
+    float usable_h = work_h - 42.0f;
+    if (usable_w < 96.0f) usable_w = 96.0f;
+    if (usable_h < 96.0f) usable_h = 96.0f;
+    int fit_x = (int)(usable_w / (float)im->w);
+    int fit_y = (int)(usable_h / (float)im->h);
+    int fit = fit_x < fit_y ? fit_x : fit_y;
+    if (fit < 1) fit = 1;
+    if (fit > 64) fit = 64;
+    return fit;
+}
+
+static int block_editor_clamp_u8(int v)
+{
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return v;
+}
+
+static Uint32 block_editor_adjust_color(Uint32 c, float brightness, float contrast)
+{
+    float contrast255 = contrast * 2.55f;
+    if (contrast255 < -254.0f) contrast255 = -254.0f;
+    if (contrast255 > 254.0f) contrast255 = 254.0f;
+    float factor = (259.0f * (contrast255 + 255.0f)) /
+                   (255.0f * (259.0f - contrast255));
+    float offset = brightness * 2.55f;
+    int r = (int)(factor * (((c >> 16) & 0xFF) - 128) + 128 + offset + 0.5f);
+    int g = (int)(factor * (((c >> 8) & 0xFF) - 128) + 128 + offset + 0.5f);
+    int b = (int)(factor * ((c & 0xFF) - 128) + 128 + offset + 0.5f);
+    return (c & 0xFF000000u) |
+           ((Uint32)block_editor_clamp_u8(r) << 16) |
+           ((Uint32)block_editor_clamp_u8(g) << 8) |
+           (Uint32)block_editor_clamp_u8(b);
+}
+
+static int block_editor_collect_tone_indexes(const Img *im, int palette_count,
+                                             bool used_only, bool *used)
+{
+    int count = 0;
+    if (!used) return 0;
+    memset(used, 0, sizeof(bool) * 256);
+    if (palette_count < 0) palette_count = 0;
+    if (palette_count > 256) palette_count = 256;
+    if (!used_only) {
+        for (int i = 1; i < palette_count; i++) {
+            used[i] = true;
+            count++;
+        }
+        return count;
+    }
+    if (!im || !im->pix || im->w <= 0 || im->h <= 0)
+        return 0;
+    size_t n = (size_t)im->w * (size_t)im->h;
+    for (size_t i = 0; i < n; i++) {
+        int v = im->pix[i];
+        if (v <= 0 || v >= palette_count || used[v]) continue;
+        used[v] = true;
+        count++;
+    }
+    return count;
+}
+
+static void block_editor_apply_tone_from_capture(const Img *im, int palette_count)
+{
+    if (!g_block_palette_tone_undo.active)
+        return;
+    bool used[256];
+    Uint32 colors[256];
+    block_editor_collect_tone_indexes(im, palette_count,
+                                      g_block_tone_used_colors_only, used);
+    memcpy(colors, g_block_palette_tone_undo.colors, sizeof colors);
+    for (int i = 1; i < palette_count && i < 256; i++) {
+        if (!used[i]) continue;
+        colors[i] = block_editor_adjust_color(g_block_palette_tone_undo.colors[i],
+                                              g_block_tone_brightness,
+                                              g_block_tone_contrast);
+    }
+    if (editor_project_set_palette_slot(g_block_palette_tone_undo.pal_i, NULL,
+                                        g_block_palette_tone_undo.count, colors))
+        block_palette_mark_changed();
+}
+
+static void block_editor_finish_tone_edit(void)
+{
+    if (block_palette_undo_commit(&g_block_palette_tone_undo, "Adjust Palette Tone") > 0)
+        stage_set_toast("Adjusted palette tone");
+    g_block_tone_brightness = 0.0f;
+    g_block_tone_contrast = 0.0f;
 }
 
 static ImU32 block_editor_bg_color(void)
@@ -169,6 +319,13 @@ void draw_block_editor(void)
     int pc = pal ? g_pal_count[im->pal_idx] : 256;
     if (pc > 256) pc = 256;
     block_editor_clamp_state(pc);
+    if (g_block_palette_color_undo.active &&
+        (g_block_palette_color_undo.pal_i != im->pal_idx ||
+         g_block_palette_color_undo.color_i != g_block_edit_col))
+        block_palette_undo_commit(&g_block_palette_color_undo, "Edit Palette Color");
+    if (g_block_palette_tone_undo.active &&
+        g_block_palette_tone_undo.pal_i != im->pal_idx)
+        block_editor_finish_tone_edit();
 
     set_left_panel_default(92.0f, 920.0f, 620.0f);
     if (!ImGui::Begin("Block Editor", &g_block_edit_open)) {
@@ -191,6 +348,8 @@ void draw_block_editor(void)
 
     float avail_w = ImGui::GetContentRegionAvail().x;
     float side_w = 270.0f;
+    if (im->w <= 32 && im->h <= 32) side_w = 250.0f;
+    else if (im->w >= 160 || im->h >= 160) side_w = 300.0f;
     if (avail_w < 760.0f) side_w = 240.0f;
     if (side_w > avail_w * 0.45f) side_w = avail_w * 0.45f;
     float canvas_w = avail_w - side_w - ImGui::GetStyle().ItemSpacing.x;
@@ -198,6 +357,15 @@ void draw_block_editor(void)
     if (canvas_w < 220.0f) canvas_w = 220.0f;
     float work_h = ImGui::GetContentRegionAvail().y;
     if (work_h < 420.0f) work_h = 420.0f;
+    int fit_zoom = block_editor_fit_zoom(im, canvas_w, work_h);
+    if (g_block_edit_last_img != g_block_edit_img) {
+        g_block_edit_last_img = g_block_edit_img;
+        g_block_edit_auto_fit = true;
+        g_block_edit_zoom = fit_zoom;
+    } else if (g_block_edit_auto_fit) {
+        g_block_edit_zoom = fit_zoom;
+    }
+    block_editor_clamp_state(pc);
 
     int hover_x = -1, hover_y = -1;
 
@@ -206,6 +374,7 @@ void draw_block_editor(void)
     bool canvas_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     if (canvas_hovered && ImGui::GetIO().KeyCtrl && ImGui::GetIO().MouseWheel != 0.0f) {
         g_block_edit_zoom += (ImGui::GetIO().MouseWheel > 0.0f) ? 1 : -1;
+        g_block_edit_auto_fit = false;
         block_editor_clamp_state(pc);
     }
 
@@ -300,24 +469,35 @@ void draw_block_editor(void)
     ImGui::BeginChild("block_controls", ImVec2(0, 0), true);
 
     ImGui::TextUnformatted("View");
-    if (ImGui::SmallButton("-")) g_block_edit_zoom--;
+    if (ImGui::SmallButton("-")) {
+        g_block_edit_zoom--;
+        g_block_edit_auto_fit = false;
+    }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(145.0f);
-    ImGui::SliderInt("##block_zoom", &g_block_edit_zoom, 1, 64, "%dx");
+    if (ImGui::SliderInt("##block_zoom", &g_block_edit_zoom, 1, 64, "%dx"))
+        g_block_edit_auto_fit = false;
     ImGui::SameLine();
-    if (ImGui::SmallButton("+")) g_block_edit_zoom++;
+    if (ImGui::SmallButton("+")) {
+        g_block_edit_zoom++;
+        g_block_edit_auto_fit = false;
+    }
     block_editor_clamp_state(pc);
 
-    int fit_x = im->w > 0 ? (int)(canvas_w / (float)im->w) : 1;
-    int fit_y = im->h > 0 ? (int)(work_h / (float)im->h) : 1;
-    int fit_zoom = fit_x < fit_y ? fit_x : fit_y;
-    if (fit_zoom < 1) fit_zoom = 1;
-    if (fit_zoom > 64) fit_zoom = 64;
-    if (ImGui::SmallButton("1:1")) g_block_edit_zoom = 1;
+    if (ImGui::SmallButton("1:1")) {
+        g_block_edit_zoom = 1;
+        g_block_edit_auto_fit = false;
+    }
     ImGui::SameLine();
-    if (ImGui::SmallButton("8x")) g_block_edit_zoom = 8;
+    if (ImGui::SmallButton("8x")) {
+        g_block_edit_zoom = 8;
+        g_block_edit_auto_fit = false;
+    }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Fit")) g_block_edit_zoom = fit_zoom;
+    if (ImGui::SmallButton("Fit")) {
+        g_block_edit_zoom = fit_zoom;
+        g_block_edit_auto_fit = true;
+    }
     ImGui::Checkbox("Grid", &g_block_edit_grid);
     ImGui::TextDisabled("Ctrl+wheel zooms canvas");
     bool undo_disabled = !undo_is_available();
@@ -371,6 +551,81 @@ void draw_block_editor(void)
         ImGui::Text("Hover %d,%d", hover_x, hover_y);
     else
         ImGui::TextDisabled("Hover -, -");
+
+    if (pal && im->pal_idx >= 0 && im->pal_idx < g_n_pals &&
+        g_block_edit_col >= 0 && g_block_edit_col < pc) {
+        Uint32 color = g_pals[im->pal_idx][g_block_edit_col];
+        float edit_rgb[3] = {
+            ((color >> 16) & 0xFF) / 255.0f,
+            ((color >> 8) & 0xFF) / 255.0f,
+            (color & 0xFF) / 255.0f
+        };
+        ImGui::SetNextItemWidth(-1);
+        bool color_changed = ImGui::ColorEdit3("Color", edit_rgb,
+            ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_DisplayRGB);
+        bool color_activated = ImGui::IsItemActivated();
+        bool color_deactivated = ImGui::IsItemDeactivatedAfterEdit();
+        if (color_activated && !g_block_palette_color_undo.active)
+            block_palette_undo_capture(&g_block_palette_color_undo,
+                                       im->pal_idx, g_block_edit_col);
+        if (color_changed) {
+            if (!g_block_palette_color_undo.active)
+                block_palette_undo_capture(&g_block_palette_color_undo,
+                                           im->pal_idx, g_block_edit_col);
+            Uint8 r = (Uint8)(edit_rgb[0] * 255.0f + 0.5f);
+            Uint8 g_ = (Uint8)(edit_rgb[1] * 255.0f + 0.5f);
+            Uint8 b = (Uint8)(edit_rgb[2] * 255.0f + 0.5f);
+            Uint32 next = 0xFF000000u | ((Uint32)r << 16) |
+                          ((Uint32)g_ << 8) | (Uint32)b;
+            if (editor_project_set_palette_color(im->pal_idx, g_block_edit_col, next))
+                block_palette_mark_changed();
+        }
+        if (color_deactivated && g_block_palette_color_undo.active)
+            block_palette_undo_commit(&g_block_palette_color_undo,
+                                      "Edit Palette Color");
+        if (g_block_edit_col == 0)
+            ImGui::TextDisabled("Index 0 renders transparent in the block.");
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Brightness / Contrast");
+    bool tone_indexes[256];
+    int tone_count = block_editor_collect_tone_indexes(im, pc,
+                                                       g_block_tone_used_colors_only,
+                                                       tone_indexes);
+    bool can_tone = pal && im->pal_idx >= 0 && im->pal_idx < g_n_pals && tone_count > 0;
+    if (!can_tone) ImGui::BeginDisabled();
+    if (ImGui::Checkbox("Used colors only", &g_block_tone_used_colors_only) &&
+        g_block_palette_tone_undo.active)
+        block_editor_apply_tone_from_capture(im, pc);
+
+    bool tone_activated = false;
+    bool tone_changed = false;
+    bool tone_deactivated = false;
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderFloat("Brightness", &g_block_tone_brightness,
+                           -100.0f, 100.0f, "%.0f"))
+        tone_changed = true;
+    tone_activated = tone_activated || ImGui::IsItemActivated();
+    tone_deactivated = tone_deactivated || ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderFloat("Contrast", &g_block_tone_contrast,
+                           -100.0f, 100.0f, "%.0f"))
+        tone_changed = true;
+    tone_activated = tone_activated || ImGui::IsItemActivated();
+    tone_deactivated = tone_deactivated || ImGui::IsItemDeactivatedAfterEdit();
+    if (tone_activated && !g_block_palette_tone_undo.active)
+        block_palette_undo_capture(&g_block_palette_tone_undo, im->pal_idx, -1);
+    if (tone_changed) {
+        if (!g_block_palette_tone_undo.active)
+            block_palette_undo_capture(&g_block_palette_tone_undo, im->pal_idx, -1);
+        block_editor_apply_tone_from_capture(im, pc);
+    }
+    if (tone_deactivated && g_block_palette_tone_undo.active)
+        block_editor_finish_tone_edit();
+    if (!can_tone) ImGui::EndDisabled();
+    ImGui::TextDisabled("%d color(s) in this %dx%d block",
+                        tone_count, im->w, im->h);
 
     ImGui::Separator();
     ImGui::Text("Palette %d", im->pal_idx);
