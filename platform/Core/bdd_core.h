@@ -22,6 +22,15 @@ enum {
     BDD_CORE_MK2_RUNTIME_PALETTE_SLOTS = 16,
     BDD_CORE_MK2_DISPLAY_OBJECT_CAP = 358,
     BDD_CORE_MK2_DISPLAY_OBJECT_WARN = 300,
+    /* Display objects the runtime spends on things NOT in the BDD that share
+     * the same getobj pool as background blocks (nobj=358 in DISPEQU.ASM):
+     * the 2 fighters + their fx/blood/shadows, plus stage-spawned actors such
+     * as the Dead Pool hanging developers (create_hangers spawns 9 hangers x
+     * ~4 objects = ~36; MKHANG.ASM). The on-screen background-block estimate
+     * must leave this much headroom or disp_add hits "no blocks left" at scene
+     * init and silently drops the last-scanned (newest) blocks. Worst-case
+     * (Dead Pool) default; lower it for lighter stages. */
+    BDD_CORE_MK2_DISPLAY_OBJECT_RUNTIME_RESERVE = 56,
     BDD_CORE_MK2_BG_DYNAMIC_PALETTE_SLOTS = 35
 };
 

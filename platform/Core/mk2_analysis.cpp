@@ -265,9 +265,15 @@ void mk2_collect_diag(Mk2Diag *d)
     }
 
     d->max_visible_objects = mk2_estimate_max_visible_objects(&d->max_visible_objects_x);
-    if (d->max_visible_objects > MK2_DISPLAY_OBJECT_CAP)
-        d->display_object_overflow = d->max_visible_objects - MK2_DISPLAY_OBJECT_CAP;
-    else if (d->max_visible_objects > MK2_DISPLAY_OBJECT_WARN)
+    /* Background blocks share the getobj display-object pool (nobj=358) with the
+     * runtime sprites that are not in the BDD (fighters + stage actors such as
+     * the Dead Pool hangers). Charge that reserve against the on-screen block
+     * peak so we flag a stage that fits in the editor but overflows at runtime
+     * and makes disp_add drop blocks at scene init. */
+    int runtime_budget = d->max_visible_objects + MK2_DISPLAY_OBJECT_RUNTIME_RESERVE;
+    if (runtime_budget > MK2_DISPLAY_OBJECT_CAP)
+        d->display_object_overflow = runtime_budget - MK2_DISPLAY_OBJECT_CAP;
+    else if (runtime_budget > MK2_DISPLAY_OBJECT_WARN)
         d->display_object_pressure = 1;
 }
 

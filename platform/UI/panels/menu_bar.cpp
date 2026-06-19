@@ -46,8 +46,8 @@ static void menu_bar_diag_tooltip(const Mk2Diag *d, int hard, int cautions)
         if (d->palette_high_nibble) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "%d object(s) use palette >= 16", d->palette_high_nibble);
         if (d->runtime_palette16_pressure) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "Runtime palette pressure: %d used", d->runtime_palette_count);
         else if (d->runtime_palette_pressure) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "Dynamic palette pressure: %d used", d->runtime_palette_count);
-        if (d->display_object_overflow) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "Display object overflow +%d at X %d", d->display_object_overflow, d->max_visible_objects_x);
-        else if (d->display_object_pressure) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "Display object pressure: %d at X %d", d->max_visible_objects, d->max_visible_objects_x);
+        if (d->display_object_overflow) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "Display object overflow +%d at X %d (%d blocks + %d runtime reserve > %d cap)", d->display_object_overflow, d->max_visible_objects_x, d->max_visible_objects, MK2_DISPLAY_OBJECT_RUNTIME_RESERVE, MK2_DISPLAY_OBJECT_CAP);
+        else if (d->display_object_pressure) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "Display object pressure: %d blocks at X %d (+%d runtime reserve)", d->max_visible_objects, d->max_visible_objects_x, MK2_DISPLAY_OBJECT_RUNTIME_RESERVE);
         if (d->high_color_images) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "%d image(s) use color index >= 64", d->high_color_images);
         if (d->unassigned_objects) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "%d object(s) outside modules", d->unassigned_objects);
         if (d->module_bound_issues) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "%d module bound issue(s)", d->module_bound_issues);
