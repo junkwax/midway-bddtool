@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.14] - 2026-06-19
+
+### Added
+- "Module from Selection Bounds" command (Object menu) anchors a new LOAD2
+  module whose bounds enclose the selected objects' depth/sy footprints, in both
+  simple and advanced modes.
+- Selected sprite groups can be resized together through a dedicated workflow.
+
+### Changed
+- MK2 display-object diagnostics now charge a runtime reserve against the
+  on-screen block peak. Non-BDD runtime sprites (the two fighters and stage
+  actors such as the Dead Pool hangers) share the getobj pool, so stages that
+  fit in the editor but overflow disp_add at scene init are now flagged.
+
+### Fixed
+- Runtime palette sync (BGNDPAL.ASM) now writes the exact stored RGB555 words,
+  including a true index 0, instead of re-deriving them from the display ARGB
+  (which forced index 0 to black).
+- Runtime palette sync no longer overwrites another stage's palette block when a
+  BDD palette name collides with a label owned by a different stage's `*PALS`
+  table; the colliding palette is renamed and written as a fresh block.
+
 ## [1.0.13] - 2026-06-16
 
 ### Added
