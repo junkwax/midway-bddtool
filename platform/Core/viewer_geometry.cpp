@@ -2321,6 +2321,31 @@ int bdd_get_stage_start_camera(int *camera_x, int *camera_y)
     return 1;
 }
 
+int bdd_get_stage_scroll_limits(int *scroll_left, int *scroll_right)
+{
+    const char *label;
+    int left = 0;
+    int right = 0;
+
+    label = bdd_bgnd_stage_label();
+    if (!label)
+        return 0;
+
+    {
+        const BddStageModuleTable *table = bdd_get_stage_module_table();
+        if (table && table->limits_valid) {
+            left = table->scroll_left;
+            right = table->scroll_right;
+        } else if (!bdd_read_bgnd_stage_scroll_limits(label, &left, &right)) {
+            return 0;
+        }
+    }
+
+    if (scroll_left) *scroll_left = left;
+    if (scroll_right) *scroll_right = right;
+    return 1;
+}
+
 void bdd_reset_game_preview_camera(void)
 {
     int wx_min = 0, wx_max = 400, wy_min = 0, wy_max = 254;

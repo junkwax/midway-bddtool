@@ -979,3 +979,55 @@ bool stage_start_apply_bgnd_patch(void)
     return true;
 }
 
+bool stage_start_apply_bgnd_limits(int scroll_left, int scroll_right)
+{
+    char bgnd[640];
+    if (!stage_start_find_bgnd_path(bgnd, sizeof bgnd)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "BGND.ASM was not found.");
+        return false;
+    }
+
+    std::vector<std::string> lines;
+    if (!mk2_read_text_lines(bgnd, lines)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "Could not read BGND.ASM.");
+        return false;
+    }
+
+    char block_label[96] = "";
+    int block_line = -1;
+    if (!stage_start_infer_bgnd_block(lines, block_label, sizeof block_label, &block_line)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not infer the BGND init block from current BDB module names.");
+        return false;
+    }
+
+    /* <stage>_mod words: 3=worldY 4=worldX 5=scroll-left 6=scroll-right. */
+    bool changed_l = stage_start_replace_word_line(lines, block_line, 5, scroll_left);
+    bool changed_r = stage_start_replace_word_line(lines, block_line, 6, scroll_right);
+    if (!changed_l && !changed_r) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s already uses scroll limits L=%d R=%d.",
+                 block_label, scroll_left, scroll_right);
+        return true;
+    }
+
+    char backup[640] = "";
+    if (!mk2_copy_file_unique(bgnd, ".pre_scroll_limit_sync", backup, sizeof backup)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "Could not back up BGND.ASM.");
+        return false;
+    }
+    if (!mk2_write_text_lines(bgnd, lines)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not write BGND.ASM; backup: %s", backup);
+        return false;
+    }
+
+    int removed = 0;
+    mk2_palette_sync_remove_stale_outputs(bgnd, &removed);
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Patched %s scroll limits to L=%d R=%d. Backup: %s. Removed %d stale product(s).",
+             block_label, scroll_left, scroll_right, backup, removed);
+    stage_set_toast("Patched BGND scroll limits");
+    return true;
+}
+

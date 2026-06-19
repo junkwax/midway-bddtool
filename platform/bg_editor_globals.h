@@ -524,6 +524,7 @@ void open_new_mk2_project_from_template(void);
 void apply_mk2_template_preset(int which);
 int stage_effective_preview_worldx(void);
 bool stage_start_apply_bgnd_patch(void);
+bool stage_start_apply_bgnd_limits(int scroll_left, int scroll_right);
 const char *stage_palette_mode_name(void);
 const char *stage_overlay_mode_name(void);
 void mk2_preview_diff_use_source_and_rom(const char *source_preview, const char *rom_preview);

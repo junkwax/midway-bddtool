@@ -260,6 +260,144 @@ static void draw_module_bounds_size_editor(int module_idx, bool show_bounds)
         module_line_commit(commit_label);
 }
 
+static bool runtime_name_ieq(const char *a, const char *b)
+{
+    for (; *a && *b; a++, b++) {
+        char ca = *a, cb = *b;
+        if (ca >= 'a' && ca <= 'z') ca = (char)(ca - 32);
+        if (cb >= 'a' && cb <= 'z') cb = (char)(cb - 32);
+        if (ca != cb) return false;
+    }
+    return *a == *b;
+}
+
+static const char *runtime_parallax_label(float s)
+{
+    if (s <= 0.01f) return "screen-fixed";
+    if (s > 0.98f && s < 1.02f) return "playfield";
+    return s < 1.0f ? "far (slow)" : "near (fast)";
+}
+
+/* Per-module runtime binding from BGND.ASM: where the stage opens, how far it
+   scrolls, and the parallax plane each module rides. World position itself comes
+   from the module bounds above; this is the assembly-side placement that bddtool
+   normally cannot touch. Camera + scroll limits are editable (write BGND.ASM with
+   a backup); the plane/parallax table is read-only. */
+static void draw_module_runtime_binding(void)
+{
+    if (!ImGui::CollapsingHeader("Runtime Binding (BGND.ASM)"))
+        return;
+
+    ImGui::TextWrapped(
+        "Module bounds above set world position. The values here come from the "
+        "stage's BGND.ASM and decide where the stage opens, how far it scrolls, and "
+        "which parallax plane each module rides. Applying edits rewrites BGND.ASM "
+        "after saving a timestamped .pre_* backup.");
+
+    /* Reload the editable fields whenever the loaded stage changes. */
+    static char loaded_stage[160] = "";
+    static int cam_x = 0, cam_y = 0, cam_ok = 0;
+    static int lim_l = 0, lim_r = 0, lim_ok = 0;
+    char key[160];
+    snprintf(key, sizeof key, "%s|%s", g_name, g_bdb_path);
+    if (strncmp(key, loaded_stage, sizeof loaded_stage) != 0) {
+        snprintf(loaded_stage, sizeof loaded_stage, "%s", key);
+        cam_ok = bdd_get_stage_start_camera(&cam_x, &cam_y);
+        lim_ok = bdd_get_stage_scroll_limits(&lim_l, &lim_r);
+    }
+
+    ImGui::SeparatorText("Stage open + scroll");
+    if (ImGui::SmallButton("Reload from BGND.ASM")) {
+        cam_ok = bdd_get_stage_start_camera(&cam_x, &cam_y);
+        lim_ok = bdd_get_stage_scroll_limits(&lim_l, &lim_r);
+    }
+
+    ImGui::SetNextItemWidth(96.0f); ImGui::InputInt("Open camera X", &cam_x);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(96.0f); ImGui::InputInt("Y", &cam_y);
+    if (!cam_ok) ImGui::TextDisabled("No start camera parsed yet — values shown are defaults.");
+    if (ImGui::Button("Apply Open Camera to BGND.ASM", ImVec2(-1, 0))) {
+        g_stage_start_camera_x = cam_x;
+        g_stage_start_camera_y = cam_y;
+        g_stage_start_camera_enabled = true;
+        stage_start_apply_bgnd_patch();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Sets where the camera opens (worldx/worldy) in <stage>_mod.");
+
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    ImGui::SetNextItemWidth(96.0f); ImGui::InputInt("Scroll left", &lim_l);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(96.0f); ImGui::InputInt("right", &lim_r);
+    if (!lim_ok) ImGui::TextDisabled("No scroll limits parsed.");
+    if (ImGui::Button("Apply Scroll Limits to BGND.ASM", ImVec2(-1, 0)))
+        stage_start_apply_bgnd_limits(lim_l, lim_r);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("worldx range the camera may scroll between (<stage>_mod words 5,6).");
+
+    if (g_stage_start_status[0])
+        ImGui::TextWrapped("%s", g_stage_start_status);
+
+    ImGui::SeparatorText("Module planes (parallax)");
+    int plane_count = bdd_stage_plane_count();
+    if (plane_count <= 0) {
+        ImGui::TextDisabled("No <stage>_mod plane table found in BGND.ASM for this stage.");
+        return;
+    }
+    ImGui::TextWrapped(
+        "Parallax is read from BGND.ASM. 1.00x scrolls with the playfield; under 1 "
+        "sits further back (slower); 0.00x is locked to the screen. To re-bind a "
+        "module to a different plane, move its *BMOD in <stage>_mod.");
+
+    if (ImGui::BeginTable("module_planes", 4,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                          ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("module");
+        ImGui::TableSetupColumn("parallax", ImGuiTableColumnFlags_WidthFixed, 132.0f);
+        ImGui::TableSetupColumn("offset", ImGuiTableColumnFlags_WidthFixed, 86.0f);
+        ImGui::TableSetupColumn("draw", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+        ImGui::TableHeadersRow();
+        for (int m = 0; m < g_bdb_num_modules; m++) {
+            char mn[64] = "";
+            if (sscanf(g_bdb_modules[m], "%63s", mn) != 1) continue;
+
+            int ox = 0, oy = 0, rank = -1, found = 0;
+            float scroll = 1.0f;
+            char pn[32];
+            for (int p = 0; p < plane_count; p++) {
+                int pox = 0, poy = 0, prank = -1;
+                float pscroll = 1.0f;
+                if (!bdd_stage_plane_info(p, pn, sizeof pn, &pox, &poy, &pscroll, &prank))
+                    continue;
+                if (runtime_name_ieq(pn, mn)) {
+                    ox = pox; oy = poy; rank = prank; scroll = pscroll; found = 1;
+                    break;
+                }
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(mn);
+            if (!found) {
+                ImGui::TableNextColumn();
+                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "not placed");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("No %sBMOD entry in <stage>_mod, so this module is not drawn at runtime.", mn);
+                ImGui::TableNextColumn(); ImGui::TextDisabled("-");
+                ImGui::TableNextColumn(); ImGui::TextDisabled("-");
+                continue;
+            }
+            ImGui::TableNextColumn();
+            ImGui::Text("%.2fx %s", scroll, runtime_parallax_label(scroll));
+            ImGui::TableNextColumn();
+            ImGui::Text("%d,%d", ox, oy);
+            ImGui::TableNextColumn();
+            if (rank >= 0) ImGui::Text("%d", rank);
+            else ImGui::TextDisabled("-");
+        }
+        ImGui::EndTable();
+    }
+}
+
 void draw_modules(void)
 {
     right_panel_set_next(RIGHT_PANEL_MODULES);
@@ -501,6 +639,11 @@ void draw_modules(void)
             }
             ImGui::EndTable();
         }
+    }
+
+    if (!g_simple_mode) {
+        ImGui::Separator();
+        draw_module_runtime_binding();
     }
 
     ImGui::Separator();

@@ -61,6 +61,8 @@ void bdd_center_game_preview_camera(void);
 
 /* Read and apply the MK2 stage's match-load camera when available; falls back to centering. */
 int bdd_get_stage_start_camera(int *camera_x, int *camera_y);
+/* Read the stage's BGND.ASM scroll left/right limits (<stage>_mod words 5,6). */
+int bdd_get_stage_scroll_limits(int *scroll_left, int *scroll_right);
 void bdd_reset_game_preview_camera(void);
 
 /* Map one object from BDB source coordinates into its first-fit module-local origin */
