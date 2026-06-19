@@ -228,19 +228,34 @@ static std::string mk2_sanitize_asm_label(const char *name, std::vector<std::str
 
 static std::vector<std::string> mk2_palette_block_lines(const std::string &label, int pal_index)
 {
+    int n = g_pal_count[pal_index];
+    if (n < 0) n = 0;
+    if (n > 256) n = 256;
+
+    /* Prefer the exact RGB555 words captured from the BDD so the runtime table
+       reproduces the stored palette verbatim, including a non-black index 0
+       (which g_pals force-zeroes for display transparency). The accessor only
+       succeeds when the palette is unchanged since load; edited palettes fall
+       back to re-deriving the word from the displayed ARGB color. */
+    Uint16 raw[256];
+    int raw_count = editor_project_get_palette_rgb555_cache(pal_index, raw, 256);
+
     std::vector<std::string> block;
     char line[256];
     snprintf(line, sizeof line, "%s:\t;PAL #%d", label.c_str(), pal_index);
     block.push_back(line);
-    snprintf(line, sizeof line, "\t.word\t%d\t;pal size", g_pal_count[pal_index]);
+    snprintf(line, sizeof line, "\t.word\t%d\t;pal size", n);
     block.push_back(line);
-    for (int start = 0; start < g_pal_count[pal_index]; start += 10) {
+    for (int start = 0; start < n; start += 10) {
         std::string row = "\t.word ";
         int end = start + 10;
-        if (end > g_pal_count[pal_index]) end = g_pal_count[pal_index];
+        if (end > n) end = n;
         for (int i = start; i < end; i++) {
             if (i > start) row += ",";
-            row += mk2_asm_hex(mk2_palette_word_from_argb(g_pals[pal_index][i]));
+            unsigned short word = (i < raw_count)
+                ? raw[i]
+                : mk2_palette_word_from_argb(g_pals[pal_index][i]);
+            row += mk2_asm_hex(word);
         }
         block.push_back(row);
     }
@@ -428,6 +443,66 @@ static void mk2_palette_sync_remove_stale_outputs(const char *bgnpal, int *remov
     }
 }
 
+/* BGNDPAL.ASM is shared by every stage. Collect the labels that do NOT belong
+   to the target palette table (foreign blocks), plus the table label itself, so
+   we can seed the label-dedup set with them. A BDD palette whose name collides
+   with a foreign block then gets renamed and written as a fresh block instead of
+   silently overwriting another stage's palette. Labels the current table already
+   references stay reusable, so re-syncing keeps replacing our own blocks. */
+static void mk2_collect_foreign_labels(const std::vector<std::string> &lines,
+                                       const char *table_label,
+                                       std::vector<std::string> &out_foreign)
+{
+    out_foreign.clear();
+
+    std::vector<std::string> owned;
+    int table_start = mk2_find_label_line(lines, table_label);
+    if (table_start >= 0) {
+        int table_end = mk2_section_end(lines, table_start);
+        for (int i = table_start + 1; i < table_end; i++) {
+            std::string line = lines[(size_t)i];
+            size_t semi = line.find(';');
+            if (semi != std::string::npos) line.resize(semi);
+            size_t p = line.find(".long");
+            if (p == std::string::npos) continue;
+            std::string rest = line.substr(p + 5);
+            size_t start = 0;
+            while (start <= rest.size()) {
+                size_t comma = rest.find(',', start);
+                std::string one = mk2_trim_copy(rest.substr(
+                    start, comma == std::string::npos ? std::string::npos : comma - start));
+                if (!one.empty()) owned.push_back(one);
+                if (comma == std::string::npos) break;
+                start = comma + 1;
+            }
+        }
+    }
+
+    auto is_owned = [&](const std::string &name) {
+        if (table_label && mk2_sync_strcasecmp(name.c_str(), table_label) == 0)
+            return true;
+        for (const std::string &o : owned)
+            if (mk2_string_eq_ci(o, name)) return true;
+        return false;
+    };
+    auto already_listed = [&](const std::string &name) {
+        for (const std::string &f : out_foreign)
+            if (mk2_string_eq_ci(f, name)) return true;
+        return false;
+    };
+
+    for (const std::string &raw : lines) {
+        std::string name;
+        if (!mk2_label_name_from_line(raw, &name)) continue;
+        if (is_owned(name) || already_listed(name)) continue;
+        out_foreign.push_back(name);
+    }
+
+    /* Never let a palette reuse the table label itself. */
+    if (table_label && table_label[0] && !already_listed(table_label))
+        out_foreign.push_back(table_label);
+}
+
 static bool mk2_palette_sync_current_matches(const char *bgnpal, const char *table_label,
                                              char *status, size_t statussz)
 {
@@ -439,6 +514,7 @@ static bool mk2_palette_sync_current_matches(const char *bgnpal, const char *tab
     if (!mk2_read_text_lines(bgnpal, lines)) return false;
 
     std::vector<std::string> used;
+    mk2_collect_foreign_labels(lines, table_label, used);
     std::vector<std::string> labels;
     for (int i = 0; i < g_n_pals; i++)
         labels.push_back(mk2_sanitize_asm_label(g_pal_name[i], used));
@@ -501,6 +577,7 @@ static bool mk2_palette_sync_apply(const char *bgnpal, const char *table_label,
     }
 
     std::vector<std::string> used;
+    mk2_collect_foreign_labels(lines, table_label, used);
     std::vector<std::string> labels;
     for (int i = 0; i < g_n_pals; i++)
         labels.push_back(mk2_sanitize_asm_label(g_pal_name[i], used));
