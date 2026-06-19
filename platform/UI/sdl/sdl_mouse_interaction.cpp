@@ -10,6 +10,7 @@
 #include "UI/sdl/sdl_tooltip.h"
 #include "undo_manager.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -97,6 +98,88 @@ static int hit_object_at(int wx, int wy, int skip_hidden, int skip_locked)
     return -1;
 }
 
+/* Find the module rectangle under a world point. When rectangles overlap, the
+   smallest-area one wins so nested modules stay grabbable. */
+static int hit_module_at(int wx, int wy, int *ox1, int *ox2, int *oy1, int *oy2)
+{
+    int best = -1;
+    long best_area = 0;
+
+    if (!g_show_module_bounds) return -1;
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        if (!parse_module_bounds(m, NULL, &x1, &x2, &y1, &y2)) continue;
+        if (x2 < x1 || y2 < y1) continue;
+        if (wx < x1 || wx > x2 || wy < y1 || wy > y2) continue;
+        long area = (long)(x2 - x1 + 1) * (long)(y2 - y1 + 1);
+        if (best < 0 || area < best_area) {
+            best = m;
+            best_area = area;
+            if (ox1) *ox1 = x1;
+            if (ox2) *ox2 = x2;
+            if (oy1) *oy1 = y1;
+            if (oy2) *oy2 = y2;
+        }
+    }
+    return best;
+}
+
+/* Move the dragged module rectangle and every object inside it by the same
+   world delta. The undo snapshot and the member capture happen lazily on the
+   first real movement so a plain click on a module has no side effects. */
+static void module_drag_apply(BddSdlMouseState *state, int mouse_x, int mouse_y, int zoom)
+{
+    int m = state->module_drag_idx;
+    if (m < 0 || m >= g_bdb_num_modules) return;
+    if (zoom <= 0) zoom = 1;
+
+    int dwx = (mouse_x - state->module_drag_ox) / zoom;
+    int dwy = (mouse_y - state->module_drag_oy) / zoom;
+    if (g_grid_snap && g_grid_sx > 0 && g_grid_sy > 0) {
+        dwx = (dwx / g_grid_sx) * g_grid_sx;
+        dwy = (dwy / g_grid_sy) * g_grid_sy;
+    }
+
+    if (!state->module_drag_undo_saved) {
+        if (dwx == 0 && dwy == 0)
+            return;
+        if (!ensure_drag_capacity(state))
+            return;
+        undo_save_ex("Move Module");
+        editor_project_clear_selection();
+        int first_member = -1;
+        for (int i = 0; i < g_no; i++) {
+            Img *im = img_find(g_obj[i].ii);
+            if (!im) continue;
+            if (assign_module(g_obj[i].depth, g_obj[i].sy, im->w, im->h) != m)
+                continue;
+            g_sel_flags[i] = 1;
+            if (first_member < 0) first_member = i;
+            if (i < state->obj_drag_capacity) {
+                state->obj_drag_depth_a[i] = g_obj[i].depth;
+                state->obj_drag_sy_a[i] = g_obj[i].sy;
+            }
+        }
+        g_hl_obj = first_member;
+        state->module_drag_undo_saved = 1;
+    }
+
+    char name[64] = "";
+    if (parse_module_bounds(m, name, NULL, NULL, NULL, NULL)) {
+        char line[256];
+        snprintf(line, sizeof line, "%s %d %d %d %d", name,
+                 state->module_drag_x1 + dwx, state->module_drag_x2 + dwx,
+                 state->module_drag_y1 + dwy, state->module_drag_y2 + dwy);
+        editor_project_set_module_line(m, line);
+    }
+    for (int i = 0; i < g_no; i++) {
+        if (!g_sel_flags[i] || i >= state->obj_drag_capacity) continue;
+        g_obj[i].depth = state->obj_drag_depth_a[i] + dwx;
+        g_obj[i].sy = state->obj_drag_sy_a[i] + dwy;
+    }
+    g_dirty = 1;
+}
+
 static void begin_pan_drag(BddSdlMouseState *state, int x, int y,
                            int view_x, int view_y)
 {
@@ -140,6 +223,7 @@ int bdd_sdl_mouse_state_init(BddSdlMouseState *state)
 
     std::memset(state, 0, sizeof *state);
     state->obj_drag_idx = -1;
+    state->module_drag_idx = -1;
     return ensure_drag_capacity(state);
 }
 
@@ -382,8 +466,27 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
                 return;
             }
 
-            if (!found_obj && !bdd_object_picker_is_open())
-                begin_selection_rect(state, bx, by, ctrl_down);
+            if (!found_obj) {
+                if (!ctrl_down) {
+                    int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+                    int mhit = hit_module_at(wx2, wy2, &mx1, &mx2, &my1, &my2);
+                    if (mhit >= 0) {
+                        state->module_drag_idx = mhit;
+                        state->module_drag_ox = bx;
+                        state->module_drag_oy = by;
+                        state->module_drag_x1 = mx1;
+                        state->module_drag_x2 = mx2;
+                        state->module_drag_y1 = my1;
+                        state->module_drag_y2 = my2;
+                        state->module_drag_undo_saved = 0;
+                        SDL_CaptureMouse(SDL_TRUE);
+                        bdd_tooltip_free();
+                        return;
+                    }
+                }
+                if (!bdd_object_picker_is_open())
+                    begin_selection_rect(state, bx, by, ctrl_down);
+            }
             return;
         }
 
@@ -417,6 +520,17 @@ void bdd_sdl_mouse_button_up(BddSdlMouseState *state,
 
     if (button->button != SDL_BUTTON_LEFT)
         return;
+
+    if (state->module_drag_idx >= 0) {
+        if (state->module_drag_undo_saved) {
+            g_dirty = 1;
+            if (last_obj && g_hl_obj >= 0) *last_obj = g_hl_obj;
+        }
+        state->module_drag_idx = -1;
+        SDL_CaptureMouse(SDL_FALSE);
+        state->dragging = 0;
+        return;
+    }
 
     if (state->sel_rect_active) {
         state->sel_rect_active = 0;
@@ -456,7 +570,9 @@ void bdd_sdl_mouse_motion(BddSdlMouseState *state,
     if (!state || !motion || !view_x || !view_y)
         return;
 
-    if (state->sel_rect_active) {
+    if (state->module_drag_idx >= 0) {
+        module_drag_apply(state, motion->x, motion->y, zoom);
+    } else if (state->sel_rect_active) {
         state->sel_rx2 = motion->x;
         state->sel_ry2 = motion->y;
     } else if (state->obj_drag_idx >= 0) {

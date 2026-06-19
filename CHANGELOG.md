@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Modules can be moved by dragging: with module bounds visible, click and drag an
+  empty spot inside a module rectangle to slide the module and every object it
+  contains together. Shift+drag still starts a rubber-band selection.
+
 ## [1.0.14] - 2026-06-19
 
 ### Added

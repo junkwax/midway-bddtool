@@ -34,6 +34,15 @@ typedef struct BddSdlMouseState {
     int sel_ry2;
     int sel_rect_active;
     int sel_rect_additive;
+
+    int module_drag_idx;        /* module being dragged, -1 = none */
+    int module_drag_ox;         /* screen x at grab */
+    int module_drag_oy;         /* screen y at grab */
+    int module_drag_x1;         /* module bounds snapshot at grab */
+    int module_drag_x2;
+    int module_drag_y1;
+    int module_drag_y2;
+    int module_drag_undo_saved; /* lazy undo/member snapshot on first move */
 } BddSdlMouseState;
 
 int bdd_sdl_mouse_state_init(BddSdlMouseState *state);
