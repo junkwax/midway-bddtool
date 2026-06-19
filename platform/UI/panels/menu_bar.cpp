@@ -534,6 +534,15 @@ void MenuBarPanel::render()
             if (ImGui::MenuItem("Wrap Selection in Region", NULL, false,
                                 g_simple_mode && selected_count() > 0 && g_bdb_num_modules < module_cap))
                 wrap_selected_objects_in_region();
+            if (ImGui::MenuItem("Module from Selection Bounds", NULL, false,
+                                selected_count() > 0 && g_bdb_num_modules < module_cap)) {
+                if (create_module_from_selection())
+                    stage_set_toast("Created module from selection bounds");
+                else
+                    stage_set_toast("Could not create module from selection");
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Anchor a new LOAD2 module whose bounds enclose the selected objects' depth/sy footprints.");
 
             ImGui::Separator();
             if (ImGui::BeginMenu(g_simple_mode ? "Assign Layer" : "Assign Layer (wx)", has_obj)) {

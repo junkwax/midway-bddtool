@@ -848,6 +848,7 @@ int reorder_object_menu_targets(int active, bool to_front);
 void select_all_with_image_ii(int image_ii);
 void select_all_in_layer_byte(int layer);
 bool wrap_selected_objects_in_region(void);
+bool create_module_from_selection(void);
 void assign_layer_to_object_targets(int active, int layer);
 void assign_palette_to_object_targets(int active, int pal);
 void assign_module_to_object_targets(int active, int module_idx);

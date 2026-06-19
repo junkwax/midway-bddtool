@@ -514,6 +514,55 @@ bool wrap_selected_objects_in_region(void)
     return true;
 }
 
+bool create_module_from_selection(void)
+{
+    if (selected_count() < 1)
+        return false;
+    int module_cap = editor_project_module_capacity();
+    if (module_cap <= 0 || g_bdb_num_modules >= module_cap ||
+        !editor_project_reserve_modules(g_bdb_num_modules + 1))
+        return false;
+
+    int bx0 = INT_MAX, bx1 = INT_MIN, by0 = INT_MAX, by1 = INT_MIN;
+    for (int i = 0; i < g_no; i++) {
+        if (!g_sel_flags[i]) continue;
+        Img *im = img_find(g_obj[i].ii);
+        int ow = im ? im->w : 1;
+        int oh = im ? im->h : 1;
+        if (g_obj[i].depth < bx0) bx0 = g_obj[i].depth;
+        if (g_obj[i].depth + ow - 1 > bx1) bx1 = g_obj[i].depth + ow - 1;
+        if (g_obj[i].sy < by0) by0 = g_obj[i].sy;
+        if (g_obj[i].sy + oh - 1 > by1) by1 = g_obj[i].sy + oh - 1;
+    }
+    if (bx0 > bx1 || by0 > by1)
+        return false;
+
+    /* Pick a module name not already taken so the new anchor is distinct. */
+    char name[64];
+    for (int n = g_bdb_num_modules; ; n++) {
+        snprintf(name, sizeof name, "MOD%d", n);
+        bool taken = false;
+        for (int m = 0; m < g_bdb_num_modules; m++) {
+            char mn[64] = "";
+            if (sscanf(g_bdb_modules[m], "%63s", mn) == 1 && strcasecmp(mn, name) == 0) {
+                taken = true;
+                break;
+            }
+        }
+        if (!taken) break;
+    }
+
+    undo_save_ex("Create Module from Selection");
+    char line[256];
+    snprintf(line, sizeof line, "%s %d %d %d %d", name, bx0, bx1, by0, by1);
+    if (!editor_project_append_module_line(line))
+        return false;
+    sync_bdb_header_counts();
+    g_dirty = 1;
+    g_show_module_bounds = true;
+    return true;
+}
+
 int module_collect_stats(int module_idx, int *palette_count,
                          int *layer_count, int *first_obj)
 {
