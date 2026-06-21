@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.16] - 2026-06-21
+
 ### Added
 - Modules panel can set a level's in-game background color (the autoerase /
   irqskye colour, BGND.ASM <stage>_mod word 1) with a color picker that writes
@@ -29,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Runtime palette sync now reuses an existing palette block whose colours are
   identical instead of appending a duplicate, so re-syncing unchanged stages no
   longer grows BGNDPAL.ASM.
+- Block-table background planes honor a per-plane scroll origin (worldtlxN,
+  which BGND.ASM helpers such as center_x can seed) instead of assuming every
+  plane starts at the stage camera, so pre-seeded/screen-anchored planes track
+  correctly in the game preview and runtime layout view.
 
 ## [1.0.15] - 2026-06-19
 
