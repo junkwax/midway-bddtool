@@ -45,9 +45,8 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
     int n = bdd_stage_plane_count();
     if (n <= 0) return;
 
-    /* MK2 anchors every plane's worldtlx at the stage-start camera and scrolls
-       the delta by the plane's factor: a factor-0 plane stays locked to the
-       screen, all planes align at the start view. */
+    /* Most MK2 planes start at the stage camera, but BGND.ASM helpers such as
+       center_x can seed a specific worldtlxN before scrolling begins. */
     int start_x = 0, start_y = 0;
     bdd_get_stage_start_camera(&start_x, &start_y);
 
@@ -74,9 +73,11 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
     for (int oi = 0; oi < count; oi++) {
         char mod[32];
         int ox = 0, oy = 0;
+        int scroll_origin_x = start_x;
         float scroll = 1.0f;
         if (!bdd_stage_plane_info(order[oi], mod, sizeof mod, &ox, &oy, &scroll, NULL))
             continue;
+        bdd_stage_plane_scroll_origin(order[oi], &scroll_origin_x);
         int nb = bdd_stage_module_blocks(mod, blocks, (int)(sizeof blocks / sizeof blocks[0]));
         for (int b = 0; b < nb; b++) {
             int hdr = blocks[b].hdr;
@@ -89,11 +90,13 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
             int world_y = oy + blocks[b].y;
             int sx, sy;
             if (g_game_view) {
-                int parallax = start_x + (int)((float)(game_scroll - start_x) * scroll);
+                int parallax = scroll_origin_x + (int)((float)(game_scroll - start_x) * scroll);
                 sx = clip_x + (world_x - parallax) * zoom;
                 sy = clip_y + (world_y - g_game_view_y) * zoom;
             } else {   /* runtime layout view: editor-canvas projection */
-                sx = (world_x - view_x) * zoom;
+                int layout_adjust = game_scroll - scroll_origin_x -
+                    (int)((float)(game_scroll - start_x) * scroll);
+                sx = (world_x + layout_adjust - view_x) * zoom;
                 sy = (world_y - view_y) * zoom;
             }
             SDL_Rect dst = { sx, sy, im->w * zoom, im->h * zoom };
