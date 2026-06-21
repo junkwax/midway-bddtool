@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Modules panel can now edit per-module runtime parallax and placement: pick a
+  module, set its parallax aggressiveness (0.00 screen-fixed .. 1.00 playfield)
+  and its runtime screen X/Y offset, and apply straight to BGND.ASM (with a
+  backup). Parallax writes the plane's scroll-table rate and notes that it
+  affects every module sharing that baklst plane.
 - Runtime palette sync now guards the BGNDPAL.ASM ROM budget: it estimates the
   assembled palette-data size and refuses to write past a soft cap (with an
   override), so cross-stage syncing can no longer silently overrun the reserved

@@ -281,8 +281,9 @@ static const char *runtime_parallax_label(float s)
 /* Per-module runtime binding from BGND.ASM: where the stage opens, how far it
    scrolls, and the parallax plane each module rides. World position itself comes
    from the module bounds above; this is the assembly-side placement that bddtool
-   normally cannot touch. Camera + scroll limits are editable (write BGND.ASM with
-   a backup); the plane/parallax table is read-only. */
+   normally cannot touch. Camera, scroll limits, per-module parallax and runtime
+   placement are all editable here and write BGND.ASM with a timestamped backup;
+   the overview table stays read-only. */
 static void draw_module_runtime_binding(void)
 {
     if (!ImGui::CollapsingHeader("Runtime Binding (BGND.ASM)"))
@@ -298,12 +299,17 @@ static void draw_module_runtime_binding(void)
     static char loaded_stage[160] = "";
     static int cam_x = 0, cam_y = 0, cam_ok = 0;
     static int lim_l = 0, lim_r = 0, lim_ok = 0;
+    static int rb_sel = -1, rb_loaded = -2;
+    static float rb_factor = 1.0f;
+    static int rb_ox = 0, rb_oy = 0;
     char key[160];
     snprintf(key, sizeof key, "%s|%s", g_name, g_bdb_path);
     if (strncmp(key, loaded_stage, sizeof loaded_stage) != 0) {
         snprintf(loaded_stage, sizeof loaded_stage, "%s", key);
         cam_ok = bdd_get_stage_start_camera(&cam_x, &cam_y);
         lim_ok = bdd_get_stage_scroll_limits(&lim_l, &lim_r);
+        rb_sel = -1;
+        rb_loaded = -2;
     }
 
     ImGui::SeparatorText("Stage open + scroll");
@@ -396,6 +402,70 @@ static void draw_module_runtime_binding(void)
         }
         ImGui::EndTable();
     }
+
+    /* Editable placement + parallax for one module (writes BGND.ASM). */
+    ImGui::SeparatorText("Edit placement & parallax");
+    if (g_bdb_num_modules <= 0) {
+        ImGui::TextDisabled("No modules to edit.");
+        return;
+    }
+    if (rb_sel < 0 || rb_sel >= g_bdb_num_modules) rb_sel = 0;
+
+    char cur_name[64] = "";
+    sscanf(g_bdb_modules[rb_sel], "%63s", cur_name);
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::BeginCombo("Module##rb", cur_name)) {
+        for (int m = 0; m < g_bdb_num_modules; m++) {
+            char nm[64] = "";
+            sscanf(g_bdb_modules[m], "%63s", nm);
+            bool sel = (m == rb_sel);
+            if (ImGui::Selectable(nm, sel)) rb_sel = m;
+            if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    /* Seed the edit fields from the parsed plane info when the pick changes. */
+    if (rb_loaded != rb_sel) {
+        rb_loaded = rb_sel;
+        rb_factor = 1.0f; rb_ox = 0; rb_oy = 0;
+        char want[64] = "";
+        sscanf(g_bdb_modules[rb_sel], "%63s", want);
+        int pc = bdd_stage_plane_count();
+        for (int p = 0; p < pc; p++) {
+            char pn[32]; int pox = 0, poy = 0, prank = -1; float ps = 1.0f;
+            if (bdd_stage_plane_info(p, pn, sizeof pn, &pox, &poy, &ps, &prank) &&
+                runtime_name_ieq(pn, want)) {
+                rb_factor = ps; rb_ox = pox; rb_oy = poy;
+                break;
+            }
+        }
+    }
+
+    ImGui::TextDisabled("Parallax: 1.00 = moves with playfield, lower = further back, 0.00 = locked to screen.");
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SliderFloat("Parallax##rb", &rb_factor, 0.0f, 1.0f, "%.2fx");
+    ImGui::SameLine();
+    if (ImGui::Button("Apply parallax")) {
+        char nm[64] = ""; sscanf(g_bdb_modules[rb_sel], "%63s", nm);
+        stage_bgnd_set_module_parallax(nm, rb_factor);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Writes the plane's scroll rate in BGND.ASM.\nAffects every module sharing the same baklst plane.");
+
+    ImGui::SetNextItemWidth(90.0f); ImGui::InputInt("Place X##rb", &rb_ox);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90.0f); ImGui::InputInt("Y##rb", &rb_oy);
+    ImGui::SameLine();
+    if (ImGui::Button("Apply placement")) {
+        char nm[64] = ""; sscanf(g_bdb_modules[rb_sel], "%63s", nm);
+        stage_bgnd_set_module_offset(nm, rb_ox, rb_oy);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Writes the module's runtime screen offset (.word x,y after its *BMOD).");
+
+    if (g_stage_start_status[0])
+        ImGui::TextWrapped("%s", g_stage_start_status);
 }
 
 void draw_modules(void)

@@ -1298,3 +1298,239 @@ bool stage_start_apply_bgnd_limits(int scroll_left, int scroll_right)
     return true;
 }
 
+/* First operand token of a directive line (".long"/".word"), up to whitespace,
+   comma or comment. Empty if the directive is not present on the line. */
+static std::string bgnd_directive_token(const std::string &raw, const char *dir)
+{
+    std::string line = raw;
+    size_t semi = line.find(';');
+    if (semi != std::string::npos) line.resize(semi);
+    size_t p = line.find(dir);
+    if (p == std::string::npos) return std::string();
+    size_t s = p + strlen(dir);
+    while (s < line.size() && (line[s] == ' ' || line[s] == '\t')) s++;
+    size_t e = s;
+    while (e < line.size() && line[e] != ' ' && line[e] != '\t' && line[e] != ',') e++;
+    return line.substr(s, e - s);
+}
+
+static bool bgnd_token_ieq(const std::string &a, const char *b)
+{
+    return mk2_sync_strcasecmp(a.c_str(), b) == 0;
+}
+
+/* Within the <stage>_mod block (starting at block_line), find the target
+   module's baklst plane index, the line of its ".long <name>BMOD", the following
+   ".word x,y" offset line (-1 if none), the block end, and the scroll table
+   label (2nd header long). Mirrors bdd_parse_stage_mod_block. */
+struct BgndModLoc {
+    int baklst;
+    int bmod_line;
+    int offset_line;
+    int block_end;
+    std::string scroll_label;
+};
+static bool bgnd_locate_module(const std::vector<std::string> &lines, int block_line,
+                               const char *module_name, BgndModLoc *loc)
+{
+    loc->baklst = -1;
+    loc->bmod_line = -1;
+    loc->offset_line = -1;
+    loc->block_end = (int)lines.size();
+    loc->scroll_label.clear();
+    if (block_line < 0) return false;
+
+    int long_count = 0, baklst_num = 0;
+    bool want_offset = false;
+    int i = block_line + 1;
+    for (; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL)) break;   /* block end */
+        std::string longtok = bgnd_directive_token(lines[(size_t)i], ".long");
+        if (!longtok.empty()) {
+            long_count++;
+            if (long_count == 2) loc->scroll_label = longtok;
+            if (long_count <= 4) { want_offset = false; continue; }       /* header longs */
+            char c0 = longtok[0];
+            if (c0 == '>' || (c0 >= '0' && c0 <= '9')) break;             /* numeric ends list */
+            baklst_num++;
+            want_offset = false;
+            if (bgnd_token_ieq(longtok, "skip_bakmod")) continue;
+            size_t tl = longtok.size();
+            if (tl < 4 || mk2_sync_strcasecmp(longtok.c_str() + tl - 4, "BMOD") != 0) break;
+            std::string nm = longtok.substr(0, tl - 4);
+            if (bgnd_token_ieq(nm, module_name)) {
+                loc->baklst = baklst_num;
+                loc->bmod_line = i;
+                want_offset = true;                                       /* next .word is its offset */
+            }
+            continue;
+        }
+        if (want_offset && !bgnd_directive_token(lines[(size_t)i], ".word").empty()) {
+            loc->offset_line = i;
+            want_offset = false;
+        }
+    }
+    loc->block_end = i;
+    return loc->bmod_line >= 0;
+}
+
+static bool bgnd_load_block(std::vector<std::string> &lines, char *block_label, size_t lbsz,
+                            int *block_line, char *bgnd_out, size_t bgnd_sz)
+{
+    if (!stage_start_find_bgnd_path(bgnd_out, bgnd_sz)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "BGND.ASM was not found.");
+        return false;
+    }
+    if (!mk2_read_text_lines(bgnd_out, lines)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "Could not read BGND.ASM.");
+        return false;
+    }
+    if (!stage_start_infer_bgnd_block(lines, block_label, lbsz, block_line)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not infer the BGND init block from current BDB module names.");
+        return false;
+    }
+    return true;
+}
+
+static bool bgnd_commit(const char *bgnd, std::vector<std::string> &lines,
+                        const char *suffix, char *backup_out, size_t backup_sz)
+{
+    if (!mk2_copy_file_unique(bgnd, suffix, backup_out, backup_sz)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "Could not back up BGND.ASM.");
+        return false;
+    }
+    if (!mk2_write_text_lines(bgnd, lines)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not write BGND.ASM; backup: %s", backup_out);
+        return false;
+    }
+    mk2_palette_sync_remove_stale_outputs(bgnd, NULL);
+    return true;
+}
+
+bool stage_bgnd_set_module_offset(const char *module_name, int ox, int oy)
+{
+    if (!module_name || !module_name[0]) return false;
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line, bgnd, sizeof bgnd))
+        return false;
+
+    BgndModLoc loc;
+    if (!bgnd_locate_module(lines, block_line, module_name, &loc)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Module %s is not placed in %s (no %sBMOD entry).",
+                 module_name, block_label, module_name);
+        return false;
+    }
+
+    /* Preserve any trailing comment (e.g. "; castle") when rewriting. */
+    std::string comment;
+    if (loc.offset_line >= 0) {
+        size_t semi = lines[(size_t)loc.offset_line].find(';');
+        if (semi != std::string::npos) comment = lines[(size_t)loc.offset_line].substr(semi);
+    }
+    char wline[192];
+    snprintf(wline, sizeof wline, "\t.word\t%d,%d%s%s", ox, oy,
+             comment.empty() ? "" : "\t\t", comment.c_str());
+    bool changed;
+    if (loc.offset_line >= 0) {
+        changed = (lines[(size_t)loc.offset_line] != wline);
+        lines[(size_t)loc.offset_line] = wline;
+    } else {
+        lines.insert(lines.begin() + loc.bmod_line + 1, wline);
+        changed = true;
+    }
+    if (!changed) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s already placed at runtime offset %d,%d.", module_name, ox, oy);
+        return true;
+    }
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_module_offset", backup, sizeof backup))
+        return false;
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Set %s runtime offset to %d,%d. Backup: %s.", module_name, ox, oy, backup);
+    stage_set_toast("Patched module runtime offset");
+    return true;
+}
+
+bool stage_bgnd_set_module_parallax(const char *module_name, float factor)
+{
+    if (!module_name || !module_name[0]) return false;
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line, bgnd, sizeof bgnd))
+        return false;
+
+    BgndModLoc loc;
+    if (!bgnd_locate_module(lines, block_line, module_name, &loc)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Module %s is not placed in %s.", module_name, block_label);
+        return false;
+    }
+    if (loc.baklst < 1 || loc.baklst > 8 || loc.scroll_label.empty()) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s is not on a parallax plane with a scroll table.", module_name);
+        return false;
+    }
+    if (factor < 0.0f) factor = 0.0f;
+    if (factor > 2.0f) factor = 2.0f;
+    long rate = (long)(factor * 131072.0f + 0.5f);   /* playfield = 0x20000 */
+
+    int sl = -1;
+    std::string lbl;
+    for (int i = 0; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], &lbl) &&
+            bgnd_token_ieq(lbl, loc.scroll_label.c_str())) { sl = i; break; }
+    }
+    if (sl < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Scroll table %s not found.", loc.scroll_label.c_str());
+        return false;
+    }
+
+    int target_row = 8 - loc.baklst;            /* table rows are baklst 8..0 */
+    int row = 0, found = -1;
+    for (int i = sl + 1; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL)) break;
+        if (bgnd_directive_token(lines[(size_t)i], ".long").empty()) continue;
+        if (row == target_row) { found = i; break; }
+        row++;
+    }
+    if (found < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Scroll table %s has no row for baklst %d.", loc.scroll_label.c_str(), loc.baklst);
+        return false;
+    }
+
+    std::string comment;
+    size_t semi = lines[(size_t)found].find(';');
+    if (semi != std::string::npos) comment = lines[(size_t)found].substr(semi);
+    char val[32];
+    if (rate == 0) snprintf(val, sizeof val, "0");
+    else snprintf(val, sizeof val, "0%lxh", rate);
+    char nl[192];
+    snprintf(nl, sizeof nl, "\t.long\t%s%s%s",
+             val, comment.empty() ? "" : "\t\t", comment.c_str());
+    if (lines[(size_t)found] == nl) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s plane (baklst %d) already at parallax %.2fx.", module_name, loc.baklst, factor);
+        return true;
+    }
+    lines[(size_t)found] = nl;
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_plane_parallax", backup, sizeof backup))
+        return false;
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Set %s plane (baklst %d) parallax to %.2fx (affects all modules on that plane). Backup: %s.",
+             module_name, loc.baklst, factor, backup);
+    stage_set_toast("Patched plane parallax");
+    return true;
+}
+
