@@ -1534,3 +1534,52 @@ bool stage_bgnd_set_module_parallax(const char *module_name, float factor)
     return true;
 }
 
+bool stage_bgnd_set_bg_color(int r5, int g5, int b5)
+{
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line, bgnd, sizeof bgnd))
+        return false;
+
+    /* Word 1 of <stage>_mod (the autoerase/irqskye colour) is the first .word
+       in the block, before any .long. */
+    int wline = -1;
+    for (int i = block_line + 1; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL)) break;
+        if (!bgnd_directive_token(lines[(size_t)i], ".long").empty()) break;
+        if (!bgnd_directive_token(lines[(size_t)i], ".word").empty()) { wline = i; break; }
+    }
+    if (wline < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not find the background colour word in %s.", block_label);
+        return false;
+    }
+
+    if (r5 < 0) r5 = 0; if (r5 > 31) r5 = 31;
+    if (g5 < 0) g5 = 0; if (g5 > 31) g5 = 31;
+    if (b5 < 0) b5 = 0; if (b5 > 31) b5 = 31;
+
+    std::string comment;
+    size_t semi = lines[(size_t)wline].find(';');
+    if (semi != std::string::npos) comment = lines[(size_t)wline].substr(semi);
+    char nl[192];
+    snprintf(nl, sizeof nl, "\t.word\t(32*32*%d)+(32*%d)+%d%s%s",
+             r5, g5, b5, comment.empty() ? "" : "\t\t", comment.c_str());
+    if (lines[(size_t)wline] == nl) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s background colour already set.", block_label);
+        return true;
+    }
+    lines[(size_t)wline] = nl;
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_bg_color", backup, sizeof backup))
+        return false;
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Set %s background colour to RGB555 %d,%d,%d. Backup: %s.",
+             block_label, r5, g5, b5, backup);
+    stage_set_toast("Patched stage background colour");
+    return true;
+}
+

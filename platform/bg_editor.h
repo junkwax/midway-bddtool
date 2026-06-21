@@ -63,6 +63,8 @@ void bdd_center_game_preview_camera(void);
 int bdd_get_stage_start_camera(int *camera_x, int *camera_y);
 /* Read the stage's BGND.ASM scroll left/right limits (<stage>_mod words 5,6). */
 int bdd_get_stage_scroll_limits(int *scroll_left, int *scroll_right);
+/* Read the stage's in-game background colour (<stage>_mod word 1) as RGB555. */
+int bdd_get_stage_bg_color(int *rgb555);
 void bdd_reset_game_preview_camera(void);
 
 /* Map one object from BDB source coordinates into its first-fit module-local origin */
@@ -106,6 +108,7 @@ int bdd_stage_module_blocks(const char *module, BddBgndBlock *out, int max);
 int bdd_stage_plane_count(void);
 int bdd_stage_plane_info(int index, char *name, int name_sz,
                          int *ox, int *oy, float *scroll, int *draw_rank);
+int bdd_stage_plane_scroll_origin(int index, int *scroll_x);
 
 /* 1 when an object belongs to a known background plane (so the block-table
    renderer draws it from *BLKS and the BDB object copy is suppressed). */

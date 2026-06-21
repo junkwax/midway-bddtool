@@ -666,6 +666,8 @@ typedef struct {
     int baklst;      /* baklst plane index (1..8) */
     int ox;
     int oy;
+    int scroll_origin_x;       /* initial worldtlxN source scroll for this plane */
+    int scroll_origin_valid;
     float scroll;
     int draw_rank;   /* runtime draw order from the dlists, -1 if not placed */
 } BddStagePlane;
@@ -687,6 +689,8 @@ typedef struct {
     int camera_x, camera_y;
     int limits_valid;        /* <stage>_mod words 5,6 captured (scroll left/right) */
     int scroll_left, scroll_right;
+    int bg_valid;            /* <stage>_mod word 1 captured (autoerase/irqskye color) */
+    int bg_color;            /* RGB555 background colour, (R<<10)|(G<<5)|B */
     char calla_label[64];    /* <stage>_mod calla routine (header long #1) */
     float baklst_scroll[BDD_BGND_SCROLL_ENTRIES]; /* parallax factor per baklst 0..8 */
 } BddStageModuleTable;
@@ -709,6 +713,9 @@ static void bdd_strip_bmod_suffix(const char *in, char *out, size_t outsz)
     if (len >= 4 && strcasecmp(out + len - 4, "BMOD") == 0)
         out[len - 4] = '\0';
 }
+
+static int bdd_resolve_bgndtbl_path(char *out, size_t outsz);
+static int bdd_stage_bmod_x_size(const char *module, int *x_size);
 
 /* Find an ".op" directive that is not commented out, returning the operand
    text (first non-space after the directive) or NULL. */
@@ -740,6 +747,63 @@ static int bdd_bgnd_asm_long_token(const char *line, char *out, size_t outsz)
     }
     out[n] = '\0';
     return n > 0;
+}
+
+static int bdd_bgnd_asm_long_second_token(const char *line, char *out, size_t outsz)
+{
+    const char *operand = bdd_bgnd_asm_active_directive(line, ".long");
+    size_t n = 0;
+    if (!operand || !out || outsz == 0) return 0;
+    while (*operand && *operand != ',' && *operand != ';') operand++;
+    if (*operand != ',') return 0;
+    operand++;
+    while (*operand && isspace((unsigned char)*operand)) operand++;
+    while (operand[n] && operand[n] != ',' && operand[n] != ';' &&
+           !isspace((unsigned char)operand[n])) {
+        if (n + 1 >= outsz) break;
+        out[n] = operand[n];
+        n++;
+    }
+    out[n] = '\0';
+    return n > 0;
+}
+
+static int bdd_bgnd_worldtlx_baklst(const char *token)
+{
+    if (!token || !token[0]) return -1;
+    if (strcasecmp(token, "worldtlx") == 0)
+        return 1;
+    if (strncasecmp(token, "worldtlx", 8) == 0 &&
+        token[8] >= '1' && token[8] <= '8' && token[9] == '\0')
+        return token[8] - '0';
+    return -1;
+}
+
+static void bdd_stage_apply_center_x_entry(BddStageModuleTable *table,
+                                           const char *module_token,
+                                           const char *worldtlx_token)
+{
+    int baklst = bdd_bgnd_worldtlx_baklst(worldtlx_token);
+    int x_size = 0;
+    char want[32];
+    int scroll_x;
+
+    if (!table || baklst < 1 || baklst > 8 ||
+        !module_token || !module_token[0] ||
+        !bdd_stage_bmod_x_size(module_token, &x_size))
+        return;
+
+    bdd_strip_bmod_suffix(module_token, want, sizeof want);
+    scroll_x = (x_size >> 1) - (BDD_BGND_SCRRGT / 2);
+    for (int i = 0; i < table->plane_count; i++) {
+        if (table->planes[i].baklst != baklst)
+            continue;
+        if (strcasecmp(table->planes[i].name, want) != 0)
+            continue;
+        table->planes[i].scroll_origin_x = scroll_x;
+        table->planes[i].scroll_origin_valid = 1;
+        return;
+    }
 }
 
 /* Parse a numeric ".long" operand (">" hex or decimal) into a 32-bit value. */
@@ -820,6 +884,7 @@ static int bdd_parse_stage_mod_block(const char *path, const char *label,
                 bdd_bgnd_asm_active_directive(line, ".word")) {
                 header_word++;
                 switch (header_word) {
+                    case 1: table->bg_color = hv & 0x7FFF; table->bg_valid = 1; break;
                     case 3: table->camera_y = hv; break;
                     case 4: table->camera_x = hv; table->camera_valid = 1; break;
                     case 5: table->scroll_left = hv; break;
@@ -852,6 +917,22 @@ static int bdd_parse_stage_mod_block(const char *path, const char *label,
             /* baklst entries: symbol names only; a numeric (e.g. >ffffffff) ends. */
             if (token[0] == '>' || isdigit((unsigned char)token[0]))
                 break;
+            if (strcasecmp(token, "center_x") == 0) {
+                while (fgets(line, sizeof line, f)) {
+                    char module_token[64];
+                    char worldtlx_token[64];
+                    if (!bdd_bgnd_asm_active_directive(line, ".long"))
+                        continue;
+                    if (!bdd_bgnd_asm_long_token(line, module_token, sizeof module_token))
+                        continue;
+                    if (module_token[0] == '>' || isdigit((unsigned char)module_token[0]))
+                        break;
+                    if (!bdd_bgnd_asm_long_second_token(line, worldtlx_token, sizeof worldtlx_token))
+                        continue;
+                    bdd_stage_apply_center_x_entry(table, module_token, worldtlx_token);
+                }
+                break;
+            }
             baklst_num++;
             if (strcasecmp(token, "skip_bakmod") == 0)
                 continue;
@@ -866,6 +947,8 @@ static int bdd_parse_stage_mod_block(const char *path, const char *label,
                 p->baklst = baklst_num;
                 p->ox = 0;
                 p->oy = 0;
+                p->scroll_origin_x = 0;
+                p->scroll_origin_valid = 0;
                 p->scroll = 0.0f;
                 p->draw_rank = -1;
                 pending = table->plane_count;
@@ -1260,6 +1343,10 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
     snprintf(table->calla_label, sizeof table->calla_label, "%s", calla_label);
 
     for (int i = 0; i < table->plane_count; i++) {
+        if (!table->planes[i].scroll_origin_valid && table->camera_valid) {
+            table->planes[i].scroll_origin_x = table->camera_x;
+            table->planes[i].scroll_origin_valid = 1;
+        }
         int pos = 8 - table->planes[i].baklst;   /* scroll table row for this plane */
         if (pos >= 0 && pos < BDD_BGND_SCROLL_ENTRIES)
             table->planes[i].scroll = (float)scroll[pos] / (float)BDD_BGND_PLAYFIELD_SCROLL;
@@ -1339,6 +1426,21 @@ int bdd_stage_plane_info(int index, char *name, int name_sz,
     if (oy) *oy = p->oy;
     if (scroll) *scroll = p->scroll;
     if (draw_rank) *draw_rank = p->draw_rank;
+    return 1;
+}
+
+int bdd_stage_plane_scroll_origin(int index, int *scroll_x)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    int x = 0;
+    if (!table || index < 0 || index >= table->plane_count)
+        return 0;
+    const BddStagePlane *p = &table->planes[index];
+    if (p->scroll_origin_valid)
+        x = p->scroll_origin_x;
+    else if (table->camera_valid)
+        x = table->camera_x;
+    if (scroll_x) *scroll_x = x;
     return 1;
 }
 
@@ -1518,6 +1620,48 @@ static int bdd_resolve_bgndtbl_path(char *out, size_t outsz)
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
     path_join(path, sizeof path, root, "src-refactor\\src\\BGNDTBL.ASM");
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
+    return 0;
+}
+
+static int bdd_stage_bmod_x_size(const char *module, int *x_size)
+{
+    char path[512];
+    char want[64];
+    char label[72];
+    FILE *f;
+    char line[512];
+    int in = 0;
+    size_t len;
+
+    if (!module || !module[0] || !x_size) return 0;
+    bdd_strip_bmod_suffix(module, want, sizeof want);
+    len = strlen(want);
+    if (len + 4 >= sizeof label) return 0;
+    snprintf(label, sizeof label, "%sBMOD", want);
+
+    if (!bdd_resolve_bgndtbl_path(path, sizeof path)) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in) {
+            if (bdd_line_is_label(line, label)) in = 1;
+            continue;
+        }
+        if (bdd_bgnd_asm_active_directive(line, ".word")) {
+            int vals[3];
+            int nv = bdd_parse_word_csv(line, vals, 3);
+            fclose(f);
+            if (nv >= 1) {
+                *x_size = vals[0];
+                return 1;
+            }
+            return 0;
+        }
+        if (!isspace((unsigned char)line[0]) && line[0] != ';' &&
+            line[0] != '*' && line[0] != '.' && line[0] != '\0')
+            break;
+    }
+    fclose(f);
     return 0;
 }
 
@@ -2145,6 +2289,37 @@ void bdd_get_runtime_layout_bounds(int *wx_min, int *wx_max, int *wy_min, int *w
         if (ry < *wy_min) *wy_min = ry;
         if (ry + im->h > *wy_max) *wy_max = ry + im->h;
     }
+
+    int n = bdd_stage_plane_count();
+    if (n > 0) {
+        int start_x = 0, start_y = 0;
+        bdd_get_stage_start_camera(&start_x, &start_y);
+        static BddBgndBlock blocks[512];
+        for (int pi = 0; pi < n; pi++) {
+            char mod[32];
+            int ox = 0, oy = 0;
+            int scroll_origin_x = start_x;
+            float scroll = 1.0f;
+            if (!bdd_stage_plane_info(pi, mod, sizeof mod, &ox, &oy, &scroll, NULL))
+                continue;
+            bdd_stage_plane_scroll_origin(pi, &scroll_origin_x);
+            int layout_adjust = g_scroll_pos - scroll_origin_x -
+                (int)((float)(g_scroll_pos - start_x) * scroll);
+            int nb = bdd_stage_module_blocks(mod, blocks, (int)(sizeof blocks / sizeof blocks[0]));
+            for (int b = 0; b < nb; b++) {
+                int hdr = blocks[b].hdr;
+                if (hdr < 0 || hdr >= g_ni) continue;
+                Img *im = &g_img[hdr];
+                if (im->w <= 0 || im->h <= 0) continue;
+                int rx = ox + blocks[b].x + layout_adjust;
+                int ry = oy + blocks[b].y;
+                if (rx < *wx_min) *wx_min = rx;
+                if (rx + im->w > *wx_max) *wx_max = rx + im->w;
+                if (ry < *wy_min) *wy_min = ry;
+                if (ry + im->h > *wy_max) *wy_max = ry + im->h;
+            }
+        }
+    }
 }
 
 void bdd_get_editor_layout_bounds(int *wx_min, int *wx_max, int *wy_min, int *wy_max)
@@ -2343,6 +2518,16 @@ int bdd_get_stage_scroll_limits(int *scroll_left, int *scroll_right)
 
     if (scroll_left) *scroll_left = left;
     if (scroll_right) *scroll_right = right;
+    return 1;
+}
+
+int bdd_get_stage_bg_color(int *rgb555)
+{
+    const BddStageModuleTable *table;
+    if (!bdd_bgnd_stage_label()) return 0;
+    table = bdd_get_stage_module_table();
+    if (!table || !table->bg_valid) return 0;
+    if (rgb555) *rgb555 = table->bg_color & 0x7FFF;
     return 1;
 }
 

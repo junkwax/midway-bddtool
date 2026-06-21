@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Modules panel can set a level's in-game background color (the autoerase /
+  irqskye colour, BGND.ASM <stage>_mod word 1) with a color picker that writes
+  RGB555 back to BGND.ASM. This is distinct from View > Background Color, which
+  only tints the editor canvas.
 - Modules panel can now edit per-module runtime parallax and placement: pick a
   module, set its parallax aggressiveness (0.00 screen-fixed .. 1.00 playfield)
   and its runtime screen X/Y offset, and apply straight to BGND.ASM (with a

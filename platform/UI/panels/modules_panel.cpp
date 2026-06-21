@@ -302,12 +302,19 @@ static void draw_module_runtime_binding(void)
     static int rb_sel = -1, rb_loaded = -2;
     static float rb_factor = 1.0f;
     static int rb_ox = 0, rb_oy = 0;
+    static float bg_rgb[3] = { 0, 0, 0 };
+    static int bg_ok = 0;
     char key[160];
     snprintf(key, sizeof key, "%s|%s", g_name, g_bdb_path);
     if (strncmp(key, loaded_stage, sizeof loaded_stage) != 0) {
         snprintf(loaded_stage, sizeof loaded_stage, "%s", key);
         cam_ok = bdd_get_stage_start_camera(&cam_x, &cam_y);
         lim_ok = bdd_get_stage_scroll_limits(&lim_l, &lim_r);
+        int rgb555 = 0;
+        bg_ok = bdd_get_stage_bg_color(&rgb555);
+        bg_rgb[0] = ((rgb555 >> 10) & 31) / 31.0f;
+        bg_rgb[1] = ((rgb555 >> 5) & 31) / 31.0f;
+        bg_rgb[2] = (rgb555 & 31) / 31.0f;
         rb_sel = -1;
         rb_loaded = -2;
     }
@@ -340,6 +347,21 @@ static void draw_module_runtime_binding(void)
         stage_start_apply_bgnd_limits(lim_l, lim_r);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("worldx range the camera may scroll between (<stage>_mod words 5,6).");
+
+    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    ImGui::SetNextItemWidth(200.0f);
+    ImGui::ColorEdit3("Background color", bg_rgb, ImGuiColorEditFlags_NoInputs);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("The level's in-game backdrop (autoerase/irqskye colour, <stage>_mod\n"
+                          "word 1). MK2 uses RGB555, so each channel snaps to 32 levels.\n"
+                          "This is NOT the editor canvas colour under View > Background Color.");
+    if (!bg_ok) ImGui::TextDisabled("No background colour parsed (stage may inherit the previous one).");
+    if (ImGui::Button("Apply Background Color to BGND.ASM", ImVec2(-1, 0))) {
+        int r5 = (int)(bg_rgb[0] * 31.0f + 0.5f);
+        int g5 = (int)(bg_rgb[1] * 31.0f + 0.5f);
+        int b5 = (int)(bg_rgb[2] * 31.0f + 0.5f);
+        if (stage_bgnd_set_bg_color(r5, g5, b5)) bg_ok = 1;
+    }
 
     if (g_stage_start_status[0])
         ImGui::TextWrapped("%s", g_stage_start_status);
