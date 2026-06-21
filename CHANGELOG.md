@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Runtime palette sync now guards the BGNDPAL.ASM ROM budget: it estimates the
+  assembled palette-data size and refuses to write past a soft cap (with an
+  override), so cross-stage syncing can no longer silently overrun the reserved
+  REVX/MK8MIL ROM region. The sync prompt shows current palette ROM usage.
+- "Compact duplicates" button in the palette sync prompt collapses
+  content-identical palette blocks and repoints every *PALS table to the
+  survivor (with a .pre_bgndpal_compact backup).
+
+### Changed
+- Runtime palette sync now reuses an existing palette block whose colours are
+  identical instead of appending a duplicate, so re-syncing unchanged stages no
+  longer grows BGNDPAL.ASM.
+
 ## [1.0.15] - 2026-06-19
 
 ### Added

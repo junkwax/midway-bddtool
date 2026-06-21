@@ -2,9 +2,12 @@
 
 #include "imgui.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -297,6 +300,221 @@ static bool mk2_replace_or_insert_palette_block(std::vector<std::string> &lines,
     return true;
 }
 
+static void mk2_palette_sync_remove_stale_outputs(const char *bgnpal, int *removed);
+
+/* Background-palette region budget. The pristine shipped BGNDPAL assembles to
+   ~18.8 KB; its .DATA links into the shared ROM region ahead of the address-
+   fixed REVX/MK8MIL movie space, which has no headroom. We flag well before
+   that: this soft cap leaves room for a handful of genuinely new stage palettes
+   but catches runaway duplication (the failure that overran ARMORY). */
+#define MK2_BGNDPAL_BUDGET_BYTES 32768
+
+static long mk2_asm_word_value(const std::string &tok)
+{
+    std::string t = mk2_trim_copy(tok);
+    if (t.empty()) return -1;
+    bool hex = false;
+    if (t.back() == 'H' || t.back() == 'h') { hex = true; t.pop_back(); }
+    if (t.empty()) return -1;
+    char *endp = nullptr;
+    long v = strtol(t.c_str(), &endp, hex ? 16 : 10);
+    if (endp == t.c_str()) return -1;
+    return v & 0xFFFF;
+}
+
+/* Assembled data size of BGNDPAL.ASM: each .word value = 2 bytes, .long = 4.
+   The whole file is .DATA, so this equals the BGNDPAL.OBJ footprint competing
+   for ROM space ahead of the reserved REVX/MK8MIL region. */
+static long mk2_bgndpal_assembled_bytes(const std::vector<std::string> &lines)
+{
+    long bytes = 0;
+    for (const std::string &raw : lines) {
+        std::string line = raw;
+        size_t semi = line.find(';');
+        if (semi != std::string::npos) line.resize(semi);
+        int unit = 0;
+        size_t p = line.find(".word");
+        if (p != std::string::npos) unit = 2;
+        else if ((p = line.find(".long")) != std::string::npos) unit = 4;
+        else continue;
+        std::string rest = line.substr(p + 5);
+        size_t start = 0;
+        while (start <= rest.size()) {
+            size_t comma = rest.find(',', start);
+            std::string one = mk2_trim_copy(rest.substr(
+                start, comma == std::string::npos ? std::string::npos : comma - start));
+            if (!one.empty()) bytes += unit;
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+    }
+    return bytes;
+}
+
+/* Numeric .word values in a block body (start+1 .. end). A palette data block
+   yields its size word + colour words; a *PALS table (.long only) yields an
+   empty vector, which we treat as "not a palette data block". */
+static std::vector<long> mk2_block_words(const std::vector<std::string> &lines, int start, int end)
+{
+    std::vector<long> w;
+    for (int i = start + 1; i < end; i++) {
+        std::string line = lines[(size_t)i];
+        size_t semi = line.find(';');
+        if (semi != std::string::npos) line.resize(semi);
+        size_t p = line.find(".word");
+        if (p == std::string::npos) continue;
+        std::string rest = line.substr(p + 5);
+        size_t s = 0;
+        while (s <= rest.size()) {
+            size_t comma = rest.find(',', s);
+            long v = mk2_asm_word_value(rest.substr(
+                s, comma == std::string::npos ? std::string::npos : comma - s));
+            if (v >= 0) w.push_back(v);
+            if (comma == std::string::npos) break;
+            s = comma + 1;
+        }
+    }
+    return w;
+}
+
+/* The words a freshly-built palette block would assemble to (size + colours),
+   matching mk2_palette_block_lines so the two can be compared. */
+static std::vector<long> mk2_palette_words(int pal_index)
+{
+    int n = g_pal_count[pal_index];
+    if (n < 0) n = 0;
+    if (n > 256) n = 256;
+    Uint16 raw[256];
+    int raw_count = editor_project_get_palette_rgb555_cache(pal_index, raw, 256);
+    std::vector<long> w;
+    w.push_back(n);
+    for (int i = 0; i < n; i++) {
+        unsigned short word = (i < raw_count) ? raw[i]
+                              : mk2_palette_word_from_argb(g_pals[pal_index][i]);
+        w.push_back((long)word);
+    }
+    return w;
+}
+
+/* Find an existing palette data block whose colour words match `words`, so sync
+   can reuse it instead of writing a duplicate. Returns its label, or empty. */
+static std::string mk2_find_matching_data_block(const std::vector<std::string> &lines,
+                                                const std::vector<long> &words)
+{
+    if (words.empty()) return std::string();
+    for (size_t i = 0; i < lines.size(); i++) {
+        std::string name;
+        if (!mk2_label_name_from_line(lines[i], &name)) continue;
+        int end = mk2_section_end(lines, (int)i);
+        if (mk2_block_words(lines, (int)i, end) == words)
+            return name;
+    }
+    return std::string();
+}
+
+/* Rewrite a ".long a,b,c" reference line, replacing any operand listed in
+   `rename` (dup -> canonical), preserving indentation and trailing comment. */
+static std::string mk2_repoint_long_line(const std::string &line,
+                                         const std::vector<std::pair<std::string,std::string>> &rename)
+{
+    size_t p = line.find(".long");
+    if (p == std::string::npos) return line;
+    std::string head = line.substr(0, p + 5);
+    std::string rest = line.substr(p + 5);
+    std::string comment;
+    size_t semi = rest.find(';');
+    if (semi != std::string::npos) { comment = rest.substr(semi); rest.resize(semi); }
+
+    std::string out = head;
+    size_t start = 0;
+    bool first = true;
+    bool replaced = false;
+    while (start <= rest.size()) {
+        size_t comma = rest.find(',', start);
+        std::string tok = rest.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        std::string trimmed = mk2_trim_copy(tok);
+        for (const auto &r : rename) {
+            if (mk2_string_eq_ci(trimmed, r.first)) { trimmed = r.second; replaced = true; break; }
+        }
+        out += first ? (std::string("\t") + trimmed) : (std::string(",") + trimmed);
+        first = false;
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    if (!comment.empty()) out += comment;
+    return replaced ? out : line;
+}
+
+/* Collapse content-identical palette blocks: keep the first label per unique
+   palette, remove the duplicates, and repoint every *PALS .long reference to
+   the survivor. Returns blocks removed, 0 if none, -1 on error. */
+int mk2_bgndpal_compact(const char *bgnpal, char *status, size_t statussz)
+{
+    if (status && statussz) status[0] = '\0';
+    if (!bgnpal || !bgnpal[0] || !stage_file_exists(bgnpal)) {
+        if (status) snprintf(status, statussz, "BGNDPAL.ASM path is missing.");
+        return -1;
+    }
+    std::vector<std::string> lines;
+    if (!mk2_read_text_lines(bgnpal, lines)) {
+        if (status) snprintf(status, statussz, "Could not read %s", bgnpal);
+        return -1;
+    }
+
+    struct Blk { std::string label; int start; std::vector<long> words; };
+    std::vector<Blk> blocks;
+    for (size_t i = 0; i < lines.size(); i++) {
+        std::string name;
+        if (!mk2_label_name_from_line(lines[i], &name)) continue;
+        int end = mk2_section_end(lines, (int)i);
+        std::vector<long> w = mk2_block_words(lines, (int)i, end);
+        if (w.empty()) continue;
+        blocks.push_back({name, (int)i, w});
+    }
+
+    std::vector<std::pair<std::string,std::string>> rename;  /* dup -> canonical */
+    std::vector<int> remove_starts;
+    for (size_t a = 0; a < blocks.size(); a++) {
+        for (size_t b = 0; b < a; b++) {
+            if (blocks[b].words == blocks[a].words &&
+                !mk2_string_eq_ci(blocks[b].label, blocks[a].label)) {
+                rename.push_back({blocks[a].label, blocks[b].label});
+                remove_starts.push_back(blocks[a].start);
+                break;
+            }
+        }
+    }
+    if (rename.empty()) {
+        if (status) snprintf(status, statussz, "No duplicate palette blocks found.");
+        return 0;
+    }
+
+    for (std::string &line : lines)
+        if (line.find(".long") != std::string::npos)
+            line = mk2_repoint_long_line(line, rename);
+
+    std::sort(remove_starts.begin(), remove_starts.end(), std::greater<int>());
+    for (int s : remove_starts) {
+        int e = mk2_section_end(lines, s);
+        lines.erase(lines.begin() + s, lines.begin() + e);
+    }
+
+    char backup[640] = "";
+    if (!mk2_copy_file_unique(bgnpal, ".pre_bgndpal_compact", backup, sizeof backup)) {
+        if (status) snprintf(status, statussz, "Could not back up BGNDPAL.ASM.");
+        return -1;
+    }
+    if (!mk2_write_text_lines(bgnpal, lines)) {
+        if (status) snprintf(status, statussz, "Could not write BGNDPAL.ASM; backup: %s", backup);
+        return -1;
+    }
+    mk2_palette_sync_remove_stale_outputs(bgnpal, NULL);
+    if (status)
+        snprintf(status, statussz, "Removed %d duplicate palette block(s). Backup: %s",
+                 (int)rename.size(), backup);
+    return (int)rename.size();
+}
+
 static bool mk2_palette_sync_find_bgnpal_path(char *out, size_t outsz)
 {
     if (!out || outsz == 0) return false;
@@ -513,21 +731,13 @@ static bool mk2_palette_sync_current_matches(const char *bgnpal, const char *tab
     std::vector<std::string> lines;
     if (!mk2_read_text_lines(bgnpal, lines)) return false;
 
-    std::vector<std::string> used;
-    mk2_collect_foreign_labels(lines, table_label, used);
-    std::vector<std::string> labels;
-    for (int i = 0; i < g_n_pals; i++)
-        labels.push_back(mk2_sanitize_asm_label(g_pal_name[i], used));
-
+    /* Already synced iff every current palette already has an identical block
+       (so sync would reuse it) and the table lists exactly those labels. */
+    std::vector<std::string> labels((size_t)g_n_pals);
     for (int i = 0; i < g_n_pals; i++) {
-        std::vector<std::string> block = mk2_palette_block_lines(labels[(size_t)i].c_str(), i);
-        int existing = mk2_find_label_line(lines, labels[(size_t)i].c_str());
-        if (existing < 0) return false;
-        int end = mk2_section_end(lines, existing);
-        if ((int)block.size() != end - existing) return false;
-        for (int bi = 0; bi < (int)block.size(); bi++)
-            if (lines[(size_t)(existing + bi)] != block[(size_t)bi])
-                return false;
+        std::string match = mk2_find_matching_data_block(lines, mk2_palette_words(i));
+        if (match.empty()) return false;
+        labels[(size_t)i] = match;
     }
 
     int table_start = mk2_find_label_line(lines, table_label);
@@ -578,14 +788,22 @@ static bool mk2_palette_sync_apply(const char *bgnpal, const char *table_label,
 
     std::vector<std::string> used;
     mk2_collect_foreign_labels(lines, table_label, used);
-    std::vector<std::string> labels;
-    for (int i = 0; i < g_n_pals; i++)
-        labels.push_back(mk2_sanitize_asm_label(g_pal_name[i], used));
 
     bool changed = false;
+    std::vector<std::string> labels((size_t)g_n_pals);
     for (int i = 0; i < g_n_pals; i++) {
-        table_start = mk2_find_label_line(lines, table_label);
-        changed = mk2_replace_or_insert_palette_block(lines, labels[(size_t)i], i, &table_start) || changed;
+        /* Reuse an existing block with identical colours instead of writing a
+           duplicate; only mint a new label when the palette is genuinely new.
+           This is what keeps BGNDPAL.ASM from ballooning across stages. */
+        std::string match = mk2_find_matching_data_block(lines, mk2_palette_words(i));
+        if (!match.empty()) {
+            labels[(size_t)i] = match;
+            continue;
+        }
+        std::string lbl = mk2_sanitize_asm_label(g_pal_name[i], used);
+        labels[(size_t)i] = lbl;
+        int ins = mk2_find_label_line(lines, table_label);
+        changed = mk2_replace_or_insert_palette_block(lines, lbl, i, &ins) || changed;
     }
 
     table_start = mk2_find_label_line(lines, table_label);
@@ -616,6 +834,19 @@ static bool mk2_palette_sync_apply(const char *bgnpal, const char *table_label,
                  "%s already matches %d current BDD palette(s).", table_label, g_n_pals);
         g_mk2_palette_sync_dirty = false;
         return true;
+    }
+
+    long assembled = mk2_bgndpal_assembled_bytes(lines);
+    if (assembled > MK2_BGNDPAL_BUDGET_BYTES && !g_mk2_palette_allow_over_budget) {
+        snprintf(status, statussz,
+                 "Refused: BGNDPAL.ASM would assemble to %ld bytes (budget %d). This "
+                 "risks overrunning the reserved REVX/MK8MIL ROM space. Run \"Compact "
+                 "duplicates\" first, or enable the over-budget override.",
+                 assembled, MK2_BGNDPAL_BUDGET_BYTES);
+        snprintf(g_mk2_palette_sync_output, sizeof g_mk2_palette_sync_output,
+                 "Not written. Assembled palette data %ld bytes exceeds the %d-byte budget.",
+                 assembled, MK2_BGNDPAL_BUDGET_BYTES);
+        return false;
     }
 
     char backup[640] = "";
@@ -726,6 +957,42 @@ void draw_mk2_palette_sync_prompt(void)
         ImGui::Checkbox("Prompt after IMG imports", &g_mk2_palette_prompt_after_img_import);
         ImGui::Checkbox("Prompt after Save", &g_mk2_palette_prompt_after_save);
         ImGui::Checkbox("Auto-promote on Save when inferred", &g_mk2_palette_auto_sync_on_save);
+
+        /* ROM budget readout + duplicate cleanup. */
+        if (g_mk2_palette_sync_asm[0] && stage_file_exists(g_mk2_palette_sync_asm)) {
+            std::vector<std::string> blines;
+            if (mk2_read_text_lines(g_mk2_palette_sync_asm, blines)) {
+                long bytes = mk2_bgndpal_assembled_bytes(blines);
+                bool over = bytes > MK2_BGNDPAL_BUDGET_BYTES;
+                ImGui::TextColored(over ? ImVec4(1.0f, 0.45f, 0.30f, 1.0f)
+                                        : ImVec4(0.55f, 0.85f, 1.0f, 1.0f),
+                                   "Palette ROM use: %.1f / %.1f KB%s",
+                                   bytes / 1024.0, MK2_BGNDPAL_BUDGET_BYTES / 1024.0,
+                                   over ? "   OVER BUDGET" : "");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("BGNDPAL.ASM links ahead of the reserved REVX/MK8MIL ROM\n"
+                                      "space. Duplicate palette blocks across stages bloat this\n"
+                                      "and overrun that region (the failure that broke ARMORY).");
+                if (ImGui::Button("Compact duplicates", ImVec2(160, 0))) {
+                    int n = mk2_bgndpal_compact(g_mk2_palette_sync_asm,
+                                                g_mk2_palette_sync_status,
+                                                sizeof g_mk2_palette_sync_status);
+                    stage_set_toast(n > 0 ? "Compacted duplicate palette blocks"
+                                          : (n == 0 ? "No duplicate palette blocks"
+                                                    : "Compact failed"));
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Remove palette blocks with identical colours and repoint every\n"
+                                      "*PALS table to the survivor. Makes a .pre_bgndpal_compact backup.");
+                if (over) {
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Override budget", &g_mk2_palette_allow_over_budget);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Write past the budget anyway. Only if you know the ROM has room.");
+                }
+            }
+        }
+
         if (g_mk2_palette_sync_status[0])
             ImGui::TextWrapped("%s", g_mk2_palette_sync_status);
         if (g_mk2_palette_sync_output[0])

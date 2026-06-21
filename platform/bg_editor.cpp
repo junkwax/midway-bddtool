@@ -477,6 +477,7 @@ bool g_png_import_force_8bpp = false;
 bool g_mk2_palette_prompt_after_save = true;
 bool g_mk2_palette_prompt_after_img_import = true;
 bool g_mk2_palette_auto_sync_on_save = false;
+bool g_mk2_palette_allow_over_budget = false;
 bool g_mk2_palette_sync_dirty = false;
 bool g_mk2_palette_sync_popup = false;
 bool g_mk2_lod_stale_warn_after_save = true;

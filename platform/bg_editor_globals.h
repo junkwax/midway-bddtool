@@ -656,6 +656,7 @@ extern bool g_import_skip_existing_labels;
 extern bool g_mk2_palette_prompt_after_save;
 extern bool g_mk2_palette_prompt_after_img_import;
 extern bool g_mk2_palette_auto_sync_on_save;
+extern bool g_mk2_palette_allow_over_budget;
 extern bool g_mk2_palette_sync_dirty;
 extern bool g_mk2_palette_sync_popup;
 extern bool g_mk2_lod_stale_warn_after_save;
@@ -700,6 +701,7 @@ bool create_mk2_simple_four_image_level(const char *bg_path,
                                         const char *front_path);
 void mk2_palette_sync_request_prompt(const char *reason, bool allow_if_unknown_path = false);
 bool mk2_palette_sync_auto_apply_if_ready(const char *reason);
+int  mk2_bgndpal_compact(const char *bgnpal, char *status, size_t statussz);
 void draw_mk2_palette_sync_prompt(void);
 void mk2_lod_stale_check_after_save(void);
 void draw_mk2_lod_stale_warning(void);
