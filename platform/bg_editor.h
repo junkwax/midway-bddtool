@@ -70,6 +70,10 @@ void bdd_reset_game_preview_camera(void);
 /* Map one object from BDB source coordinates into its first-fit module-local origin */
 int bdd_object_runtime_origin(int obj_index, int *rx, int *ry);
 
+/* Same mapping as bdd_object_runtime_origin, but for an arbitrary BDB-source
+ * point rather than an existing object (e.g. the mouse position). */
+int bdd_world_point_runtime_origin(int wx, int wy, int *rx, int *ry);
+
 /* Map one object into the current edit-canvas origin, including detached shelves */
 int bdd_object_editor_origin(int obj_index, int *ex, int *ey);
 

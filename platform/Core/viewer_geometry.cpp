@@ -6,6 +6,7 @@
 #include "Core/editor_project_globals.h"
 #include "Core/image_lookup.h"
 #include "Core/path_utils.h"
+#include "Core/world_module_utils.h"
 
 #include <climits>
 #include <cctype>
@@ -2179,6 +2180,34 @@ int bdd_object_runtime_origin(int obj_index, int *rx, int *ry)
     if (rx) *rx = g_obj[obj_index].depth;
     if (ry) *ry = g_obj[obj_index].sy;
     return 0;
+}
+
+/* Same module-local + runtime-offset mapping as bdd_object_runtime_origin, but
+ * for an arbitrary BDB-source point rather than an existing object -- used to
+ * report the in-game coordinate under the mouse in Runtime Layout view. */
+int bdd_world_point_runtime_origin(int wx, int wy, int *rx, int *ry)
+{
+    char module_name[64] = "";
+    int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+    int mod = assign_module(wx, wy, 1, 1);
+
+    if (mod < 0 || !parse_module_bounds(mod, module_name, &mx1, &mx2, &my1, &my2)) {
+        if (rx) *rx = wx;
+        if (ry) *ry = wy;
+        return 0;
+    }
+
+    int ox = 0, oy = 0;
+    int local_x = wx - mx1;
+    int local_y = wy - my1;
+    if (bdd_stage_module_runtime_info(module_name, &ox, &oy, NULL)) {
+        if (rx) *rx = ox + local_x;
+        if (ry) *ry = oy + local_y;
+    } else {
+        if (rx) *rx = local_x;
+        if (ry) *ry = local_y;
+    }
+    return 1;
 }
 
 static int bdd_runtime_module_min_y(void)

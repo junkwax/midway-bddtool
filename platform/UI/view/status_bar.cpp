@@ -60,6 +60,12 @@ void draw_status(void)
     ImVec2 mp = ImGui::GetIO().MousePos;
     int wx = 0, wy = 0;
     bdd_screen_to_world((int)mp.x, (int)mp.y, g_view_x, g_view_y, g_zoom, &wx, &wy);
+    char runtime_xy[32] = "";
+    if (g_runtime_layout_view) {
+        int rwx = 0, rwy = 0;
+        bdd_world_point_runtime_origin(wx, wy, &rwx, &rwy);
+        snprintf(runtime_xy, sizeof runtime_xy, "  In-game: (%d, %d)", rwx, rwy);
+    }
 
     int sel_count = 0;
     for (int i = 0; i < g_no; i++) if (g_sel_flags[i]) sel_count++;
@@ -91,11 +97,11 @@ void draw_status(void)
         const char *preview_mode = g_game_view ? "Game Preview" : "World View";
         const char *layout_mode = g_runtime_layout_view ? "Runtime Layout" : "BDB Source";
         snprintf(buf, sizeof buf,
-                 "Objects: %d (%d sel)  Images: %d  Palettes: %d  Zoom: %dx  World: (%d, %d)  Mouse: (%d, %d)%s\n"
+                 "Objects: %d (%d sel)  Images: %d  Palettes: %d  Zoom: %dx  World: (%d, %d)  Mouse: (%d, %d)%s%s\n"
                  "Preview: %s / %s  Camera: (%d, %d)  Parallax: %s\n"
                  "BDB: %s\n"
                  "BDD: %s",
-                 g_no, sel_count, g_ni, g_n_pals, g_zoom, g_view_x, g_view_y, wx, wy, sel_bbox,
+                 g_no, sel_count, g_ni, g_n_pals, g_zoom, g_view_x, g_view_y, wx, wy, sel_bbox, runtime_xy,
                  preview_mode, layout_mode, g_scroll_pos, g_game_view_y,
                  g_game_view ? "layer scroll active" : "shown in game preview",
                  g_bdb_path[0] ? g_bdb_path : "(none)",
