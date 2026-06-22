@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.19] - 2026-06-22
+
+### Added
+- "Play Readiness Checklist" tool (MK2 Workflow > Check): BGND.ASM wiring,
+  hardware palette budget, world bounds, unused images/palettes, and
+  template-default stage names, each with a one-click Fix where a safe
+  automated fix exists.
+- Modules panel has a "Stage Name" field -- there was previously no way to
+  rename a stage's internal BDB header name after creation.
+
+### Fixed
+- Modules created from a selection appeared to jump to a different spot
+  the moment Runtime Layout / Game Preview was turned on, because an
+  unbound module's objects were reported at coordinates relative to the
+  module's own corner instead of their actual world position. A module
+  now stays put until it's actually bound to a runtime location, and
+  binding with the default offset is a no-op instead of causing a second
+  jump.
+- Module names had no validation despite becoming a literal BGND.ASM
+  assembly symbol once bound; invalid names are now rejected with a clear
+  message instead of writing broken ASM.
+- Game Preview's "Layers:" legend and per-object Layer buttons were a 6th
+  independent copy of the old 6-value layer-preset list, missed in
+  1.0.18's unification pass.
+
 ## [1.0.18] - 2026-06-22
 
 ### Fixed
