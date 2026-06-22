@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.17] - 2026-06-22
+
+### Fixed
+- BDB palette corruption: the Modules panel "Update Header" button wrote the
+  old palette count back unchanged instead of syncing it to the live count,
+  and palette names auto-generated from multi-word image names could carry
+  an embedded space, which desyncs the BDD palette-table parser for every
+  palette after it. Names are now sanitized at creation.
+- A brand-new project (0 images, 0 palettes, as every New Project template
+  starts) failed to reload after being saved -- `bdd_core_load_bdd` treated
+  "zero images" as a load failure instead of a legitimately empty project.
+- Layer-byte presets only covered 6 of the 18 real depth-byte values used by
+  shipped stages (0x32-0x4E), and their "0.2x".."1.5x" labels implied this
+  byte controls scroll speed, which it doesn't -- scroll rate is a
+  per-module property set in Runtime Binding, not a per-object one. Presets
+  now cover the real range and are labeled by depth tier instead.
+
+### Added
+- Modules can get their first runtime placement from the editor: right-click
+  an unplaced module in the Runtime Binding plane table for "Set as runtime
+  location", or use Apply placement, which now creates the `*BMOD` entry in
+  BGND.ASM if one doesn't exist yet instead of failing silently.
+- F9 toggles a raw BDD/BDB field debug inspector (Help > Debug Info):
+  header string vs. live counts, raw module lines, selected object/image/
+  palette fields.
+- Palette panel has +/- buttons to add or remove a single color slot
+  directly.
+
 ## [1.0.16] - 2026-06-21
 
 ### Added
