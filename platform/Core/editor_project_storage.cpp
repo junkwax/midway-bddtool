@@ -668,6 +668,17 @@ int editor_project_reserve_palettes(int min_capacity)
     return 1;
 }
 
+/* The on-disk BDD palette header is "<name> <count>\n" parsed with sscanf("%63s %d"),
+ * which stops the name at the first whitespace. A space in a stored name desyncs every
+ * palette read after it, so whitespace is replaced before a name ever reaches storage. */
+static void sanitize_pal_name(char *out, size_t outsz, const char *name)
+{
+    snprintf(out, outsz, "%s", (name && name[0]) ? name : "PAL");
+    for (char *p = out; *p; p++)
+        if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+            *p = '_';
+}
+
 int editor_project_append_palette_slot(const char *name, int count, const Uint32 *colors)
 {
     int pi;
@@ -680,8 +691,7 @@ int editor_project_append_palette_slot(const char *name, int count, const Uint32
     memset(g_pals[pi], 0, sizeof g_pals[pi]);
     if (colors) memcpy(g_pals[pi], colors, sizeof g_pals[pi]);
     g_pal_count[pi] = count;
-    snprintf(g_pal_name[pi], sizeof g_pal_name[pi], "%s",
-             (name && name[0]) ? name : "PAL");
+    sanitize_pal_name(g_pal_name[pi], sizeof g_pal_name[pi], name);
     if (g_pal_rgb555) memset(g_pal_rgb555[pi], 0, sizeof g_pal_rgb555[pi]);
     if (g_pal_argb_snapshot) memset(g_pal_argb_snapshot[pi], 0, sizeof g_pal_argb_snapshot[pi]);
     if (g_pal_rgb555_valid) g_pal_rgb555_valid[pi] = 0;
@@ -703,7 +713,7 @@ int editor_project_set_palette_slot(int pal_i, const char *name, int count, cons
     }
     g_pal_count[pal_i] = count;
     if (name)
-        snprintf(g_pal_name[pal_i], sizeof g_pal_name[pal_i], "%s", name[0] ? name : "PAL");
+        sanitize_pal_name(g_pal_name[pal_i], sizeof g_pal_name[pal_i], name);
     if (g_pal_rgb555) memset(g_pal_rgb555[pal_i], 0, sizeof g_pal_rgb555[pal_i]);
     if (g_pal_argb_snapshot) memset(g_pal_argb_snapshot[pal_i], 0, sizeof g_pal_argb_snapshot[pal_i]);
     if (g_pal_rgb555_valid) g_pal_rgb555_valid[pal_i] = 0;

@@ -302,6 +302,7 @@ static void draw_module_runtime_binding(void)
     static int rb_sel = -1, rb_loaded = -2;
     static float rb_factor = 1.0f;
     static int rb_ox = 0, rb_oy = 0;
+    static bool rb_placed = false;
     static float bg_rgb[3] = { 0, 0, 0 };
     static int bg_ok = 0;
     char key[160];
@@ -404,14 +405,34 @@ static void draw_module_runtime_binding(void)
             }
 
             ImGui::TableNextRow();
+            ImGui::PushID(m);
             ImGui::TableNextColumn(); ImGui::TextUnformatted(mn);
+            if (ImGui::BeginPopupContextItem("##mod_runtime_ctx")) {
+                if (!found) {
+                    if (ImGui::MenuItem("Set as runtime location")) {
+                        if (stage_bgnd_create_module_placement(mn, 0, 0)) {
+                            rb_sel = m;
+                            rb_loaded = -2;
+                        }
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Adds a new *BMOD entry to BGND.ASM on the next free\nbackground plane, so this module is drawn at runtime.\nSet its parallax afterward in \"Edit placement & parallax\" below.");
+                } else {
+                    if (ImGui::MenuItem("Edit runtime placement"))
+                        { rb_sel = m; rb_loaded = -2; }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Jumps to this module in \"Edit placement & parallax\" below.");
+                }
+                ImGui::EndPopup();
+            }
             if (!found) {
                 ImGui::TableNextColumn();
                 ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "not placed");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("No %sBMOD entry in <stage>_mod, so this module is not drawn at runtime.", mn);
+                    ImGui::SetTooltip("No %sBMOD entry in <stage>_mod, so this module is not drawn at runtime.\nRight-click the module name to set it as a runtime location.", mn);
                 ImGui::TableNextColumn(); ImGui::TextDisabled("-");
                 ImGui::TableNextColumn(); ImGui::TextDisabled("-");
+                ImGui::PopID();
                 continue;
             }
             ImGui::TableNextColumn();
@@ -421,6 +442,7 @@ static void draw_module_runtime_binding(void)
             ImGui::TableNextColumn();
             if (rank >= 0) ImGui::Text("%d", rank);
             else ImGui::TextDisabled("-");
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }
@@ -450,7 +472,7 @@ static void draw_module_runtime_binding(void)
     /* Seed the edit fields from the parsed plane info when the pick changes. */
     if (rb_loaded != rb_sel) {
         rb_loaded = rb_sel;
-        rb_factor = 1.0f; rb_ox = 0; rb_oy = 0;
+        rb_factor = 1.0f; rb_ox = 0; rb_oy = 0; rb_placed = false;
         char want[64] = "";
         sscanf(g_bdb_modules[rb_sel], "%63s", want);
         int pc = bdd_stage_plane_count();
@@ -458,7 +480,7 @@ static void draw_module_runtime_binding(void)
             char pn[32]; int pox = 0, poy = 0, prank = -1; float ps = 1.0f;
             if (bdd_stage_plane_info(p, pn, sizeof pn, &pox, &poy, &ps, &prank) &&
                 runtime_name_ieq(pn, want)) {
-                rb_factor = ps; rb_ox = pox; rb_oy = poy;
+                rb_factor = ps; rb_ox = pox; rb_oy = poy; rb_placed = true;
                 break;
             }
         }
@@ -475,16 +497,25 @@ static void draw_module_runtime_binding(void)
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Writes the plane's scroll rate in BGND.ASM.\nAffects every module sharing the same baklst plane.");
 
+    if (!rb_placed)
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+                           "Not placed yet -- Apply placement will create a new runtime location.");
     ImGui::SetNextItemWidth(90.0f); ImGui::InputInt("Place X##rb", &rb_ox);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(90.0f); ImGui::InputInt("Y##rb", &rb_oy);
     ImGui::SameLine();
     if (ImGui::Button("Apply placement")) {
         char nm[64] = ""; sscanf(g_bdb_modules[rb_sel], "%63s", nm);
-        stage_bgnd_set_module_offset(nm, rb_ox, rb_oy);
+        if (rb_placed) {
+            stage_bgnd_set_module_offset(nm, rb_ox, rb_oy);
+        } else if (stage_bgnd_create_module_placement(nm, rb_ox, rb_oy)) {
+            rb_placed = true;
+        }
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Writes the module's runtime screen offset (.word x,y after its *BMOD).");
+        ImGui::SetTooltip(rb_placed
+            ? "Writes the module's runtime screen offset (.word x,y after its *BMOD)."
+            : "Adds a new *BMOD entry to BGND.ASM on the next free background plane.");
 
     if (g_stage_start_status[0])
         ImGui::TextWrapped("%s", g_stage_start_status);
@@ -604,7 +635,7 @@ void draw_modules(void)
                    nm, &ww, &wh, &md, &nm2, &np, &no2) >= 7) {
             snprintf(g_bdb_header, sizeof g_bdb_header,
                      "%s %d %d %d %d %d %d", nm, ww, wh, md,
-                     g_bdb_num_modules, np, g_no);
+                     g_bdb_num_modules, g_n_pals, g_no);
         }
     }
 

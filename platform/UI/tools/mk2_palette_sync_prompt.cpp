@@ -1409,6 +1409,71 @@ static bool bgnd_commit(const char *bgnd, std::vector<std::string> &lines,
     return true;
 }
 
+/* Adds a brand-new module to the end of the <stage>_mod BMOD list, claiming the
+ * next free background plane. Only ever appends before the list's numeric/">"
+ * terminator, so every already-placed module keeps its existing baklst number
+ * and scroll-table row untouched -- this is the lowest-risk place to insert.
+ * Caller should follow up with stage_bgnd_set_module_parallax to dial in the
+ * new plane's scroll speed; it lands at whatever the scroll table's row for
+ * the newly-claimed baklst already holds (usually 0/unset). */
+bool stage_bgnd_create_module_placement(const char *module_name, int ox, int oy)
+{
+    if (!module_name || !module_name[0]) return false;
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line, bgnd, sizeof bgnd))
+        return false;
+
+    BgndModLoc existing;
+    if (bgnd_locate_module(lines, block_line, module_name, &existing)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s is already placed in %s -- use Apply placement instead.",
+                 module_name, block_label);
+        return false;
+    }
+
+    int long_count = 0, baklst_num = 0, insert_at = -1;
+    int i = block_line + 1;
+    for (; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL)) break;
+        std::string longtok = bgnd_directive_token(lines[(size_t)i], ".long");
+        if (longtok.empty()) continue;
+        long_count++;
+        if (long_count <= 4) continue;
+        char c0 = longtok[0];
+        if (c0 == '>' || (c0 >= '0' && c0 <= '9')) { insert_at = i; break; }
+        baklst_num++;
+    }
+    if (insert_at < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not find the end of the BMOD list in %s.", block_label);
+        return false;
+    }
+    if (baklst_num >= 8) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s already uses all 8 background planes; cannot add %s.",
+                 block_label, module_name);
+        return false;
+    }
+
+    char bmod_line[96], word_line[96];
+    snprintf(bmod_line, sizeof bmod_line, "\t.long\t%sBMOD", module_name);
+    snprintf(word_line, sizeof word_line, "\t.word\t%d,%d", ox, oy);
+    lines.insert(lines.begin() + insert_at, word_line);
+    lines.insert(lines.begin() + insert_at, bmod_line);
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_bmod_create", backup, sizeof backup))
+        return false;
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Placed %s on new plane %d (offset %d,%d) in %s. Backup: %s. "
+             "Set its parallax below -- it starts at whatever that plane's scroll row already holds.",
+             module_name, baklst_num + 1, ox, oy, block_label, backup);
+    stage_set_toast("Created runtime placement");
+    return true;
+}
+
 bool stage_bgnd_set_module_offset(const char *module_name, int ox, int oy)
 {
     if (!module_name || !module_name[0]) return false;
