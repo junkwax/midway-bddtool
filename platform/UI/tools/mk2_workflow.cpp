@@ -29,6 +29,20 @@ static bool mk2_tool_header(const char *label, bool default_open = false)
     return ImGui::CollapsingHeader(label, default_open ? ImGuiTreeNodeFlags_DefaultOpen : 0);
 }
 
+void mk2_workflow_show_check_section(void)
+{
+    g_simple_mode = false;
+    g_show_mk2_workflow = true;
+    g_mk2_workflow_section = MK2_WF_CHECK;
+}
+
+void mk2_workflow_show_optimize_section(void)
+{
+    g_simple_mode = false;
+    g_show_mk2_workflow = true;
+    g_mk2_workflow_section = MK2_WF_OPTIMIZE;
+}
+
 void draw_mk2_workflow(void)
 {
     if (!g_show_mk2_workflow || g_preview_mode) return;
@@ -84,6 +98,9 @@ void draw_mk2_workflow(void)
         ImGui::Separator();
         if (mk2_tool_header("Stage Readiness Gate", g_mk2_focus_tool == 5))
             draw_mk2_stage_readiness_gate();
+        ImGui::Separator();
+        if (mk2_tool_header("Play Readiness Checklist", true))
+            draw_mk2_play_readiness_checklist();
         ImGui::Separator();
         if (mk2_tool_header("Sprite Wedge Risk"))
             draw_mk2_wedge_risk_tool();

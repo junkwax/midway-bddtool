@@ -140,6 +140,7 @@ add_executable(bddview
     platform/UI/tools/mk2_stage_layer_role_editor.cpp
     platform/UI/tools/mk2_stage_preview_dashboard.cpp
     platform/UI/tools/mk2_stage_readiness_gate.cpp
+    platform/UI/tools/mk2_stage_wiring_check.cpp
     platform/UI/tools/mk2_stage_repair_mode.cpp
     platform/UI/tools/mk2_stage_start_camera_tool.cpp
     platform/UI/tools/mk2_template_wizard_tool.cpp
