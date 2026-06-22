@@ -551,15 +551,18 @@ int bdd_core_load_bdd(const char *path, BddCoreBdd *out)
         return 0;
     }
 
+    bool ok = true;
     for (int rec = 0; rec < expected_images; rec++) {
         if (!bdd_core_read_text_line(f, ln, sizeof ln)) {
             bdd_core_set_error(out->error, "truncated before image header %d", rec);
+            ok = false;
             break;
         }
 
         char a[16], b[16], c[16], d[16];
         if (sscanf(ln, "%15s %15s %15s %15s", a, b, c, d) < 4) {
             bdd_core_set_error(out->error, "bad image header %d: %.80s", rec, ln);
+            ok = false;
             break;
         }
 
@@ -571,6 +574,7 @@ int bdd_core_load_bdd(const char *path, BddCoreBdd *out)
         if (im.w <= 0 || im.h <= 0 || im.w > 4096 || im.h > 4096) {
             bdd_core_set_error(out->error,
                      "invalid image dimensions %dx%d at idx=0x%X", im.w, im.h, im.idx);
+            ok = false;
             break;
         }
 
@@ -579,13 +583,20 @@ int bdd_core_load_bdd(const char *path, BddCoreBdd *out)
             im.pix.resize(pixel_count);
         } catch (const std::bad_alloc &) {
             bdd_core_set_error(out->error, "out of memory while reading image pixels");
+            ok = false;
             break;
         }
         if (fread(im.pix.data(), 1, pixel_count, f) != pixel_count) {
             bdd_core_set_error(out->error, "truncated at image idx=0x%X", im.idx);
+            ok = false;
             break;
         }
         out->images.push_back(im);
+    }
+
+    if (!ok) {
+        fclose(f);
+        return 0;
     }
 
     while (bdd_core_read_text_line(f, ln, sizeof ln)) {
@@ -595,6 +606,7 @@ int bdd_core_load_bdd(const char *path, BddCoreBdd *out)
         if (sscanf(ln, "%63s %d", pal.name, &cnt) != 2) continue;
         if (cnt <= 0 || cnt > 256) {
             bdd_core_set_error(out->error, "invalid palette count %d for %.63s", cnt, pal.name);
+            ok = false;
             break;
         }
         pal.count = cnt;
@@ -606,18 +618,21 @@ int bdd_core_load_bdd(const char *path, BddCoreBdd *out)
             uint8_t lo, hi;
             if (fread(&lo, 1, 1, f) != 1 || fread(&hi, 1, 1, f) != 1) {
                 bdd_core_set_error(out->error, "truncated palette %.63s", pal.name);
-                fclose(f);
-                return out->images.size() > 0;
+                ok = false;
+                break;
             }
             uint16_t rgb = (uint16_t)(lo | (hi << 8));
             pal.rgb555[i] = rgb;
             pal.argb[i] = (i == 0) ? 0u : bdd_core_rgb555_to_argb(rgb);
         }
+        if (!ok) break;
         out->palettes.push_back(pal);
     }
 
     fclose(f);
-    return out->images.size() > 0;
+    /* Success means parsing completed cleanly, not "found at least one image" --
+     * a freshly-created, never-populated project legitimately has zero of both. */
+    return ok;
 }
 
 static int bdd_core_raw_rgb555_matches_argb(int color_index, uint16_t rgb, uint32_t argb)

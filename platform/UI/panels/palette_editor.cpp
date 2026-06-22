@@ -414,6 +414,26 @@ void draw_palette(void)
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rename palette");
     ImGui::SameLine();
     ImGui::TextDisabled("%d clr", pc);
+    ImGui::SameLine();
+    bool at_min = pc <= 1;
+    if (at_min) ImGui::BeginDisabled();
+    if (ImGui::SmallButton("-##palcount")) {
+        undo_save();
+        editor_project_set_palette_slot(g_sel_pal, NULL, pc - 1, NULL);
+        g_dirty = 1;
+    }
+    if (at_min) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove the last color slot");
+    ImGui::SameLine();
+    bool at_max = pc >= 256;
+    if (at_max) ImGui::BeginDisabled();
+    if (ImGui::SmallButton("+##palcount")) {
+        undo_save();
+        editor_project_set_palette_slot(g_sel_pal, NULL, pc + 1, NULL);
+        g_dirty = 1;
+    }
+    if (at_max) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add a color slot (new slot starts black)");
 
     ImGui::BeginChild("selected_palette_swatch_scroller", ImVec2(0, 88.0f), true,
                       ImGuiWindowFlags_HorizontalScrollbar);
