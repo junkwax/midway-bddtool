@@ -1,7 +1,9 @@
 #include "bg_editor.h"
+#include "bg_editor_globals.h"
 #include "Core/editor_app_globals.h"
 #include "Core/editor_project_globals.h"
 #include "Core/image_lookup.h"
+#include "Core/world_module_utils.h"
 #include "UI/view/game_view_controls.h"
 #include "UI/view/navigation.h"
 #include "UI/actions/object_position_undo.h"
@@ -128,61 +130,52 @@ void draw_game_view_controls(void)
                 ImGui::TextDisabled("Layers:");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip(
-                        "MK2 draws background art in planes. Each plane has a scroll rate:\n"
-                        "lower values sit farther back, 1.0x follows the playfield, and\n"
-                        "values above 1.0x move faster as foreground masking art.");
-                static const struct { int wx; const char *n; float sf; const char *help; } lp[] = {
-                    {0x32,"Sky",0.2f,
-                     "Far background or sky plane. It usually scrolls slowly, and some BGND display lists pin the farthest plane at 0.0x."},
-                    {0x3C,"Mid",0.5f,
-                     "Middle background depth. Use it for scenery behind the fighters that should drift slower than the playfield."},
-                    {0x40,"Floor",1.0f,
-                     "Main playfield/floor depth. This tracks the match camera and is where the fighters visually stand."},
-                    {0x41,"Floor+",1.0f,
-                     "Alternate playfield-depth floor plane. It keeps 1.0x motion while separating art for packing or ordering."},
-                    {0x43,"Near FG",1.2f,
-                     "Near foreground. It moves a little faster than the playfield and can mask lower sprites or floor edges."},
-                    {0x46,"Front FG",1.5f,
-                     "Front-most foreground. Use it for close occluders that should sweep fastest across the camera."}
-                };
-                for (int li = 0; li < 6; li++) {
+                        "Depth/paint-order byte only -- it does NOT set this object's preview\n"
+                        "scroll speed. An object's actual scroll rate here comes from its MODULE\n"
+                        "(majority layer among everything in that module, or the module's real\n"
+                        "BGND.ASM binding if one exists) -- see the note below the Layer buttons.");
+                int preset_count = mk2_layer_preset_count();
+                for (int li = 0; li < preset_count; li++) {
+                    int byte = mk2_layer_preset_wx(li);
                     bool has = false;
                     for (int i = 0; i < g_no && !has; i++)
-                        if (((g_obj[i].wx >> 8) & 0xFF) == lp[li].wx) has = true;
+                        if (((g_obj[i].wx >> 8) & 0xFF) == byte) has = true;
                     if (!has) continue;
                     ImGui::SameLine();
-                    ImGui::TextDisabled("%s %.1fx", lp[li].n, lp[li].sf);
+                    ImGui::TextDisabled("%s", layer_friendly_name(byte));
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", lp[li].help);
+                        ImGui::SetTooltip("0x%02X", byte);
                 }
     
                 /* layer assignment row — shown when objects are selected */
                 {
                     int sel_count = 0;
                     int cur_layer = -1;
+                    int primary_obj = -1;
                     for (int i = 0; i < g_no; i++) {
                         if (!g_sel_flags[i]) continue;
                         sel_count++;
-                        if (cur_layer == -1) cur_layer = (g_obj[i].wx >> 8) & 0xFF;
+                        if (cur_layer == -1) { cur_layer = (g_obj[i].wx >> 8) & 0xFF; primary_obj = i; }
                     }
                     if (sel_count > 0) {
                         ImGui::Separator();
                         ImGui::TextColored(ImVec4(1.0f,0.85f,0.4f,1.0f),
                                            "Layer  (%d selected):", sel_count);
-                        for (int li = 0; li < 6; li++) {
-                            bool is_cur = (cur_layer == lp[li].wx);
+                        for (int li = 0; li < preset_count; li++) {
+                            int byte = mk2_layer_preset_wx(li);
+                            bool is_cur = (cur_layer == byte);
                             if (is_cur) {
                                 ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.25f,0.55f,0.90f,1.00f));
                                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f,0.65f,1.00f,1.00f));
                                 ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.20f,0.45f,0.80f,1.00f));
                             }
-                            char lbl[32]; snprintf(lbl, sizeof lbl, "%s##la%d", lp[li].n, li);
+                            char lbl[32]; snprintf(lbl, sizeof lbl, "%s##la%d", layer_friendly_name(byte), li);
                             if (ImGui::SmallButton(lbl)) {
                                 ObjectRecordUndoCapture undo;
                                 object_record_undo_capture_selected(&undo);
                                 for (int i = 0; i < g_no; i++) {
                                     if (!g_sel_flags[i] || g_obj_lock[i]) continue;
-                                    g_obj[i].wx = (g_obj[i].wx & 0x00FF) | (lp[li].wx << 8);
+                                    g_obj[i].wx = (g_obj[i].wx & 0x00FF) | (byte << 8);
                                 }
                                 if (object_record_undo_commit(&undo, "Assign Layer") > 0)
                                     g_dirty = 1;
@@ -190,9 +183,28 @@ void draw_game_view_controls(void)
                             }
                             if (is_cur) ImGui::PopStyleColor(3);
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("Assign to %s (parallax %.1fx)\n%s",
-                                                  lp[li].n, lp[li].sf, lp[li].help);
-                            if (li < 5) ImGui::SameLine(0, 3);
+                                ImGui::SetTooltip("Set depth/paint-order to 0x%02X (%s).\nDoes not change this object's scroll speed in preview --\nsee the note below for what actually controls that.",
+                                                  byte, layer_friendly_name(byte));
+                            if (li + 1 < preset_count) ImGui::SameLine(0, 3);
+                        }
+
+                        /* Explain why this rarely changes anything visible: scroll speed here
+                           comes from the object's MODULE, not its own layer byte. */
+                        if (primary_obj >= 0) {
+                            Img *pim = img_find(g_obj[primary_obj].ii);
+                            int mod = assign_module(g_obj[primary_obj].depth, g_obj[primary_obj].sy,
+                                                    pim ? pim->w : 1, pim ? pim->h : 1);
+                            float eff_scroll = bdd_object_game_scroll_factor(primary_obj);
+                            char mod_name[64] = "";
+                            if (mod >= 0 && parse_module_bounds(mod, mod_name, NULL, NULL, NULL, NULL)) {
+                                ImGui::TextColored(ImVec4(0.65f,0.65f,0.7f,1.0f),
+                                    "Scrolls at %.2fx with module \"%s\" -- to change that, move it to\n"
+                                    "a different module, or set that module's parallax in the Modules panel.",
+                                    eff_scroll, mod_name);
+                            } else {
+                                ImGui::TextColored(ImVec4(0.55f,1.0f,0.65f,1.0f),
+                                    "Not inside any module -- scrolls at %.2fx from its own layer above.", eff_scroll);
+                            }
                         }
                     }
                 }

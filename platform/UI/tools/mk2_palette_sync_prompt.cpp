@@ -1419,6 +1419,26 @@ static bool bgnd_commit(const char *bgnd, std::vector<std::string> &lines,
 bool stage_bgnd_create_module_placement(const char *module_name, int ox, int oy)
 {
     if (!module_name || !module_name[0]) return false;
+    {
+        /* module_name becomes <name>BMOD, a real assembly label/symbol in BGND.ASM --
+         * it has to be a legal TI-ASM identifier: start with a letter or underscore,
+         * then only letters/digits/underscores. Catching this here (rather than only
+         * in the module-name text field) protects every caller of this function. */
+        char c0 = module_name[0];
+        bool ok = (c0 == '_') || ((c0 >= 'A' && c0 <= 'Z') || (c0 >= 'a' && c0 <= 'z'));
+        for (const char *p = module_name; ok && *p; p++) {
+            char c = *p;
+            ok = (c == '_') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                 (c >= '0' && c <= '9');
+        }
+        if (!ok) {
+            snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                     "\"%s\" isn't a valid module name for BGND.ASM -- it becomes the symbol "
+                     "%sBMOD, so it must start with a letter and contain only letters, "
+                     "digits, or underscores.", module_name, module_name);
+            return false;
+        }
+    }
     char bgnd[640], block_label[96] = "";
     int block_line = -1;
     std::vector<std::string> lines;

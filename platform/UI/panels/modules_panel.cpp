@@ -1,5 +1,6 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
+#include "Core/world_module_utils.h"
 #include "imgui.h"
 #include "undo_manager.h"
 
@@ -387,8 +388,8 @@ static void draw_module_runtime_binding(void)
         ImGui::TableSetupColumn("draw", ImGuiTableColumnFlags_WidthFixed, 44.0f);
         ImGui::TableHeadersRow();
         for (int m = 0; m < g_bdb_num_modules; m++) {
-            char mn[64] = "";
-            if (sscanf(g_bdb_modules[m], "%63s", mn) != 1) continue;
+            char mn[64] = ""; int mod_x1 = 0, mod_x2 = 0, mod_y1 = 0, mod_y2 = 0;
+            if (sscanf(g_bdb_modules[m], "%63s %d %d %d %d", mn, &mod_x1, &mod_x2, &mod_y1, &mod_y2) < 1) continue;
 
             int ox = 0, oy = 0, rank = -1, found = 0;
             float scroll = 1.0f;
@@ -410,7 +411,9 @@ static void draw_module_runtime_binding(void)
             if (ImGui::BeginPopupContextItem("##mod_runtime_ctx")) {
                 if (!found) {
                     if (ImGui::MenuItem("Set as runtime location")) {
-                        if (stage_bgnd_create_module_placement(mn, 0, 0)) {
+                        /* Default offset = the module's own world position, so binding it
+                           doesn't suddenly shift it from wherever it's anchored today. */
+                        if (stage_bgnd_create_module_placement(mn, mod_x1, mod_y1)) {
                             rb_sel = m;
                             rb_loaded = -2;
                         }
@@ -472,7 +475,11 @@ static void draw_module_runtime_binding(void)
     /* Seed the edit fields from the parsed plane info when the pick changes. */
     if (rb_loaded != rb_sel) {
         rb_loaded = rb_sel;
-        rb_factor = 1.0f; rb_ox = 0; rb_oy = 0; rb_placed = false;
+        /* Default offset = the module's own world position: binding with this default
+           doesn't shift it from wherever it's anchored today in Runtime Layout view. */
+        int seed_x1 = 0, seed_y1 = 0;
+        parse_module_bounds(rb_sel, NULL, &seed_x1, NULL, &seed_y1, NULL);
+        rb_factor = 1.0f; rb_ox = seed_x1; rb_oy = seed_y1; rb_placed = false;
         char want[64] = "";
         sscanf(g_bdb_modules[rb_sel], "%63s", want);
         int pc = bdd_stage_plane_count();
@@ -643,6 +650,19 @@ void draw_modules(void)
         char nm2[64] = ""; int ww2=0, wh2=0, md2=255, nm_n=0, np2=0, no2=0;
         if (sscanf(g_bdb_header, "%63s %d %d %d %d %d %d",
                    nm2, &ww2, &wh2, &md2, &nm_n, &np2, &no2) >= 7) {
+            ImGui::SetNextItemWidth(160);
+            ImGui::InputText("Stage Name##stagename", nm2, sizeof nm2,
+                             ImGuiInputTextFlags_CharsNoBlank);
+            if (ImGui::IsItemActivated()) undo_save();
+            if (ImGui::IsItemDeactivatedAfterEdit() && nm2[0]) {
+                snprintf(g_name, sizeof g_name, "%s", nm2);
+                snprintf(g_bdb_header, sizeof g_bdb_header, "%s %d %d %d %d %d %d",
+                         nm2, ww2, wh2, md2, nm_n, np2, no2);
+                g_dirty = 1;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("The internal stage name written into the BDB header (separate from the filename).\nMust match whatever name BGND.ASM's stage table refers to this stage by.");
+
             int ww_orig = ww2, wh_orig = wh2;
             ImGui::SetNextItemWidth(80); ImGui::InputInt("World W##ww", &ww2);
             if (ImGui::IsItemActivated()) undo_save();

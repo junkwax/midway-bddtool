@@ -2165,15 +2165,18 @@ int bdd_object_runtime_origin(int obj_index, int *rx, int *ry)
 
     if (bdd_object_module_info(obj_index, module_name, (int)sizeof module_name, &mx1, &mx2, &my1, &my2)) {
         int ox = 0, oy = 0;
-        int local_x = g_obj[obj_index].depth - mx1;
-        int local_y = g_obj[obj_index].sy - my1;
         if (bdd_stage_module_runtime_info(module_name, &ox, &oy, NULL)) {
+            int local_x = g_obj[obj_index].depth - mx1;
+            int local_y = g_obj[obj_index].sy - my1;
             if (rx) *rx = ox + local_x;
             if (ry) *ry = oy + local_y;
-        } else {
-            if (rx) *rx = local_x;
-            if (ry) *ry = local_y;
+            return 1;
         }
+        /* No real BGND.ASM binding yet: stay at the BDB-source position instead of
+           snapping to (0,0)-relative coordinates, so a freshly-created module doesn't
+           appear to move in Runtime Layout / Game Preview until it's actually bound. */
+        if (rx) *rx = g_obj[obj_index].depth;
+        if (ry) *ry = g_obj[obj_index].sy;
         return 1;
     }
 
