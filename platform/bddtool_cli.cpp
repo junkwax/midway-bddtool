@@ -150,15 +150,31 @@ static bool parse_bdd(const char *path, Stage &st)
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
+/* Mirrors layer_friendly_name() in platform/UI/tools/mk2_layer_presets.cpp.
+ * Duplicated rather than shared because bddtool is a headless CLI with no
+ * ImGui/SDL link; every value is a real depth byte found by scanning the
+ * shipped stage BDBs in mk2-readonly/mk2-main/data. Keep both in sync. */
 static const char *layer_name(int layer_byte)
 {
     switch (layer_byte) {
-        case 0x32: return "Slow BG";
-        case 0x3C: return "Mid BG";
-        case 0x40: return "Play";
-        case 0x41: return "Near";
-        case 0x43: return "Far";
-        case 0x46: return "Far+";
+        case 0x32: return "Sky";
+        case 0x3B: return "Mid-";
+        case 0x3C: return "Mid";
+        case 0x3D: return "Mid+";
+        case 0x3E: return "Mid++";
+        case 0x3F: return "Mid max";
+        case 0x40: return "Floor";
+        case 0x41: return "Floor+";
+        case 0x42: return "Near-";
+        case 0x43: return "Near FG";
+        case 0x44: return "Near FG+";
+        case 0x45: return "Near FG++";
+        case 0x46: return "Front FG";
+        case 0x47: return "Front FG+";
+        case 0x48: return "Front FG++";
+        case 0x49: return "Front max";
+        case 0x4B: return "Extreme FG";
+        case 0x4E: return "Max FG";
         default: {
             static char buf[16];
             snprintf(buf, sizeof buf, "0x%02X", layer_byte);
