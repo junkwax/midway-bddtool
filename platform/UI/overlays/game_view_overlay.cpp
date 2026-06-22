@@ -623,11 +623,6 @@ void draw_game_view_overlay(void)
     if (ImGui::BeginPopup("##gv_ctx")) {
         int active = active_object_index();
         bool has_obj = active >= 0 && active < g_no;
-        static const struct { int byte; const char *name; } layers[] = {
-            {0x32,"Sky / far back  (0.2x)"}, {0x3C,"Mid distance  (0.5x)"},
-            {0x40,"Floor / play  (1.0x)"},   {0x41,"Floor alt  (1.0x)"},
-            {0x43,"Near foreground  (1.2x)"},{0x46,"Front foreground  (1.5x)"}
-        };
         int sel_count = 0;
         for (int i = 0; i < g_no; i++) if (g_sel_flags[i]) sel_count++;
         ImGui::TextColored(ImVec4(0.6f,0.9f,1.0f,1.0f),
@@ -637,11 +632,13 @@ void draw_game_view_overlay(void)
         /* show current layer of first selected object */
         int cur_layer = -1;
         for (int i = 0; i < g_no; i++) if (g_sel_flags[i]) { cur_layer = (g_obj[i].wx >> 8) & 0xFF; break; }
-        for (int li = 0; li < 6; li++) {
-            bool is_cur = (cur_layer == layers[li].byte);
+        int preset_count = mk2_layer_preset_count();
+        for (int li = 0; li < preset_count; li++) {
+            int byte = mk2_layer_preset_wx(li);
+            bool is_cur = (cur_layer == byte);
             if (is_cur) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f,0.85f,0.2f,1.0f));
-            if (ImGui::MenuItem(layers[li].name, is_cur ? "(current)" : nullptr, false, has_obj))
-                assign_layer_to_object_targets(active, layers[li].byte);
+            if (ImGui::MenuItem(mk2_layer_preset_label(li), is_cur ? "(current)" : nullptr, false, has_obj))
+                assign_layer_to_object_targets(active, byte);
             if (is_cur) ImGui::PopStyleColor();
         }
         ImGui::Separator();

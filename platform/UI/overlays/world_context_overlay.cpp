@@ -126,22 +126,15 @@ void draw_world_context_overlay(void)
                 ImGui::Separator();
                 /* Layer assignment submenu */
                 if (ctx_valid && ImGui::BeginMenu(g_simple_mode ? "Assign Layer" : "Assign Layer (wx)", has_obj)) {
-                    static const struct { int byte; const char *name; float sf; } wlayers[] = {
-                        {0x32,"Sky / far back",0.2f},{0x3C,"Mid distance",0.5f},
-                        {0x40,"Floor / play",1.0f},{0x41,"Floor alt",1.0f},
-                        {0x43,"Near foreground",1.2f},{0x46,"Front foreground",1.5f}
-                    };
                     int cur_lyr = (g_obj[active].wx >> 8) & 0xFF;
-                    for (int li = 0; li < 6; li++) {
-                        bool is_cur = (cur_lyr == wlayers[li].byte);
-                        char lbl[64];
-                        if (g_simple_mode)
-                            snprintf(lbl, sizeof lbl, "%s  (%.1fx)", wlayers[li].name, wlayers[li].sf);
-                        else
-                            snprintf(lbl, sizeof lbl, "%s  (0x%02X, %.1fx)", wlayers[li].name, wlayers[li].byte, wlayers[li].sf);
+                    int preset_count = mk2_layer_preset_count();
+                    for (int li = 0; li < preset_count; li++) {
+                        int byte = mk2_layer_preset_wx(li);
+                        bool is_cur = (cur_lyr == byte);
+                        const char *lbl = g_simple_mode ? layer_friendly_name(byte) : mk2_layer_preset_label(li);
                         if (is_cur) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f,0.85f,0.2f,1.0f));
                         if (ImGui::MenuItem(lbl, is_cur ? "(current)" : nullptr))
-                            assign_layer_to_object_targets(active, wlayers[li].byte);
+                            assign_layer_to_object_targets(active, byte);
                         if (is_cur) ImGui::PopStyleColor();
                     }
                     ImGui::EndMenu();

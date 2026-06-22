@@ -546,22 +546,14 @@ void MenuBarPanel::render()
 
             ImGui::Separator();
             if (ImGui::BeginMenu(g_simple_mode ? "Assign Layer" : "Assign Layer (wx)", has_obj)) {
-                static const struct { int byte; const char *name; float scroll; } layers[] = {
-                    {0x32, "Sky / far back", 0.2f}, {0x3C, "Mid distance", 0.5f},
-                    {0x40, "Floor / play", 1.0f},   {0x41, "Floor alt", 1.0f},
-                    {0x43, "Near foreground", 1.2f},{0x46, "Front foreground", 1.5f}
-                };
                 int cur_layer = has_obj ? ((g_obj[active_obj].wx >> 8) & 0xFF) : -1;
-                for (int li = 0; li < 6; li++) {
-                    char label[80];
-                    if (g_simple_mode)
-                        snprintf(label, sizeof label, "%s  (%.1fx)", layers[li].name, layers[li].scroll);
-                    else
-                        snprintf(label, sizeof label, "%s  (0x%02X, %.1fx)",
-                                 layers[li].name, layers[li].byte, layers[li].scroll);
-                    bool is_cur = cur_layer == layers[li].byte;
+                int preset_count = mk2_layer_preset_count();
+                for (int li = 0; li < preset_count; li++) {
+                    int byte = mk2_layer_preset_wx(li);
+                    const char *label = g_simple_mode ? layer_friendly_name(byte) : mk2_layer_preset_label(li);
+                    bool is_cur = cur_layer == byte;
                     if (ImGui::MenuItem(label, is_cur ? "(current)" : NULL))
-                        assign_layer_to_object_targets(active_obj, layers[li].byte);
+                        assign_layer_to_object_targets(active_obj, byte);
                 }
                 ImGui::EndMenu();
             }

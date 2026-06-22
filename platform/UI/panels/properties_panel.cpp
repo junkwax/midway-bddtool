@@ -165,19 +165,19 @@ void draw_obj_properties_contents(void)
         ImGui::Separator();
 
         if (runtime_locked_count > 0) ImGui::BeginDisabled();
-        int layer_vals[] = { 0x32, 0x3C, 0x40, 0x41, 0x43, 0x46 };
-        const char *layer_labels[] = { "Sky/back","Mid","Floor/play","Floor alt","Near FG","Front FG" };
         int cur_layer = (o->wx >> 8) & 0xFF;
+        int preset_count = mk2_layer_preset_count();
         int cur_li = -1;
-        for (int li = 0; li < 6; li++) if (layer_vals[li] == cur_layer) { cur_li = li; break; }
-        if (ImGui::BeginCombo("Layer (all)", cur_li >= 0 ? layer_labels[cur_li] : "mixed")) {
-            for (int li = 0; li < 6; li++) {
-                if (ImGui::Selectable(layer_labels[li], li == cur_li)) {
+        for (int li = 0; li < preset_count; li++) if (mk2_layer_preset_wx(li) == cur_layer) { cur_li = li; break; }
+        if (ImGui::BeginCombo("Layer (all)", cur_li >= 0 ? layer_friendly_name(cur_layer) : "mixed")) {
+            for (int li = 0; li < preset_count; li++) {
+                int byte = mk2_layer_preset_wx(li);
+                if (ImGui::Selectable(layer_friendly_name(byte), li == cur_li)) {
                     ObjectRecordUndoCapture undo;
                     object_record_undo_capture_selected(&undo);
                     for (int i = 0; i < g_no; i++) {
                         if (!g_sel_flags[i]) continue;
-                        g_obj[i].wx = (g_obj[i].wx & 0x00FF) | (layer_vals[li] << 8);
+                        g_obj[i].wx = (g_obj[i].wx & 0x00FF) | (byte << 8);
                     }
                     object_record_undo_commit(&undo, "Assign Layer");
                 }
@@ -267,23 +267,16 @@ void draw_obj_properties_contents(void)
         if (ImGui::IsItemDeactivatedAfterEdit()) obj_prop_commit("Edit Object");
     }
     int layer = (o->wx >> 8) & 0xFF;
-    const char *layer_names[] = {
-        "0x32 - Sky / far background (0.2x)",
-        "0x3C - Mid-depth background (0.5x)",
-        "0x40 - Floor / playfield (1.0x)",
-        "0x41 - Floor alt / play props (1.0x)",
-        "0x43 - Near foreground (1.2x)",
-        "0x46 - Front foreground (1.5x)"
-    };
-    int layer_vals[] = { 0x32, 0x3C, 0x40, 0x41, 0x43, 0x46 };
+    int preset_count = mk2_layer_preset_count();
     int layer_sel = -1;
-    for (int li = 0; li < 6; li++)
-        if (layer == layer_vals[li]) { layer_sel = li; break; }
-    if (ImGui::BeginCombo("Layer", layer_sel >= 0 ? layer_names[layer_sel] : "custom")) {
-        for (int li = 0; li < 6; li++) {
-            if (ImGui::Selectable(layer_names[li], li == layer_sel)) {
+    for (int li = 0; li < preset_count; li++)
+        if (layer == mk2_layer_preset_wx(li)) { layer_sel = li; break; }
+    if (ImGui::BeginCombo("Layer", layer_sel >= 0 ? mk2_layer_preset_label(layer_sel) : "custom")) {
+        for (int li = 0; li < preset_count; li++) {
+            if (ImGui::Selectable(mk2_layer_preset_label(li), li == layer_sel)) {
+                int byte = mk2_layer_preset_wx(li);
                 obj_prop_capture_one(g_hl_obj);
-                o->wx = (o->wx & 0x00FF) | (layer_vals[li] << 8);
+                o->wx = (o->wx & 0x00FF) | (byte << 8);
                 obj_prop_commit("Assign Layer");
             }
         }
