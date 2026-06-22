@@ -32,6 +32,12 @@ public:
     void render() override;
 };
 
+class DebugInfoPanel : public IEditorPanel {
+public:
+    const char* get_name() const override { return "DebugInfo"; }
+    void render() override;
+};
+
 class PaletteAnimationPanel : public IEditorPanel {
 public:
     const char* get_name() const override { return "PaletteAnimation"; }

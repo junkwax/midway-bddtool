@@ -204,6 +204,7 @@ add_executable(bddview
     platform/UI/assets/texture_cache.cpp
     platform/UI/view/toast_notifications.cpp
     platform/UI/panels/undo_history_panel.cpp
+    platform/UI/panels/debug_info_panel.cpp
     platform/UI/panels/workspace_panels.cpp
     platform/UI/dialogs/unsaved_action_dialog.cpp
     platform/UI/dialogs/verify_dialog.cpp

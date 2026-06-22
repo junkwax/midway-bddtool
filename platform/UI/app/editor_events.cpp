@@ -21,6 +21,10 @@ void bg_editor_process_event(SDL_Event *event)
             g_show_help = !g_show_help;
             return;
         }
+        if (event->key.keysym.sym == SDLK_F9) {
+            g_show_debug_info = !g_show_debug_info;
+            return;
+        }
         if (event->key.keysym.sym == SDLK_SPACE) {
             if (g_game_view) {
                 /* Space in game preview = toggle animation playback */

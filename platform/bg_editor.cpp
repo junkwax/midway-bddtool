@@ -433,6 +433,7 @@ void draw_path_field(const char *label, char *buf, size_t bufsz,
 #define g_undo_avail undo_is_available()
 
 bool g_show_undo_history = false;
+bool g_show_debug_info = false;
 
 bool g_show_help      = false;
 bool g_show_prefs     = false;

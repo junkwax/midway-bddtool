@@ -766,6 +766,8 @@ void MenuBarPanel::render()
         if (ImGui::BeginMenu("Help")) {
             if (ImGui::MenuItem("Keyboard Shortcuts", "F1"))
                 g_show_help = true;
+            if (ImGui::MenuItem("Debug Info", "F9", g_show_debug_info))
+                g_show_debug_info = !g_show_debug_info;
             if (ImGui::MenuItem("About"))
                 g_about_open = true;
             ImGui::EndMenu();

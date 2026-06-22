@@ -123,6 +123,7 @@ void bg_editor_init(SDL_Window *window, SDL_Renderer *renderer)
     g_panel_manager.register_panel(std::make_unique<TilePreviewPanel>());
     g_panel_manager.register_panel(std::make_unique<EmptyCanvasHintPanel>());
     g_panel_manager.register_panel(std::make_unique<UndoHistoryPanel>());
+    g_panel_manager.register_panel(std::make_unique<DebugInfoPanel>());
     g_panel_manager.register_panel(std::make_unique<PaletteAnimationPanel>());
     g_panel_manager.register_panel(std::make_unique<LevelStatsPanel>());
     g_panel_manager.register_panel(std::make_unique<BppPreviewPanel>());

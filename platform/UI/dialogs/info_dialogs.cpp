@@ -79,6 +79,7 @@ void draw_help(void)
             hdr("Advanced");
             r("Tab",              "Object picker combo");
             r("F1",               "This help");
+            r("F9",               "Debug Info (raw BDB/BDD field inspector)");
         }
 
         ImGui::EndTable();

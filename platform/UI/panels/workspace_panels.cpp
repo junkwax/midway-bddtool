@@ -16,6 +16,11 @@ void UndoHistoryPanel::render()
     draw_undo_history();
 }
 
+void DebugInfoPanel::render()
+{
+    draw_debug_info();
+}
+
 void PaletteAnimationPanel::render()
 {
     draw_pal_anim_panel();
