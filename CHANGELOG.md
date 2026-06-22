@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.18] - 2026-06-22
+
+### Fixed
+- Five right-click menus and combos (world canvas, Game View, Edit menu,
+  Properties panel x2) had their own independent copies of the old 6-value
+  layer-preset list, so assigning a layer there never showed the other 12
+  real values added in 1.0.17. All five now read from the shared preset
+  list.
+
+### Added
+- Status bar shows "In-game: (x, y)" next to Mouse: while Runtime Layout
+  view is on -- the in-game coordinate under the cursor, accounting for
+  each module's runtime screen offset, not just the raw BDB-source position.
+
 ## [1.0.17] - 2026-06-22
 
 ### Fixed
