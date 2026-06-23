@@ -480,6 +480,28 @@ void assign_module_to_object_targets(int active, int module_idx)
     (void)x2; (void)y2;
 }
 
+/* A BDB module is a plain rectangle, so a sparse selection (e.g. two
+ * ctrl-clicked objects far apart) unavoidably sweeps in anything else
+ * sitting between them once a module spanning both is created. Counts
+ * *visible*, non-selected objects inside [bx0,bx1]x[by0,by1] -- hidden
+ * objects are excluded, since hiding them first (see hide_unselected_objects)
+ * is how the user explicitly accepts they'll be swept in. */
+static int count_visible_unselected_in_bounds(int bx0, int bx1, int by0, int by1)
+{
+    int n = 0;
+    for (int i = 0; i < g_no; i++) {
+        if (g_sel_flags[i] || g_obj_hidden[i]) continue;
+        Img *im = img_find(g_obj[i].ii);
+        int ow = im ? im->w : 1;
+        int oh = im ? im->h : 1;
+        int ox2 = g_obj[i].depth + ow - 1;
+        int oy2 = g_obj[i].sy + oh - 1;
+        if (g_obj[i].depth > bx1 || ox2 < bx0 || g_obj[i].sy > by1 || oy2 < by0) continue;
+        n++;
+    }
+    return n;
+}
+
 bool wrap_selected_objects_in_region(void)
 {
     int sel_count = selected_count();
@@ -502,6 +524,17 @@ bool wrap_selected_objects_in_region(void)
     }
     if (bx0 >= bx1 || by0 >= by1)
         return false;
+
+    int swept = count_visible_unselected_in_bounds(bx0, bx1, by0, by1);
+    if (swept > 0) {
+        char msg[160];
+        snprintf(msg, sizeof msg,
+                 "%d other visible object(s) are inside that area too -- hide them first "
+                 "(right-click > Hide Unselected) if that's intended, or adjust your selection.",
+                 swept);
+        stage_set_toast(msg);
+        return false;
+    }
 
     undo_save();
     char name[64];
@@ -537,6 +570,17 @@ bool create_module_from_selection(void)
     }
     if (bx0 > bx1 || by0 > by1)
         return false;
+
+    int swept = count_visible_unselected_in_bounds(bx0, bx1, by0, by1);
+    if (swept > 0) {
+        char msg[160];
+        snprintf(msg, sizeof msg,
+                 "%d other visible object(s) are inside that area too -- hide them first "
+                 "(right-click > Hide Unselected) if that's intended, or adjust your selection.",
+                 swept);
+        stage_set_toast(msg);
+        return false;
+    }
 
     /* Stage-prefixed and guaranteed unique, so the new anchor can't collide
        with another module here or, once promoted, with another stage's. */

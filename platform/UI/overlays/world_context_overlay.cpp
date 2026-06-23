@@ -127,6 +127,15 @@ void draw_world_context_overlay(void)
                 if (ctx_valid && ImGui::MenuItem("Export Image as PNG...", NULL, false, has_obj))
                     export_object_image_png_dialog(active);
                 ImGui::Separator();
+                if (ImGui::MenuItem("Hide Unselected", NULL, false, selected_count() > 0))
+                    hide_unselected_objects();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Hides every object that isn't currently selected -- useful "
+                                      "before creating a module from a sparse selection, so you can "
+                                      "see exactly what's left in the way.");
+                if (ImGui::MenuItem("Show All Objects"))
+                    show_all_objects();
+                ImGui::Separator();
                 /* P13: wrap selection in new region */
                 if (ctx_valid && ImGui::MenuItem("Wrap selection in Region", NULL, false,
                                                  g_simple_mode && selected_count() > 0))

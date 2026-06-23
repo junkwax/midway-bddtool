@@ -860,6 +860,8 @@ extern bool g_budget_relief_show_unused;
 extern int g_budget_relief_rows;
 extern int g_budget_relief_highlight_img_ii;
 void toggle_object_selection(int idx);
+void hide_unselected_objects(void);
+void show_all_objects(void);
 void move_object_to_index(int src, int dst);
 void center_view_on_object(int idx);
 void export_object_image_png_dialog(int idx);

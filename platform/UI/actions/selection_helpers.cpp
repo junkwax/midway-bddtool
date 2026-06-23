@@ -28,3 +28,20 @@ void toggle_object_selection(int idx)
         g_hl_obj = idx;
     }
 }
+
+/* Hide/show are session-only editor preferences, not project data (consistent
+ * with the Layers panel's Hide All/Show All, which also skip undo). Mainly
+ * for decluttering: hide everything but a sparse ctrl-click selection so it's
+ * obvious at a glance what a new module's bounding box will and won't cover. */
+void hide_unselected_objects(void)
+{
+    for (int i = 0; i < g_no; i++)
+        if (!g_sel_flags[i]) g_obj_hidden[i] = 1;
+    g_view_changed = 1;
+}
+
+void show_all_objects(void)
+{
+    for (int i = 0; i < g_no; i++) g_obj_hidden[i] = 0;
+    g_view_changed = 1;
+}
