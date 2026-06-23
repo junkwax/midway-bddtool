@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.20] - 2026-06-22
+
+### Fixed
+- A module created from a selection could silently receive none of its
+  objects if an earlier, world-spanning module (e.g. Simple Mode's
+  auto-created catch-all) already enclosed it -- module assignment is
+  first-fit by file order, so the earlier module always won. New modules
+  from a selection are now inserted before any module that would
+  otherwise shadow them. Fixed in all three places this could happen:
+  "Create Module from Selection", "Wrap selection in Region", and the
+  Modules panel's "+ From Selection"/"+ Cover Stage" buttons.
+
 ## [1.0.19] - 2026-06-22
 
 ### Added
