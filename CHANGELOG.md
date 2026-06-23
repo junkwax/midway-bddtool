@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.25] - 2026-06-23
+
+### Added
+- "Hide Unselected" / "Show All Objects" in the canvas right-click menu --
+  hides everything except the current selection so it's obvious what a
+  new module's bounding box will and won't cover.
+
+### Changed
+- "Create Module from Selection" and "Wrap selection in Region" now
+  refuse with a toast (instead of silently proceeding) when other
+  visible, non-selected objects fall inside the new module's bounds --
+  e.g. two ctrl-clicked objects far apart, which unavoidably sweeps in
+  anything between them since a module is a plain rectangle. Hide the
+  clutter first (Hide Unselected) to signal it's intentional.
+
 ## [1.0.24] - 2026-06-23
 
 ### Added
