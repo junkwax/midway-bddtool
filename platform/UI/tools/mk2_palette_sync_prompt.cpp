@@ -1521,6 +1521,29 @@ static bool bgnd_locate_module(const std::vector<std::string> &lines, int block_
     return loc->bmod_line >= 0;
 }
 
+/* Finds a column-0 label matching `want` exactly (case-insensitive). Used so
+ * a draft's deterministic "<StageName>_mod" label can be located directly,
+ * without depending on any *current* module name still matching a BMOD
+ * reference inside it -- the same problem fixed on the read side in
+ * viewer_geometry.cpp's bdd_draft_stage_mod_label_if_present, mirrored here
+ * for the write side (Apply placement/parallax/offset, "Set as runtime
+ * location") so it doesn't regress after the first module in a stage gets
+ * renamed or a brand-new module is added that isn't in the block yet. */
+static bool bgnd_find_exact_label_line(const std::vector<std::string> &lines,
+                                       const char *want, int *line_out)
+{
+    if (!want || !want[0]) return false;
+    for (int i = 0; i < (int)lines.size(); i++) {
+        std::string label;
+        if (stage_start_asm_label_line(lines[(size_t)i], &label) &&
+            mk2_sync_strcasecmp(label.c_str(), want) == 0) {
+            if (line_out) *line_out = i;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool bgnd_load_block(std::vector<std::string> &lines, char *block_label, size_t lbsz,
                             int *block_line, char *bgnd_out, size_t bgnd_sz)
 {
@@ -1531,6 +1554,16 @@ static bool bgnd_load_block(std::vector<std::string> &lines, char *block_label, 
     if (!mk2_read_text_lines(bgnd_out, lines)) {
         snprintf(g_stage_start_status, sizeof g_stage_start_status, "Could not read BGND.ASM.");
         return false;
+    }
+    if (g_name[0]) {
+        char want[70];
+        snprintf(want, sizeof want, "%s_mod", g_name);
+        int found_line = -1;
+        if (bgnd_find_exact_label_line(lines, want, &found_line)) {
+            if (block_label && lbsz) snprintf(block_label, lbsz, "%s", want);
+            if (block_line) *block_line = found_line;
+            return true;
+        }
     }
     if (!stage_start_infer_bgnd_block(lines, block_label, lbsz, block_line)) {
         snprintf(g_stage_start_status, sizeof g_stage_start_status,
