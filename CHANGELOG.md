@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.23] - 2026-06-23
+
+### Fixed
+- Objects vanished entirely in Runtime view as soon as their module got a
+  runtime placement ("Set as runtime location" or draft promotion). The
+  renderer treated any runtime-bound module as a compiled background plane
+  (rendered from real *BLKS block-table data, which only exists for shipped
+  stages) and skipped drawing it as a normal sprite -- leaving nothing
+  drawn at all for a hand-authored stage with no block table. Now requires
+  real block data to exist before taking that path; every module placed
+  through this editor's own tools draws as a normal sprite again.
+- Status bar's Mouse:/In-game: fields showed near-INT_MAX garbage values
+  when the mouse was outside any window.
+
 ## [1.0.22] - 2026-06-23
 
 ### Added
