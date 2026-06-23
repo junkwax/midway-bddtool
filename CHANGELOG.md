@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.21] - 2026-06-23
+
+### Added
+- New stages get their own per-stage draft BGND.ASM (`<StageName>.BGND.ASM`
+  next to the BDB/BDD) instead of requiring edits to the shared, live
+  BGND.ASM -- "Create Draft BGND.ASM" generates a starter block from the
+  stage's current modules, every Runtime Binding control transparently
+  edits the draft, and "Promote to BGND.ASM" merges it into the real file
+  (datestamped backup first) when ready. MKSEL.ASM stage-select wiring is
+  still a separate manual step.
+- Right-click a module rectangle directly in the World View canvas for
+  "Set as runtime location" / "Edit runtime placement..." -- previously
+  only available from the Modules panel's plane table.
+- "Re-bind all not-placed modules" bulk action and a "Unique module names"
+  check (Play Readiness Checklist) with a one-click rename fix.
+
+### Fixed
+- `bdd_get_stage_module_table`'s cache was never invalidated after writing
+  BGND.ASM/its draft, so the Modules panel and Game Preview could keep
+  showing pre-edit values for the rest of the session.
+- Two more copies of the "snaps to module's own corner instead of staying
+  put when there's no real BGND.ASM binding yet" bug (first fixed in
+  1.0.19's `bdd_object_runtime_origin`), found in `bdd_object_editor_origin`
+  (what World View's Runtime toggle actually renders through) and the
+  in-game hover-coordinate code.
+- Draft BGND.ASM became undiscoverable after bulk-renaming every module in
+  a stage, even though the file and its data were untouched.
+- Duplicate module names (e.g. two modules both named the same after manual
+  renaming) broke module-drag and BGND.ASM BMOD matching for one of them.
+  Module names are now auto-generated stage-prefixed and guaranteed unique.
+
 ## [1.0.20] - 2026-06-22
 
 ### Fixed
