@@ -286,6 +286,66 @@ static const char *runtime_parallax_label(float s)
     return s < 1.0f ? "far (slow)" : "near (fast)";
 }
 
+/* Sets world width and BGND.ASM scroll_left/scroll_right to exactly bound the
+ * camera to where content actually exists, instead of typing scroll limits
+ * by hand. There is no formula in the original game for this -- real shipped
+ * stages hand-tune scroll_left/right by playtest, and often draw far/slow
+ * parallax planes deliberately wider than strictly needed as a safety
+ * margin (checked against BGND.ASM/BGNDTBL.ASM directly: scroll limits don't
+ * derive from any per-plane art-width calculation). What this *can* fix
+ * soundly: the playfield (1.0x) plane is exactly what the camera shows, so
+ * bounding scroll_left/right to the real min/max content X guarantees the
+ * camera itself never scrolls past where something is actually drawn --
+ * the literal "parallax over the edge" the user is hitting. Slower planes
+ * still need their own background art to cover that same camera range; use
+ * the Pan Coverage Scanner (MK2 > Check) to verify those empirically after
+ * applying this, since there's no original-game formula to check it against. */
+static void fit_stage_width_and_scroll_to_content(void)
+{
+    char nm[64] = ""; int ww = 0, wh = 0, md = 255, nmods = 0, npals = 0, nobj = 0;
+    if (sscanf(g_bdb_header, "%63s %d %d %d %d %d %d",
+               nm, &ww, &wh, &md, &nmods, &npals, &nobj) < 7)
+        return;
+
+    int min_x = INT_MAX, max_x = INT_MIN;
+    for (int i = 0; i < g_no; i++) {
+        Img *im = img_find(g_obj[i].ii);
+        int w = im ? im->w : 1;
+        if (g_obj[i].depth < min_x) min_x = g_obj[i].depth;
+        if (g_obj[i].depth + w > max_x) max_x = g_obj[i].depth + w;
+    }
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+        if (!parse_module_bounds(m, NULL, &mx1, &mx2, &my1, &my2)) continue;
+        if (mx1 < min_x) min_x = mx1;
+        if (mx2 + 1 > max_x) max_x = mx2 + 1;
+    }
+    if (min_x > max_x) {
+        stage_set_toast("No objects or modules placed -- nothing to fit to");
+        return;
+    }
+    if (min_x > 0) min_x = 0;
+
+    const int viewport_w = 400;
+    int new_w = max_x - min_x;
+    if (new_w < viewport_w) new_w = viewport_w;
+
+    undo_save_ex("Fit Stage Width To Content");
+    snprintf(g_bdb_header, sizeof g_bdb_header, "%s %d %d %d %d %d %d",
+             nm, new_w, wh, md, g_bdb_num_modules, g_n_pals, g_no);
+    g_dirty = 1;
+
+    int scroll_left = min_x;
+    int scroll_right = max_x - viewport_w;
+    if (scroll_right < scroll_left) scroll_right = scroll_left;
+    stage_start_apply_bgnd_limits(scroll_left, scroll_right);
+
+    char msg[160];
+    snprintf(msg, sizeof msg, "World width set to %d, scroll range %d..%d to match content",
+             new_w, scroll_left, scroll_right);
+    stage_set_toast(msg);
+}
+
 /* Per-module runtime binding from BGND.ASM: where the stage opens, how far it
    scrolls, and the parallax plane each module rides. World position itself comes
    from the module bounds above; this is the assembly-side placement that bddtool
@@ -380,6 +440,19 @@ static void draw_module_runtime_binding(void)
         stage_start_apply_bgnd_limits(lim_l, lim_r);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("worldx range the camera may scroll between (<stage>_mod words 5,6).");
+    if (ImGui::Button("Fit World Width + Scroll Limits to Content", ImVec2(-1, 0))) {
+        fit_stage_width_and_scroll_to_content();
+        lim_ok = bdd_get_stage_scroll_limits(&lim_l, &lim_r);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "Sets world width and scroll_left/scroll_right to the real min/max X of your "
+            "objects and modules, so the camera can never scroll past where you've actually "
+            "placed something -- the playfield can't run off the edge.\n"
+            "Real MK2 stages hand-tune these by playtest, not a formula, and draw far/slow "
+            "parallax planes wider than strictly needed as a margin. After applying this, use "
+            "the Pan Coverage Scanner (MK2 > Check) to confirm no background plane shows gaps "
+            "across the new scroll range.");
 
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
     ImGui::SetNextItemWidth(200.0f);
