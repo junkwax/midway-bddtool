@@ -9,6 +9,11 @@ void fit_tile_to_world(void);
 int parse_module_bounds(int m, char *name, int *x1, int *x2, int *y1, int *y2);
 int image_max_pixel(const Img *im);
 int assign_module(int depth, int sy, int width, int height);
+/* Smallest-area module fully containing the rect, or -1. Unlike assign_module
+ * (LOAD2's real first-fit-by-file-order rule -- must never change), this is a
+ * pure editor-UX resolution for "which module does this visually belong to"
+ * when modules overlap/nest, matching the canvas hit-test's tie-break. */
+int module_smallest_containing(int depth, int sy, int width, int height);
 void simple_ensure_module(int obj_idx);
 void module_generate_unique_name(char *out, size_t outsz, const char *base);
 bool module_name_in_use(const char *name, int except_module_idx);

@@ -104,12 +104,39 @@ bool module_is_locked_by_index(int module_idx)
     return module_is_locked(mn);
 }
 
+int module_smallest_containing(int depth, int sy, int width, int height)
+{
+    int best = -1;
+    long best_area = 0;
+    if (width <= 0) width = 1;
+    if (height <= 0) height = 1;
+    int x2 = depth + width - 1;
+    int y2 = sy + height - 1;
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+        if (!parse_module_bounds(m, NULL, &mx1, &mx2, &my1, &my2)) continue;
+        if (mx2 < mx1 || my2 < my1) continue;
+        if (depth < mx1 || x2 > mx2 || sy < my1 || y2 > my2) continue;
+        long area = (long)(mx2 - mx1 + 1) * (long)(my2 - my1 + 1);
+        if (best < 0 || area < best_area) {
+            best = m;
+            best_area = area;
+        }
+    }
+    return best;
+}
+
 bool object_in_locked_module(int obj_index)
 {
     if (obj_index < 0 || obj_index >= g_no) return false;
     Img *im = img_find(g_obj[obj_index].ii);
     if (!im) return false;
-    int m = assign_module(g_obj[obj_index].depth, g_obj[obj_index].sy, im->w, im->h);
+    /* Smallest-containing, not assign_module's LOAD2 first-fit: a locked
+     * outer/catch-all module must not also lock down objects that visually
+     * sit inside a smaller, unlocked module nested or overlapping inside it
+     * -- otherwise locking the big module makes everything nested in it
+     * un-draggable too, including objects meant for the smaller module. */
+    int m = module_smallest_containing(g_obj[obj_index].depth, g_obj[obj_index].sy, im->w, im->h);
     if (m < 0) return false;
     return module_is_locked_by_index(m);
 }

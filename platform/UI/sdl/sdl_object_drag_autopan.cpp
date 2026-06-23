@@ -87,7 +87,7 @@ void bdd_sdl_object_drag_update(int drag_idx,
            since that's still being updated mid-drag here. */
         Img *lim = img_find(g_obj[si].ii);
         if (lim) {
-            int lm = assign_module(drag_depth[si], drag_sy[si], lim->w, lim->h);
+            int lm = module_smallest_containing(drag_depth[si], drag_sy[si], lim->w, lim->h);
             if (lm >= 0 && module_is_locked_by_index(lm)) continue;
         }
         int d2 = drag_depth[si] + dx;
