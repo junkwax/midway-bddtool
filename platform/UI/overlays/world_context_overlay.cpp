@@ -154,9 +154,35 @@ void draw_world_context_overlay(void)
         /* world view right-click context menu for a module rectangle (only
            reached when the click didn't land on an object first) */
         static int s_world_ctx_module = -1;
+        static int s_world_ctx_candidates[16];
+        static int s_world_ctx_candidate_n = 0;
         static ImVec2 s_world_ctx_module_pos = ImVec2(0, 0);
         if (g_ctx_module >= 0 && g_ctx_module < g_bdb_num_modules) {
             s_world_ctx_module = g_ctx_module;
+            /* Collect every module whose bounds contain the click point,
+             * smallest first (same tie-break as the canvas hit-test), so
+             * overlapping/stacked modules don't silently steal an action
+             * meant for a different one underneath or around it. */
+            struct { int idx; long area; } found[16];
+            int fn = 0;
+            for (int mi = 0; mi < g_bdb_num_modules && fn < 16; mi++) {
+                int cx1 = 0, cx2 = 0, cy1 = 0, cy2 = 0;
+                if (!parse_module_bounds(mi, NULL, &cx1, &cx2, &cy1, &cy2)) continue;
+                if (cx2 < cx1 || cy2 < cy1) continue;
+                if (g_ctx_module_wx < cx1 || g_ctx_module_wx > cx2 ||
+                    g_ctx_module_wy < cy1 || g_ctx_module_wy > cy2) continue;
+                found[fn].idx = mi;
+                found[fn].area = (long)(cx2 - cx1 + 1) * (long)(cy2 - cy1 + 1);
+                fn++;
+            }
+            for (int a = 0; a < fn; a++)
+                for (int b = a + 1; b < fn; b++)
+                    if (found[b].area < found[a].area) {
+                        auto t = found[a]; found[a] = found[b]; found[b] = t;
+                    }
+            s_world_ctx_candidate_n = fn;
+            for (int a = 0; a < fn; a++)
+                s_world_ctx_candidates[a] = found[a].idx;
             ImVec2 mp = ImGui::GetIO().MousePos;
             s_world_ctx_module_pos = ImVec2(mp.x + 4, mp.y + 4);
             ImGui::OpenPopup("world_module_ctx");
@@ -167,6 +193,20 @@ void draw_world_context_overlay(void)
         if (s_world_ctx_module >= 0)
             ImGui::SetNextWindowPos(s_world_ctx_module_pos, ImGuiCond_Appearing);
         if (ImGui::BeginPopup("world_module_ctx")) {
+                if (s_world_ctx_candidate_n > 1) {
+                    ImGui::TextDisabled("Modules overlap here -- pick one:");
+                    for (int ci = 0; ci < s_world_ctx_candidate_n; ci++) {
+                        int cm = s_world_ctx_candidates[ci];
+                        char cname[64] = "";
+                        parse_module_bounds(cm, cname, NULL, NULL, NULL, NULL);
+                        bool is_cur = (cm == s_world_ctx_module);
+                        if (is_cur) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.2f, 1.0f));
+                        if (ImGui::Selectable(cname[0] ? cname : "(unnamed)", is_cur))
+                            s_world_ctx_module = cm;
+                        if (is_cur) ImGui::PopStyleColor();
+                    }
+                    ImGui::Separator();
+                }
                 int m = s_world_ctx_module;
                 char mn[64] = ""; int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
                 bool valid = m >= 0 && parse_module_bounds(m, mn, &mx1, &mx2, &my1, &my2);
