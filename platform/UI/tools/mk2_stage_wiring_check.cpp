@@ -82,6 +82,27 @@ static void fix_remove_unused_palettes(void)
     stage_set_toast(msg);
 }
 
+static void fix_rename_duplicate_modules(void)
+{
+    undo_save_ex("Rename Duplicate Modules");
+    int renamed = 0;
+    for (int m = 1; m < g_bdb_num_modules; m++) {
+        char mn[64] = ""; int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        if (!parse_module_bounds(m, mn, &x1, &x2, &y1, &y2) || !mn[0]) continue;
+        if (!module_name_in_use(mn, m)) continue;  /* unique among the others already */
+        char base[64]; snprintf(base, sizeof base, "%s", mn);
+        char unique[64];
+        module_generate_unique_name(unique, sizeof unique, base);
+        char line[256];
+        snprintf(line, sizeof line, "%s %d %d %d %d", unique, x1, x2, y1, y2);
+        if (editor_project_set_module_line(m, line)) renamed++;
+    }
+    sync_bdb_header_counts();
+    g_dirty = 1;
+    char msg[64]; snprintf(msg, sizeof msg, "Renamed %d duplicate module name(s)", renamed);
+    stage_set_toast(msg);
+}
+
 static void fix_rename_to_filename(void)
 {
     if (!g_bdb_path[0]) return;
@@ -147,6 +168,17 @@ void draw_mk2_play_readiness_checklist(void)
     for (int i = 0; i < g_num_templates; i++)
         if (strcmp(g_name, g_templates[i].name) == 0) { name_is_template_default = true; break; }
 
+    int dup_modules = 0;
+    char first_dup[64] = "";
+    for (int m = 1; m < g_bdb_num_modules; m++) {
+        char mn[64] = "";
+        if (sscanf(g_bdb_modules[m], "%63s", mn) != 1 || !mn[0]) continue;
+        if (module_name_in_use(mn, m)) {
+            dup_modules++;
+            if (!first_dup[0]) snprintf(first_dup, sizeof first_dup, "%s", mn);
+        }
+    }
+
     if (ImGui::BeginTable("play_readiness", 4,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("status", ImGuiTableColumnFlags_WidthFixed, 40.0f);
@@ -172,6 +204,14 @@ void draw_mk2_play_readiness_checklist(void)
                  "Objects/modules reach (%d, %d); world is declared %d x %d.",
                  max_x, max_y, ww, wh);
         draw_check_row("World bounds", bounds_ok, detail, fix_grow_world_to_fit, "Grow world");
+
+        snprintf(detail, sizeof detail,
+                 dup_modules > 0
+                     ? "%d module(s) share a name with another (e.g. \"%s\") -- breaks module-drag and BGND.ASM BMOD matching for one of them."
+                     : "Every module has a unique name.",
+                 dup_modules, first_dup);
+        draw_check_row("Unique module names", dup_modules == 0, detail,
+                      fix_rename_duplicate_modules, "Rename");
 
         snprintf(detail, sizeof detail, "%d of %d images are never placed by an object.",
                  b.unused_images, g_ni);

@@ -10,6 +10,57 @@
 
 #include <climits>
 #include <cstdio>
+#include <cstring>
+
+#ifdef _WIN32
+#define module_name_strcasecmp _stricmp
+#else
+#include <strings.h>
+#define module_name_strcasecmp strcasecmp
+#endif
+
+bool module_name_in_use(const char *name, int except_module_idx)
+{
+    if (!name || !name[0]) return false;
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        if (m == except_module_idx) continue;
+        char mn[64] = "";
+        if (sscanf(g_bdb_modules[m], "%63s", mn) == 1 &&
+            module_name_strcasecmp(mn, name) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* Stage-name-prefixed so an auto-generated name (e.g. "MOD0") can't collide
+ * with another stage's module of the same generic name once promoted into
+ * the shared BGND.ASM -- collisions there mean two modules fighting over one
+ * <name>BMOD symbol. Also guaranteed unique against every module already in
+ * this stage, so renaming/recreating can never quietly produce a duplicate
+ * like two modules both ending up named the same thing. */
+void module_generate_unique_name(char *out, size_t outsz, const char *base)
+{
+    char stage_prefix[16] = "";
+    if (g_name[0]) {
+        size_t n = 0;
+        for (const char *p = g_name; *p && n < sizeof(stage_prefix) - 1; p++, n++)
+            stage_prefix[n] = *p;
+        stage_prefix[n] = '\0';
+    }
+    const char *base_name = (base && base[0]) ? base : "MOD";
+    for (int n = 0; n < 10000; n++) {
+        char candidate[64];
+        if (stage_prefix[0])
+            snprintf(candidate, sizeof candidate, "%s_%s%d", stage_prefix, base_name, n);
+        else
+            snprintf(candidate, sizeof candidate, "%s%d", base_name, n);
+        if (!module_name_in_use(candidate, -1)) {
+            snprintf(out, outsz, "%s", candidate);
+            return;
+        }
+    }
+    snprintf(out, outsz, "%s", base_name);
+}
 
 int get_world_size(int *out_w, int *out_h)
 {

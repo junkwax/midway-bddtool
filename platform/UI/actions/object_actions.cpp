@@ -504,9 +504,10 @@ bool wrap_selected_objects_in_region(void)
         return false;
 
     undo_save();
+    char name[64];
+    module_generate_unique_name(name, sizeof name, "MOD");
     char line[256];
-    snprintf(line, sizeof line, "MOD_%d %d %d %d %d",
-             g_bdb_num_modules, bx0, bx1, by0, by1);
+    snprintf(line, sizeof line, "%s %d %d %d %d", name, bx0, bx1, by0, by1);
     if (editor_project_insert_module_line_before_enclosing(line, bx0, bx1, by0, by1) < 0)
         return false;
     sync_bdb_header_counts();
@@ -537,20 +538,10 @@ bool create_module_from_selection(void)
     if (bx0 > bx1 || by0 > by1)
         return false;
 
-    /* Pick a module name not already taken so the new anchor is distinct. */
+    /* Stage-prefixed and guaranteed unique, so the new anchor can't collide
+       with another module here or, once promoted, with another stage's. */
     char name[64];
-    for (int n = g_bdb_num_modules; ; n++) {
-        snprintf(name, sizeof name, "MOD%d", n);
-        bool taken = false;
-        for (int m = 0; m < g_bdb_num_modules; m++) {
-            char mn[64] = "";
-            if (sscanf(g_bdb_modules[m], "%63s", mn) == 1 && strcasecmp(mn, name) == 0) {
-                taken = true;
-                break;
-            }
-        }
-        if (!taken) break;
-    }
+    module_generate_unique_name(name, sizeof name, "MOD");
 
     undo_save_ex("Create Module from Selection");
     char line[256];
