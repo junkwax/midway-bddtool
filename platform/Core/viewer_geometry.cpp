@@ -164,23 +164,54 @@ static int bdd_discover_stage_mod_label(char *out, size_t outsz);
    matching each block's baklst <name>BMOD modules against the BDB's modules.
    Fully data-driven so every MK2 stage is recognized, not a fixed shortlist.
    Cached per loaded path + module count. */
+static char bdd_bgnd_stage_label_cached_key[640] = "";
+static char bdd_bgnd_stage_label_cached[64] = "";
+static int bdd_bgnd_stage_label_cache_valid = 0;
+
+/* Drafts are always generated with a deterministic "<StageName>_mod" label
+ * (see stage_create_draft_bgnd). Looking for it directly, rather than via the
+ * generic "find a BMOD reference matching a current module name" heuristic
+ * below, means the draft is still found even when every module in it has
+ * since been renamed and none of their *BMOD lines match anymore -- the
+ * generic heuristic can't identify the block at all once that happens, even
+ * though the file and its parallax/placement data are still right there. */
+static int bdd_draft_stage_mod_label_if_present(char *label_out, size_t label_outsz)
+{
+    char path[640];
+    if (!g_name[0] || !stage_draft_bgnd_path(path, sizeof path))
+        return 0;
+    char want[70];
+    snprintf(want, sizeof want, "%s_mod", g_name);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char ln[256];
+    int found = 0;
+    while (fgets(ln, sizeof ln, f)) {
+        size_t n = strlen(ln);
+        while (n > 0 && (ln[n - 1] == '\n' || ln[n - 1] == '\r')) ln[--n] = '\0';
+        if (strcasecmp(ln, want) == 0) { found = 1; break; }
+    }
+    fclose(f);
+    if (found && label_out && label_outsz) snprintf(label_out, label_outsz, "%s", want);
+    return found;
+}
+
 static const char *bdd_bgnd_stage_label(void)
 {
-    static char cached_key[640] = "";
-    static char cached_label[64] = "";
-    static int cached_valid = 0;
     char key[640];
     const char *base = g_bdb_path[0] ? g_bdb_path : (g_bdd_path[0] ? g_bdd_path : "");
 
     snprintf(key, sizeof key, "%d|%s", g_bdb_num_modules, base);
-    if (cached_valid && strcmp(cached_key, key) == 0)
-        return cached_label[0] ? cached_label : NULL;
+    if (bdd_bgnd_stage_label_cache_valid && strcmp(bdd_bgnd_stage_label_cached_key, key) == 0)
+        return bdd_bgnd_stage_label_cached[0] ? bdd_bgnd_stage_label_cached : NULL;
 
-    snprintf(cached_key, sizeof cached_key, "%s", key);
-    cached_label[0] = '\0';
-    cached_valid = 1;
-    if (bdd_discover_stage_mod_label(cached_label, sizeof cached_label))
-        return cached_label;
+    snprintf(bdd_bgnd_stage_label_cached_key, sizeof bdd_bgnd_stage_label_cached_key, "%s", key);
+    bdd_bgnd_stage_label_cached[0] = '\0';
+    bdd_bgnd_stage_label_cache_valid = 1;
+    if (bdd_draft_stage_mod_label_if_present(bdd_bgnd_stage_label_cached, sizeof bdd_bgnd_stage_label_cached))
+        return bdd_bgnd_stage_label_cached;
+    if (bdd_discover_stage_mod_label(bdd_bgnd_stage_label_cached, sizeof bdd_bgnd_stage_label_cached))
+        return bdd_bgnd_stage_label_cached;
     return NULL;
 }
 
@@ -1198,7 +1229,14 @@ static void bdd_parse_stage_floor_info(const char *path, const char *calla_label
 static int bdd_resolve_bgnd_asm_path(const char *root, char *out, size_t outsz)
 {
     char path[512];
-    if (!root || !root[0] || !out || outsz == 0) return 0;
+    if (!out || outsz == 0) return 0;
+    /* Prefer the per-stage draft so reading plane/parallax info never touches
+       the shared BGND.ASM before the user explicitly promotes it. */
+    if (stage_draft_bgnd_path(path, sizeof path)) {
+        snprintf(out, outsz, "%s", path);
+        return 1;
+    }
+    if (!root || !root[0]) return 0;
     path_join(path, sizeof path, root, "src\\BGND.ASM");
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
     path_join(path, sizeof path, root, "src-refactor\\src\\BGND.ASM");
@@ -1248,7 +1286,7 @@ static int bdd_discover_stage_mod_label(char *out, size_t outsz)
     out[0] = '\0';
     if (g_bdb_num_modules <= 0) return 0;
     bdd_stage_root_from_loaded_path(root, sizeof root);
-    if (!root[0] || !bdd_resolve_bgnd_asm_path(root, path, sizeof path))
+    if (!bdd_resolve_bgnd_asm_path(root, path, sizeof path))
         return 0;
 
     f = fopen(path, "r");
@@ -1330,7 +1368,7 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
     if (!label) { table->label[0] = '\0'; return 0; }
 
     bdd_stage_root_from_loaded_path(root, sizeof root);
-    if (!root[0] || !bdd_resolve_bgnd_asm_path(root, path, sizeof path))
+    if (!bdd_resolve_bgnd_asm_path(root, path, sizeof path))
         return 0;
 
     if (!bdd_parse_stage_mod_block(path, label, table, scroll_label, sizeof scroll_label,
@@ -1366,6 +1404,21 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
     snprintf(table->source_path, sizeof table->source_path, "%s", path);
     table->valid = 1;
     return 1;
+}
+
+/* Both the stage-label lookup and the parsed module table are cached purely
+ * by label/path, with no notion of "the underlying file changed" -- every
+ * write through stage_start_find_bgnd_path (camera, scroll limits, module
+ * offset/parallax, bg color, module-placement creation, draft create/promote)
+ * must call this afterward or the Modules panel and Game Preview keep
+ * showing whatever was parsed before the edit until a different stage loads. */
+void bdd_invalidate_stage_module_cache(void)
+{
+    bdd_bgnd_stage_label_cache_valid = 0;
+    bdd_bgnd_stage_label_cached_key[0] = '\0';
+    bdd_bgnd_stage_label_cached[0] = '\0';
+    g_stage_module_cache.valid = 0;
+    g_stage_module_cache.label[0] = '\0';
 }
 
 static const BddStageModuleTable *bdd_get_stage_module_table(void)
@@ -2201,14 +2254,15 @@ int bdd_world_point_runtime_origin(int wx, int wy, int *rx, int *ry)
     }
 
     int ox = 0, oy = 0;
-    int local_x = wx - mx1;
-    int local_y = wy - my1;
     if (bdd_stage_module_runtime_info(module_name, &ox, &oy, NULL)) {
-        if (rx) *rx = ox + local_x;
-        if (ry) *ry = oy + local_y;
+        if (rx) *rx = ox + (wx - mx1);
+        if (ry) *ry = oy + (wy - my1);
     } else {
-        if (rx) *rx = local_x;
-        if (ry) *ry = local_y;
+        /* No real BGND.ASM binding yet: report the raw point unchanged, same
+           as the no-module case above, instead of snapping toward the
+           module's own corner. */
+        if (rx) *rx = wx;
+        if (ry) *ry = wy;
     }
     return 1;
 }
@@ -2281,19 +2335,21 @@ int bdd_object_editor_origin(int obj_index, int *ex, int *ey)
     if (g_runtime_layout_view &&
         bdd_object_module_info(obj_index, module_name, (int)sizeof module_name, &mx1, &mx2, &my1, &my2)) {
         int ox = 0, oy = 0;
-        int local_x = g_obj[obj_index].depth - mx1;
-        int local_y = g_obj[obj_index].sy - my1;
         if (bdd_stage_module_runtime_info(module_name, &ox, &oy, NULL)) {
-            if (ex) *ex = ox + local_x;
-            if (ey) *ey = oy + local_y;
+            if (ex) *ex = ox + (g_obj[obj_index].depth - mx1);
+            if (ey) *ey = oy + (g_obj[obj_index].sy - my1);
             return 1;
         }
-        if (ex) *ex = local_x;
+        /* No real BGND.ASM binding yet: stay at the BDB-source X so the module
+           doesn't appear to move sideways. Y still gets pulled onto a shelf if
+           the module is "detached" (far below the main group) -- that's a pure
+           canvas-declutter aid, independent of whether BGND.ASM binds it. */
+        if (ex) *ex = g_obj[obj_index].depth;
         if (ey) {
             if (bdd_runtime_module_is_detached(my1))
-                *ey = bdd_runtime_detached_shelf_top(my1) + local_y;
+                *ey = bdd_runtime_detached_shelf_top(my1) + (g_obj[obj_index].sy - my1);
             else
-                *ey = local_y;
+                *ey = g_obj[obj_index].sy;
         }
         return 1;
     }

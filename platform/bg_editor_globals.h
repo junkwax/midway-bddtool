@@ -326,6 +326,8 @@ extern int *g_sel_flags;
 extern int  g_confirm_save;
 extern int  g_dirty;
 extern int  g_ctx_obj;
+extern int  g_ctx_module;
+extern int  g_runtime_binding_jump_module;
 extern Uint8 g_bg_color[3];
 extern int  g_zoom;
 extern int  g_view_x;
@@ -529,6 +531,14 @@ bool stage_bgnd_set_module_offset(const char *module_name, int ox, int oy);
 bool stage_bgnd_set_module_parallax(const char *module_name, float factor);
 bool stage_bgnd_create_module_placement(const char *module_name, int ox, int oy);
 bool stage_bgnd_set_bg_color(int r5, int g5, int b5);
+bool stage_draft_bgnd_path(char *out, size_t outsz);
+bool stage_create_draft_bgnd(void);
+bool stage_promote_draft_to_bgnd(void);
+
+/* Drop the cached <stage>_mod label/plane table after writing BGND.ASM (or its
+ * per-stage draft), so the Modules panel and Game Preview re-parse instead of
+ * showing pre-edit values for the rest of the session. */
+void bdd_invalidate_stage_module_cache(void);
 const char *stage_palette_mode_name(void);
 const char *stage_overlay_mode_name(void);
 void mk2_preview_diff_use_source_and_rom(const char *source_preview, const char *rom_preview);
