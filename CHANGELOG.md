@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.22] - 2026-06-23
+
+### Added
+- Module lock: right-click a module on the canvas, use the "Lock" checkbox
+  next to it in the Modules panel, or the LOAD2 Module Summary table's
+  [locked]/[unlocked] toggle. Locked modules and their objects can't be
+  dragged at all (in, out, or as a group), and are highlighted in orange
+  on the canvas. Session-only, like object lock/hide -- not saved with
+  the project.
+
+### Fixed
+- Multi-object drag never checked the per-object lock flag at all, so a
+  locked object could still move if it was part of a multi-selection
+  drag started by clicking a different, unlocked object -- the actual
+  cause of objects appearing to drift in and out of their module.
+- "Set as runtime location" worked once, then failed on the next new
+  module with "Could not infer the BGND init block" -- the write-side
+  block locator only matched by current module name, the same fragile
+  heuristic already fixed once on the read side in 1.0.21.
+
 ## [1.0.21] - 2026-06-23
 
 ### Added
