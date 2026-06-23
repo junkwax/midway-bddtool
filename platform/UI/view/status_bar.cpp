@@ -59,12 +59,14 @@ void draw_status(void)
 
     ImVec2 mp = ImGui::GetIO().MousePos;
     int wx = 0, wy = 0;
-    bdd_screen_to_world((int)mp.x, (int)mp.y, g_view_x, g_view_y, g_zoom, &wx, &wy);
     char runtime_xy[32] = "";
-    if (g_runtime_layout_view) {
-        int rwx = 0, rwy = 0;
-        bdd_world_point_runtime_origin(wx, wy, &rwx, &rwy);
-        snprintf(runtime_xy, sizeof runtime_xy, "  In-game: (%d, %d)", rwx, rwy);
+    if (ImGui::IsMousePosValid(&mp)) {
+        bdd_screen_to_world((int)mp.x, (int)mp.y, g_view_x, g_view_y, g_zoom, &wx, &wy);
+        if (g_runtime_layout_view) {
+            int rwx = 0, rwy = 0;
+            bdd_world_point_runtime_origin(wx, wy, &rwx, &rwy);
+            snprintf(runtime_xy, sizeof runtime_xy, "  In-game: (%d, %d)", rwx, rwy);
+        }
     }
 
     int sel_count = 0;

@@ -1511,12 +1511,23 @@ int bdd_object_in_background_plane(int obj_index)
 {
     char module_name[64];
     int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+    BddBgndBlock probe[1];
     if (obj_index < 0 || obj_index >= g_no)
         return 0;
     if (!bdd_object_module_info(obj_index, module_name, (int)sizeof module_name,
                                 &mx1, &mx2, &my1, &my2))
         return 0;
-    return bdd_stage_module_runtime_info(module_name, NULL, NULL, NULL);
+    if (!bdd_stage_module_runtime_info(module_name, NULL, NULL, NULL))
+        return 0;
+    /* A runtime BMOD placement alone isn't enough to call this a compiled
+     * background plane: a custom stage's module can be "Set as runtime
+     * location" (or promoted from a draft) with no real *BLKS block-table
+     * data behind it yet. Treating it as background-plane in that case
+     * skipped the object here while bdd_block_background_draw found zero
+     * blocks to draw in its place -- the object vanished outright in
+     * Runtime view. Only modules with real block data take this path;
+     * everything else still draws as a normal sprite. */
+    return bdd_stage_module_blocks(module_name, probe, 1) > 0;
 }
 
 /* dlists-derived runtime draw rank for a background module plane, or -1. */
