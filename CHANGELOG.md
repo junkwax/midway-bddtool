@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.24] - 2026-06-23
+
+### Added
+- "Fit World Width + Scroll Limits to Content" button (Modules panel,
+  next to the manual scroll-limit fields): sets world width and BGND.ASM
+  scroll_left/scroll_right to your stage's real min/max content X, so the
+  camera can't scroll past where anything is actually placed. There's no
+  formula for this in the original game (verified against ARENA/TOWER/
+  DEDPOOL -- it's hand-tuned by playtest); use the existing Pan Coverage
+  Scanner (MK2 > Check) afterward to confirm slower parallax planes don't
+  show gaps across the new range.
+- Right-click menu on overlapping/stacked modules now shows a picker
+  listing every module under the click point instead of silently acting
+  on just one.
+
+### Fixed
+- Module lock resolved an object's module via LOAD2's first-fit rule, so
+  locking an outer/catch-all module also locked everything visually nested
+  inside a smaller, unlocked module overlapping it -- read as "locking
+  other assets from being added" rather than locking movement. Lock
+  checks now use the same smallest-area-wins resolution as the canvas
+  hit-test instead.
+
 ## [1.0.23] - 2026-06-23
 
 ### Fixed
