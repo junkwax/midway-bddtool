@@ -572,6 +572,37 @@ int editor_project_append_module_line(const char *line)
     return 1;
 }
 
+int editor_project_insert_module_line_before_enclosing(const char *line,
+                                                        int x1, int x2, int y1, int y2)
+{
+    /* Module assignment is first-fit by file order (matches LOAD2's real ROM-build
+       behaviour, so that algorithm itself can't change) -- a module listed earlier
+       always wins for any object it contains, even if a later, tighter module also
+       contains it. If an existing module already encloses these bounds (most often
+       a world-spanning catch-all, e.g. Simple Mode's auto-created MOD0, or a
+       "cover stage" module), the new module has to land BEFORE it in the list, or
+       it would never actually receive any of these objects. */
+    int enclosing_idx = -1;
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        char mn[64] = ""; int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+        if (sscanf(g_bdb_modules[m], "%63s %d %d %d %d", mn, &mx1, &mx2, &my1, &my2) < 5)
+            continue;
+        if (mx1 <= x1 && mx2 >= x2 && my1 <= y1 && my2 >= y2) { enclosing_idx = m; break; }
+    }
+
+    if (!editor_project_append_module_line(line))
+        return -1;
+    if (enclosing_idx < 0)
+        return g_bdb_num_modules - 1;
+
+    char new_line[256];
+    snprintf(new_line, sizeof new_line, "%s", g_bdb_modules[g_bdb_num_modules - 1]);
+    for (int m = g_bdb_num_modules - 1; m > enclosing_idx; m--)
+        snprintf(g_bdb_modules[m], sizeof g_bdb_modules[m], "%s", g_bdb_modules[m - 1]);
+    snprintf(g_bdb_modules[enclosing_idx], sizeof g_bdb_modules[enclosing_idx], "%s", new_line);
+    return enclosing_idx;
+}
+
 int editor_project_delete_module_line(int module_i)
 {
     if (!editor_project_storage_init() || !g_bdb_modules) return 0;

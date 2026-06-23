@@ -48,6 +48,8 @@ int editor_project_truncate_palettes(int palette_count);
 int editor_project_delete_palette_slot(int pal_i);
 Obj *editor_project_append_object_slot(void);
 int editor_project_append_module_line(const char *line);
+int editor_project_insert_module_line_before_enclosing(const char *line,
+                                                        int x1, int x2, int y1, int y2);
 int editor_project_delete_object_slot(int obj_i);
 int editor_project_move_object_slot(int src, int dst);
 int editor_project_sort_objects_by_layer_order(void);

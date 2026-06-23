@@ -507,7 +507,7 @@ bool wrap_selected_objects_in_region(void)
     char line[256];
     snprintf(line, sizeof line, "MOD_%d %d %d %d %d",
              g_bdb_num_modules, bx0, bx1, by0, by1);
-    if (!editor_project_append_module_line(line))
+    if (editor_project_insert_module_line_before_enclosing(line, bx0, bx1, by0, by1) < 0)
         return false;
     sync_bdb_header_counts();
     g_dirty = 1;
@@ -555,7 +555,7 @@ bool create_module_from_selection(void)
     undo_save_ex("Create Module from Selection");
     char line[256];
     snprintf(line, sizeof line, "%s %d %d %d %d", name, bx0, bx1, by0, by1);
-    if (!editor_project_append_module_line(line))
+    if (editor_project_insert_module_line_before_enclosing(line, bx0, bx1, by0, by1) < 0)
         return false;
     sync_bdb_header_counts();
     g_dirty = 1;

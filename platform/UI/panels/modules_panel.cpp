@@ -177,8 +177,8 @@ static int module_create_with_bounds(const char *name, int x1, int x2, int y1, i
     undo_save_ex("Create Module");
     char line[256];
     snprintf(line, sizeof line, "%s %d %d %d %d", mod_name, x1, x2, y1, y2);
-    int created = g_bdb_num_modules;
-    if (!editor_project_append_module_line(line))
+    int created = editor_project_insert_module_line_before_enclosing(line, x1, x2, y1, y2);
+    if (created < 0)
         return -1;
     sync_bdb_header_counts();
     g_dirty = 1;
