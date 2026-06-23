@@ -1,8 +1,16 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
+#include "Core/world_module_utils.h"
 #include <imgui.h>
 #include <cstdio>
 #include <cstring>
+
+#ifdef _WIN32
+#define world_ctx_strcasecmp _stricmp
+#else
+#include <strings.h>
+#define world_ctx_strcasecmp strcasecmp
+#endif
 
 void draw_world_context_overlay(void)
 {
@@ -142,6 +150,62 @@ void draw_world_context_overlay(void)
                 ImGui::TextDisabled("Drag to move; Alt+drag to clone");
                 ImGui::EndPopup();
         }
-    
-    
+
+        /* world view right-click context menu for a module rectangle (only
+           reached when the click didn't land on an object first) */
+        static int s_world_ctx_module = -1;
+        static ImVec2 s_world_ctx_module_pos = ImVec2(0, 0);
+        if (g_ctx_module >= 0 && g_ctx_module < g_bdb_num_modules) {
+            s_world_ctx_module = g_ctx_module;
+            ImVec2 mp = ImGui::GetIO().MousePos;
+            s_world_ctx_module_pos = ImVec2(mp.x + 4, mp.y + 4);
+            ImGui::OpenPopup("world_module_ctx");
+            g_ctx_module = -1;
+        }
+        if (s_world_ctx_module >= g_bdb_num_modules)
+            s_world_ctx_module = -1;
+        if (s_world_ctx_module >= 0)
+            ImGui::SetNextWindowPos(s_world_ctx_module_pos, ImGuiCond_Appearing);
+        if (ImGui::BeginPopup("world_module_ctx")) {
+                int m = s_world_ctx_module;
+                char mn[64] = ""; int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+                bool valid = m >= 0 && parse_module_bounds(m, mn, &mx1, &mx2, &my1, &my2);
+                if (valid) {
+                    ImGui::Text("Module \"%s\"", mn);
+                    ImGui::TextDisabled("(%d, %d) - (%d, %d)", mx1, my1, mx2, my2);
+                    ImGui::Separator();
+
+                    bool placed = false;
+                    int plane_count = bdd_stage_plane_count();
+                    for (int p = 0; p < plane_count && !placed; p++) {
+                        char pn[32];
+                        if (bdd_stage_plane_info(p, pn, sizeof pn, NULL, NULL, NULL, NULL) &&
+                            world_ctx_strcasecmp(pn, mn) == 0)
+                            placed = true;
+                    }
+                    if (!placed) {
+                        if (ImGui::MenuItem("Set as runtime location")) {
+                            stage_bgnd_create_module_placement(mn, mx1, my1);
+                            ImGui::CloseCurrentPopup();
+                        }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip(
+                                "Stamps this module's current position as its BGND.ASM runtime "
+                                "placement -- adds a new *BMOD entry on the next free background "
+                                "plane, so it doesn't move when you switch to Runtime view.");
+                    } else {
+                        if (ImGui::MenuItem("Edit runtime placement...")) {
+                            g_show_modules = true;
+                            g_runtime_binding_jump_module = m;
+                            ImGui::CloseCurrentPopup();
+                        }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Already placed -- opens the Modules panel with this "
+                                              "module selected in Edit placement & parallax.");
+                    }
+                } else {
+                    ImGui::TextDisabled("Module no longer exists");
+                }
+                ImGui::EndPopup();
+        }
 }

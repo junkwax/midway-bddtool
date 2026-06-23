@@ -218,6 +218,7 @@ void editor_project_clear_objects(void)
     g_no = 0;
     g_hl_obj = -1;
     g_ctx_obj = -1;
+    g_ctx_module = -1;
 }
 
 void editor_project_clear_modules(void)
@@ -268,6 +269,7 @@ void editor_project_reset_loaded_stage(void)
     g_bdb_header[0] = '\0';
     g_hl_obj = -1;
     g_ctx_obj = -1;
+    g_ctx_module = -1;
 }
 
 int editor_project_delete_image_slot(int img_i)

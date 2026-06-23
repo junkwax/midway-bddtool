@@ -502,6 +502,8 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
             bdd_screen_to_world(button->x, button->y,
                                 *view_x, *view_y, *zoom, &wx2, &wy2);
             g_ctx_obj = hit_object_at(wx2, wy2, 0, 0);
+            if (g_ctx_obj < 0)
+                g_ctx_module = hit_module_at(wx2, wy2, NULL, NULL, NULL, NULL);
         }
     }
 }

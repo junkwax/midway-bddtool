@@ -31,6 +31,8 @@ extern char g_bdd_path[512];
 
 extern int   g_dirty;
 extern int   g_ctx_obj;
+extern int   g_ctx_module;
+extern int   g_runtime_binding_jump_module;
 extern Uint8 g_bg_color[3];
 
 extern int    g_show_grid;

@@ -25,6 +25,8 @@ char g_bdd_path[512] = "";
 
 int   g_dirty = 0;
 int   g_ctx_obj = -1;
+int   g_ctx_module = -1;
+int   g_runtime_binding_jump_module = -1;
 Uint8 g_bg_color[3] = {18, 18, 28};
 
 int   g_show_grid = 1;

@@ -171,8 +171,15 @@ static int module_create_with_bounds(const char *name, int x1, int x2, int y1, i
     char mod_name[64];
     snprintf(mod_name, sizeof mod_name, "%s",
              (name && name[0]) ? name : "MOD");
-    if (!mod_name[0] || strcmp(mod_name, "MOD") == 0)
-        snprintf(mod_name, sizeof mod_name, "MOD%d", g_bdb_num_modules);
+    /* "MOD" is the auto-name sentinel; an explicit name that collides with an
+       existing module gets disambiguated the same way, so a duplicate module
+       name (which breaks both module-drag and BGND.ASM BMOD matching) can't
+       happen here either. */
+    if (strcmp(mod_name, "MOD") == 0 || module_name_in_use(mod_name, -1)) {
+        char base[64];
+        snprintf(base, sizeof base, "%s", mod_name);
+        module_generate_unique_name(mod_name, sizeof mod_name, base);
+    }
 
     undo_save_ex("Create Module");
     char line[256];
@@ -287,6 +294,8 @@ static const char *runtime_parallax_label(float s)
    the overview table stays read-only. */
 static void draw_module_runtime_binding(void)
 {
+    if (g_runtime_binding_jump_module >= 0)
+        ImGui::SetNextItemOpen(true);
     if (!ImGui::CollapsingHeader("Runtime Binding (BGND.ASM)"))
         return;
 
@@ -301,6 +310,11 @@ static void draw_module_runtime_binding(void)
     static int cam_x = 0, cam_y = 0, cam_ok = 0;
     static int lim_l = 0, lim_r = 0, lim_ok = 0;
     static int rb_sel = -1, rb_loaded = -2;
+    if (g_runtime_binding_jump_module >= 0 && g_runtime_binding_jump_module < g_bdb_num_modules) {
+        rb_sel = g_runtime_binding_jump_module;
+        rb_loaded = -2;
+        g_runtime_binding_jump_module = -1;
+    }
     static float rb_factor = 1.0f;
     static int rb_ox = 0, rb_oy = 0;
     static bool rb_placed = false;
@@ -319,6 +333,23 @@ static void draw_module_runtime_binding(void)
         bg_rgb[2] = (rgb555 & 31) / 31.0f;
         rb_sel = -1;
         rb_loaded = -2;
+    }
+
+    {
+        char draft_path[640];
+        if (stage_draft_bgnd_path(draft_path, sizeof draft_path)) {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f),
+                "Editing a DRAFT (%s) -- the shared BGND.ASM is untouched.", draft_path);
+            if (ImGui::Button("Promote to BGND.ASM", ImVec2(-1, 0)))
+                stage_promote_draft_to_bgnd();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Backs up the real BGND.ASM with a datestamp, then merges this "
+                                  "draft's block and a table_o_mods entry into a new one.\n"
+                                  "MKSEL.ASM stage-select wiring is still a separate manual step.");
+        } else {
+            ImGui::TextColored(ImVec4(0.55f, 1.0f, 0.65f, 1.0f),
+                "Editing the real, shared BGND.ASM directly.");
+        }
     }
 
     ImGui::SeparatorText("Stage open + scroll");
@@ -372,12 +403,60 @@ static void draw_module_runtime_binding(void)
     int plane_count = bdd_stage_plane_count();
     if (plane_count <= 0) {
         ImGui::TextDisabled("No <stage>_mod plane table found in BGND.ASM for this stage.");
+        if (ImGui::Button("Create Draft BGND.ASM", ImVec2(-1, 0)))
+            stage_create_draft_bgnd();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Writes %s.BGND.ASM next to this stage's BDB/BDD with a starter "
+                              "_mod/scroll/dlists/calla block using its current modules. Doesn't "
+                              "touch the real BGND.ASM until you Promote it.", g_name);
         return;
     }
     ImGui::TextWrapped(
         "Parallax is read from BGND.ASM. 1.00x scrolls with the playfield; under 1 "
         "sits further back (slower); 0.00x is locked to the screen. To re-bind a "
         "module to a different plane, move its *BMOD in <stage>_mod.");
+
+    {
+        int not_placed = 0;
+        for (int m = 0; m < g_bdb_num_modules; m++) {
+            char mn[64] = "";
+            if (sscanf(g_bdb_modules[m], "%63s", mn) != 1) continue;
+            bool found_m = false;
+            for (int p = 0; p < plane_count && !found_m; p++) {
+                char pn[32];
+                if (bdd_stage_plane_info(p, pn, sizeof pn, NULL, NULL, NULL, NULL) &&
+                    runtime_name_ieq(pn, mn))
+                    found_m = true;
+            }
+            if (!found_m) not_placed++;
+        }
+        if (not_placed > 1) {
+            char lbl[64];
+            snprintf(lbl, sizeof lbl, "Re-bind all %d not-placed modules", not_placed);
+            if (ImGui::Button(lbl, ImVec2(-1, 0))) {
+                int bound = 0;
+                for (int m = 0; m < g_bdb_num_modules; m++) {
+                    char mn[64] = ""; int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+                    if (sscanf(g_bdb_modules[m], "%63s %d %d %d %d", mn, &mx1, &mx2, &my1, &my2) < 1) continue;
+                    bool found_m = false;
+                    for (int p = 0; p < plane_count && !found_m; p++) {
+                        char pn[32];
+                        if (bdd_stage_plane_info(p, pn, sizeof pn, NULL, NULL, NULL, NULL) &&
+                            runtime_name_ieq(pn, mn))
+                            found_m = true;
+                    }
+                    if (!found_m && stage_bgnd_create_module_placement(mn, mx1, my1))
+                        bound++;
+                }
+                char msg[64]; snprintf(msg, sizeof msg, "Re-bound %d module(s)", bound);
+                stage_set_toast(msg);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Adds a *BMOD entry for every not-placed module below, each at its "
+                                  "own current position so none of them move. Useful after renaming "
+                                  "modules whose old names are still in BGND.ASM/the draft.");
+        }
+    }
 
     if (ImGui::BeginTable("module_planes", 4,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -571,7 +650,7 @@ void draw_modules(void)
     if (at_module_cap || !have_selection_bounds) ImGui::BeginDisabled();
     if (ImGui::Button(g_simple_mode ? "+ From Selection" : "+ Module From Selection", ImVec2(-1, 0))) {
         char name[64];
-        snprintf(name, sizeof name, "SEL%d", g_bdb_num_modules);
+        module_generate_unique_name(name, sizeof name, "SEL");
         module_create_with_bounds(name, sx1, sx2, sy1, sy2);
     }
     if (at_module_cap || !have_selection_bounds) ImGui::EndDisabled();
@@ -580,8 +659,9 @@ void draw_modules(void)
 
     if (at_module_cap || !have_stage_bounds) ImGui::BeginDisabled();
     if (ImGui::Button(g_simple_mode ? "+ Cover Stage" : "+ Module Covering Stage", ImVec2(-1, 0))) {
-        module_create_with_bounds(g_bdb_num_modules == 0 ? "TSTMOD" : NULL,
-                                  wx1, wx2, wy1, wy2);
+        char name[64] = "";
+        if (g_bdb_num_modules == 0) module_generate_unique_name(name, sizeof name, "TSTMOD");
+        module_create_with_bounds(name[0] ? name : NULL, wx1, wx2, wy1, wy2);
     }
     if (at_module_cap || !have_stage_bounds) ImGui::EndDisabled();
     if (ImGui::IsItemHovered())
