@@ -13,4 +13,14 @@ void simple_ensure_module(int obj_idx);
 void module_generate_unique_name(char *out, size_t outsz, const char *base);
 bool module_name_in_use(const char *name, int except_module_idx);
 
+/* Session-only safety lock (not persisted to disk, same as object lock/hide)
+ * preventing drag from moving objects out of a module by accident. Keyed by
+ * name rather than module index so it survives modules being created,
+ * deleted, or reordered around it. */
+bool module_is_locked(const char *name);
+void module_set_locked(const char *name, bool locked);
+bool module_is_locked_by_index(int module_idx);
+/* True if obj_index's *current* module (by position, not a cached value) is locked. */
+bool object_in_locked_module(int obj_index);
+
 #endif

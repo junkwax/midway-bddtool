@@ -80,6 +80,16 @@ void bdd_sdl_object_drag_update(int drag_idx,
 
     for (int si = 0; si < g_no; si++) {
         if (!g_sel_flags[si]) continue;
+        if (g_obj_lock[si]) continue;
+        /* A locked module's objects must not move even when the drag was
+           started on a different, unlocked object in the same selection.
+           Check against the pre-drag (captured) position, not the live one,
+           since that's still being updated mid-drag here. */
+        Img *lim = img_find(g_obj[si].ii);
+        if (lim) {
+            int lm = assign_module(drag_depth[si], drag_sy[si], lim->w, lim->h);
+            if (lm >= 0 && module_is_locked_by_index(lm)) continue;
+        }
         int d2 = drag_depth[si] + dx;
         int s2 = drag_sy[si] + dy;
         if (g_grid_snap && g_grid_sx > 0 && g_grid_sy > 0) {

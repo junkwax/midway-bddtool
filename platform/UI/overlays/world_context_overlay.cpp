@@ -203,6 +203,16 @@ void draw_world_context_overlay(void)
                             ImGui::SetTooltip("Already placed -- opens the Modules panel with this "
                                               "module selected in Edit placement & parallax.");
                     }
+                    ImGui::Separator();
+                    bool mod_locked = module_is_locked(mn);
+                    if (ImGui::MenuItem(mod_locked ? "Unlock module" : "Lock module")) {
+                        module_set_locked(mn, !mod_locked);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Locked: objects inside this module can't be dragged "
+                                          "in or out, and the module rectangle itself can't be "
+                                          "dragged. Not saved with the project.");
                 } else {
                     ImGui::TextDisabled("Module no longer exists");
                 }

@@ -62,6 +62,58 @@ void module_generate_unique_name(char *out, size_t outsz, const char *base)
     snprintf(out, outsz, "%s", base_name);
 }
 
+#define MODULE_LOCK_MAX 256
+static char g_locked_module_names[MODULE_LOCK_MAX][64];
+static int g_locked_module_count = 0;
+
+bool module_is_locked(const char *name)
+{
+    if (!name || !name[0]) return false;
+    for (int i = 0; i < g_locked_module_count; i++)
+        if (module_name_strcasecmp(g_locked_module_names[i], name) == 0)
+            return true;
+    return false;
+}
+
+void module_set_locked(const char *name, bool locked)
+{
+    if (!name || !name[0]) return;
+    for (int i = 0; i < g_locked_module_count; i++) {
+        if (module_name_strcasecmp(g_locked_module_names[i], name) == 0) {
+            if (!locked) {
+                g_locked_module_count--;
+                if (i != g_locked_module_count)
+                    memcpy(g_locked_module_names[i], g_locked_module_names[g_locked_module_count],
+                           sizeof g_locked_module_names[0]);
+            }
+            return;
+        }
+    }
+    if (locked && g_locked_module_count < MODULE_LOCK_MAX) {
+        snprintf(g_locked_module_names[g_locked_module_count],
+                 sizeof g_locked_module_names[0], "%s", name);
+        g_locked_module_count++;
+    }
+}
+
+bool module_is_locked_by_index(int module_idx)
+{
+    char mn[64] = "";
+    if (module_idx < 0 || module_idx >= g_bdb_num_modules) return false;
+    if (sscanf(g_bdb_modules[module_idx], "%63s", mn) != 1) return false;
+    return module_is_locked(mn);
+}
+
+bool object_in_locked_module(int obj_index)
+{
+    if (obj_index < 0 || obj_index >= g_no) return false;
+    Img *im = img_find(g_obj[obj_index].ii);
+    if (!im) return false;
+    int m = assign_module(g_obj[obj_index].depth, g_obj[obj_index].sy, im->w, im->h);
+    if (m < 0) return false;
+    return module_is_locked_by_index(m);
+}
+
 int get_world_size(int *out_w, int *out_h)
 {
     char nm[64] = "";

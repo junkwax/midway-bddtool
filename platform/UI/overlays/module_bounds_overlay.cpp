@@ -40,20 +40,24 @@ void draw_module_bounds_overlay(void)
         int pals = 0, layers = 0, first = -1;
         int objects = module_collect_stats(m, &pals, &layers, &first);
         bool selected = (m == selected_mod);
-        ImU32 line_col = selected ? IM_COL32(255, 230, 90, 235) :
+        bool locked = module_is_locked(name);
+        ImU32 line_col = locked ? IM_COL32(255, 165, 40, 220) :
+                         selected ? IM_COL32(255, 230, 90, 235) :
                          (pals > MK2_RUNTIME_PALETTE_SLOTS ? IM_COL32(255, 90, 90, 200) :
                           objects == 0 ? IM_COL32(115, 125, 145, 120) :
                                          IM_COL32(130, 170, 255, 170));
-        ImU32 fill_col = selected ? IM_COL32(255, 220, 60, 26) :
+        ImU32 fill_col = locked ? IM_COL32(255, 150, 30, 22) :
+                         selected ? IM_COL32(255, 220, 60, 26) :
                          (pals > MK2_RUNTIME_PALETTE_SLOTS ? IM_COL32(255, 70, 70, 18) :
                                          IM_COL32(80, 130, 255, 14));
         ImVec2 p0(sx1, sy1);
         ImVec2 p1(sx2, sy2);
         dl->AddRectFilled(p0, p1, fill_col);
-        dl->AddRect(p0, p1, line_col, 0.0f, 0, selected ? 2.5f : 1.5f);
+        dl->AddRect(p0, p1, line_col, 0.0f, 0, selected ? 2.5f : (locked ? 2.0f : 1.5f));
 
         char label[128];
-        snprintf(label, sizeof label, "%d %s  obj:%d pal:%d", m, name, objects, pals);
+        snprintf(label, sizeof label, "%s%d %s  obj:%d pal:%d",
+                 locked ? "[LOCKED] " : "", m, name, objects, pals);
         ImVec2 ts = ImGui::CalcTextSize(label);
         if (sx2 - sx1 > ts.x + 10.0f && sy2 - sy1 > ts.y + 6.0f) {
             ImVec2 lp(sx1 + 5.0f, sy1 + 4.0f);

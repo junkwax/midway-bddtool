@@ -830,8 +830,18 @@ void draw_modules(void)
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn(); ImGui::Text("%d", m);
                 ImGui::TableNextColumn();
-                if (ok) ImGui::TextUnformatted(name);
-                else ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "bad line");
+                if (ok) {
+                    ImGui::TextUnformatted(name);
+                    bool tbl_locked = module_is_locked(name);
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton(tbl_locked ? "[locked]" : "[unlocked]"))
+                        module_set_locked(name, !tbl_locked);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Click to %s this module against accidental drag.",
+                                          tbl_locked ? "unlock" : "lock");
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "bad line");
+                }
                 ImGui::TableNextColumn();
                 if (ok) ImGui::Text("%d..%d, %d..%d", x1, x2, y1, y2);
                 else ImGui::TextUnformatted("-");
@@ -883,6 +893,14 @@ void draw_modules(void)
         bool open = ImGui::TreeNode(mod_lbl);
         if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(1))
             g_edit_mod_idx = i;
+        ImGui::SameLine();
+        bool locked = module_is_locked(mn);
+        if (ImGui::Checkbox("Lock##modlock", &locked))
+            module_set_locked(mn, locked);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Locked: objects currently inside this module's bounds can't be "
+                              "dragged at all (in or out), and the module rectangle itself can't "
+                              "be dragged. Not saved with the project -- resets next time you open it.");
         if (open) {
             if (!g_simple_mode) {
                 char buf[256];

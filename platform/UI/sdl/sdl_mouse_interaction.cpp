@@ -408,6 +408,7 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
                 int ox, oy;
 
                 if (g_obj_lock[i]) continue;
+                if (object_in_locked_module(i)) continue;
                 o = &g_obj[i];
                 im = img_find(o->ii);
                 if (!im) continue;
@@ -470,6 +471,10 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
                 if (!ctrl_down) {
                     int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
                     int mhit = hit_module_at(wx2, wy2, &mx1, &mx2, &my1, &my2);
+                    if (mhit >= 0 && module_is_locked_by_index(mhit)) {
+                        bdd_tooltip_free();
+                        return;
+                    }
                     if (mhit >= 0) {
                         state->module_drag_idx = mhit;
                         state->module_drag_ox = bx;
