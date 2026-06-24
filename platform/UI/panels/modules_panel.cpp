@@ -363,11 +363,12 @@ static void draw_module_runtime_binding(void)
         "Module bounds above set world position. The values here come from the "
         "stage's BGND.ASM and decide where the stage opens, how far it scrolls, and "
         "which parallax plane each module rides. Applying edits rewrites BGND.ASM "
-        "after saving a timestamped .pre_* backup.");
+        "after saving a local backup under bddtool's backups folder.");
 
     /* Reload the editable fields whenever the loaded stage changes. */
     static char loaded_stage[160] = "";
     static int cam_x = 0, cam_y = 0, cam_ok = 0;
+    static int ground_y = 0, ground_ok = 0;
     static int lim_l = 0, lim_r = 0, lim_ok = 0;
     static int rb_sel = -1, rb_loaded = -2;
     if (g_runtime_binding_jump_module >= 0 && g_runtime_binding_jump_module < g_bdb_num_modules) {
@@ -385,6 +386,7 @@ static void draw_module_runtime_binding(void)
     if (strncmp(key, loaded_stage, sizeof loaded_stage) != 0) {
         snprintf(loaded_stage, sizeof loaded_stage, "%s", key);
         cam_ok = bdd_get_stage_start_camera(&cam_x, &cam_y);
+        ground_ok = bdd_get_stage_ground_y(&ground_y);
         lim_ok = bdd_get_stage_scroll_limits(&lim_l, &lim_r);
         int rgb555 = 0;
         bg_ok = bdd_get_stage_bg_color(&rgb555);
@@ -415,6 +417,7 @@ static void draw_module_runtime_binding(void)
     ImGui::SeparatorText("Stage open + scroll");
     if (ImGui::SmallButton("Reload from BGND.ASM")) {
         cam_ok = bdd_get_stage_start_camera(&cam_x, &cam_y);
+        ground_ok = bdd_get_stage_ground_y(&ground_y);
         lim_ok = bdd_get_stage_scroll_limits(&lim_l, &lim_r);
     }
 
@@ -422,6 +425,8 @@ static void draw_module_runtime_binding(void)
     ImGui::SameLine();
     ImGui::SetNextItemWidth(96.0f); ImGui::InputInt("Y", &cam_y);
     if (!cam_ok) ImGui::TextDisabled("No start camera parsed yet — values shown are defaults.");
+    ImGui::SetNextItemWidth(120.0f); ImGui::InputInt("Fighter ground Y", &ground_y);
+    if (!ground_ok) ImGui::TextDisabled("No fighter ground Y parsed yet.");
     if (ImGui::Button("Apply Open Camera to BGND.ASM", ImVec2(-1, 0))) {
         g_stage_start_camera_x = cam_x;
         g_stage_start_camera_y = cam_y;
@@ -430,6 +435,23 @@ static void draw_module_runtime_binding(void)
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Sets where the camera opens (worldx/worldy) in <stage>_mod.");
+    if (ImGui::Button("Apply Fighter Ground Y to BGND.ASM", ImVec2(-1, 0))) {
+        g_stage_start_ground_y = ground_y;
+        g_stage_start_ground_enabled = true;
+        stage_start_apply_bgnd_ground(ground_y);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Sets the fighter floor/start Y (<stage>_mod word 2).");
+    if (ImGui::Button("Apply Match Start to BGND.ASM", ImVec2(-1, 0))) {
+        g_stage_start_camera_x = cam_x;
+        g_stage_start_camera_y = cam_y;
+        g_stage_start_ground_y = ground_y;
+        g_stage_start_camera_enabled = true;
+        g_stage_start_ground_enabled = true;
+        stage_start_apply_bgnd_start_placement();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Writes fighter ground Y plus the open camera X/Y together.");
 
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
     ImGui::SetNextItemWidth(96.0f); ImGui::InputInt("Scroll left", &lim_l);

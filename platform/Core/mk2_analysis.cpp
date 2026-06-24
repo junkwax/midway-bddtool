@@ -28,17 +28,6 @@
 #include <cstring>
 #include <ctime>
 #include <vector>
-static void backup_base_dir(char *out, size_t outsz, const char *fallback_path)
-{
-    if (!out || outsz == 0) return;
-    const char *root = g_bdd_path[0] ? g_bdd_path : fallback_path;
-    snprintf(out, outsz, "%s", root ? root : "");
-    char *sep = strrchr(out, '\\');
-    char *slash = strrchr(out, '/');
-    if (!sep || (slash && slash > sep)) sep = slash;
-    if (sep) sep[1] = '\0';
-    else out[0] = '\0';
-}
 
 /* ---- MK2 authoring diagnostics ------------------------------------ */
 
@@ -665,30 +654,36 @@ static bool mk2_backup_outside_delete(int outside_count)
     if (!stamp[0]) snprintf(stamp, sizeof stamp, "outside-delete");
 
     const char *base = g_bdd_path[0] ? g_bdd_path : (g_bdb_path[0] ? g_bdb_path : "outside_objects");
-    char bakdir[520];
-    backup_base_dir(bakdir, sizeof bakdir, base);
     char manifest[768];
-    char manifest_name[256];
-    snprintf(manifest_name, sizeof manifest_name, "%s.%s.removed.txt", path_basename_ptr(base), stamp);
-    path_join(manifest, sizeof manifest, bakdir, manifest_name);
+    char manifest_suffix[128];
+    snprintf(manifest_suffix, sizeof manifest_suffix, ".%s.removed.txt", stamp);
+    if (!bddtool_backup_path(manifest, sizeof manifest, base, manifest_suffix, "outside-delete")) {
+        snprintf(g_outside_delete_backup_status, sizeof g_outside_delete_backup_status,
+                 "Backup failed: could not create local backup path");
+        return false;
+    }
 
     char bdb_bak[768] = "";
     char bdd_bak[768] = "";
     bool ok = true;
     int copied = 0;
     if (g_bdb_path[0] && stage_file_exists(g_bdb_path)) {
-        char bak_name[256];
-        snprintf(bak_name, sizeof bak_name, "%s.%s.bak", path_basename_ptr(g_bdb_path), stamp);
-        path_join(bdb_bak, sizeof bdb_bak, bakdir, bak_name);
-        if (mk2_copy_file_for_backup(g_bdb_path, bdb_bak)) copied++;
-        else ok = false;
+        char suffix[128];
+        snprintf(suffix, sizeof suffix, ".%s.bak", stamp);
+        if (bddtool_backup_path(bdb_bak, sizeof bdb_bak, g_bdb_path, suffix, "outside-delete") &&
+            mk2_copy_file_for_backup(g_bdb_path, bdb_bak))
+            copied++;
+        else
+            ok = false;
     }
     if (g_bdd_path[0] && stage_file_exists(g_bdd_path)) {
-        char bak_name[256];
-        snprintf(bak_name, sizeof bak_name, "%s.%s.bak", path_basename_ptr(g_bdd_path), stamp);
-        path_join(bdd_bak, sizeof bdd_bak, bakdir, bak_name);
-        if (mk2_copy_file_for_backup(g_bdd_path, bdd_bak)) copied++;
-        else ok = false;
+        char suffix[128];
+        snprintf(suffix, sizeof suffix, ".%s.bak", stamp);
+        if (bddtool_backup_path(bdd_bak, sizeof bdd_bak, g_bdd_path, suffix, "outside-delete") &&
+            mk2_copy_file_for_backup(g_bdd_path, bdd_bak))
+            copied++;
+        else
+            ok = false;
     }
 
     FILE *f = fopen(manifest, "wb");

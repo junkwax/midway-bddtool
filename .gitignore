@@ -37,6 +37,7 @@ stderr.txt
 # Auto-backup files
 *.autobak
 tmp/
+backups/
 
 # Editor / OS
 .vscode/

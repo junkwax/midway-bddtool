@@ -145,11 +145,19 @@ static bool mk2_copy_file_unique(const char *src, const char *suffix, char *back
     FILE *in = fopen(src, "rb");
     if (!in) return false;
     char dst[640];
-    for (int i = 0; i < 100; i++) {
-        if (i == 0) snprintf(dst, sizeof dst, "%s%s", src, suffix);
-        else snprintf(dst, sizeof dst, "%s%s.%d", src, suffix, i);
-        if (!stage_file_exists(dst)) break;
+    bool found = false;
+    for (int i = 0; i < 100 && !found; i++) {
+        char unique_suffix[128];
+        if (i == 0) snprintf(unique_suffix, sizeof unique_suffix, "%s", suffix ? suffix : ".bak");
+        else snprintf(unique_suffix, sizeof unique_suffix, "%s.%d", suffix ? suffix : ".bak", i);
+        if (!bddtool_backup_path(dst, sizeof dst, src, unique_suffix, "asm")) {
+            fclose(in);
+            return false;
+        }
+        if (!stage_file_exists(dst))
+            found = true;
     }
+    if (!found) { fclose(in); return false; }
     FILE *out = fopen(dst, "wb");
     if (!out) { fclose(in); return false; }
     bool ok = true;
@@ -1150,7 +1158,8 @@ bool stage_create_draft_bgnd(void)
     get_world_size(&ww, &wh);
     int scroll_right = ww - 400;
     if (scroll_right < 0) scroll_right = 0;
-    int ground_y = stage_draft_guess_ground_y();
+    int ground_y = g_stage_start_ground_enabled ? g_stage_start_ground_y
+                                                : stage_draft_guess_ground_y();
 
     std::vector<std::string> lines;
     char ln[256];
@@ -1259,6 +1268,20 @@ static bool stage_start_infer_bgnd_block(const std::vector<std::string> &lines,
                                          int *line_out)
 {
     std::vector<std::string> wanted;
+    if (g_name[0]) {
+        char want_label[70];
+        snprintf(want_label, sizeof want_label, "%s_mod", g_name);
+        for (size_t i = 0; i < lines.size(); i++) {
+            std::string label;
+            if (stage_start_asm_label_line(lines[i], &label) &&
+                mk2_sync_strcasecmp(label.c_str(), want_label) == 0) {
+                if (label_out && label_outsz) snprintf(label_out, label_outsz, "%s", want_label);
+                if (line_out) *line_out = (int)i;
+                return true;
+            }
+        }
+    }
+
     for (int i = 0; i < g_bdb_num_modules; i++) {
         char mod[64] = "";
         if (sscanf(g_bdb_modules[i], "%63s", mod) == 1 && mod[0]) {
@@ -1389,6 +1412,111 @@ bool stage_start_apply_bgnd_patch(void)
              "Patched %s start camera to X=%d Y=%d. Backup: %s. Removed %d stale product(s).",
              block_label, g_stage_start_camera_x, g_stage_start_camera_y, backup, removed);
     stage_set_toast("Patched BGND start camera");
+    return true;
+}
+
+bool stage_start_apply_bgnd_ground(int ground_y)
+{
+    char bgnd[640];
+    if (!stage_start_find_bgnd_path(bgnd, sizeof bgnd)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "BGND.ASM was not found.");
+        return false;
+    }
+
+    std::vector<std::string> lines;
+    if (!mk2_read_text_lines(bgnd, lines)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "Could not read BGND.ASM.");
+        return false;
+    }
+
+    char block_label[96] = "";
+    int block_line = -1;
+    if (!stage_start_infer_bgnd_block(lines, block_label, sizeof block_label, &block_line)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not infer the BGND init block from current BDB module names.");
+        return false;
+    }
+
+    bool changed = stage_start_replace_word_line(lines, block_line, 2, ground_y);
+    if (!changed) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s already uses fighter ground Y=%d.", block_label, ground_y);
+        return true;
+    }
+
+    char backup[640] = "";
+    if (!mk2_copy_file_unique(bgnd, ".pre_start_ground_sync", backup, sizeof backup)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "Could not back up BGND.ASM.");
+        return false;
+    }
+    if (!mk2_write_text_lines(bgnd, lines)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not write BGND.ASM; backup: %s", backup);
+        return false;
+    }
+
+    int removed = 0;
+    mk2_palette_sync_remove_stale_outputs(bgnd, &removed);
+    bdd_invalidate_stage_module_cache();
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Patched %s fighter ground Y to %d. Backup: %s. Removed %d stale product(s).",
+             block_label, ground_y, backup, removed);
+    stage_set_toast("Patched fighter start Y");
+    return true;
+}
+
+bool stage_start_apply_bgnd_start_placement(void)
+{
+    char bgnd[640];
+    if (!stage_start_find_bgnd_path(bgnd, sizeof bgnd)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "BGND.ASM was not found.");
+        return false;
+    }
+
+    std::vector<std::string> lines;
+    if (!mk2_read_text_lines(bgnd, lines)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "Could not read BGND.ASM.");
+        return false;
+    }
+
+    char block_label[96] = "";
+    int block_line = -1;
+    if (!stage_start_infer_bgnd_block(lines, block_label, sizeof block_label, &block_line)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not infer the BGND init block from current BDB module names.");
+        return false;
+    }
+
+    bool changed_ground = stage_start_replace_word_line(lines, block_line, 2, g_stage_start_ground_y);
+    bool changed_y = stage_start_replace_word_line(lines, block_line, 3, g_stage_start_camera_y);
+    bool changed_x = stage_start_replace_word_line(lines, block_line, 4, g_stage_start_camera_x);
+    if (!changed_ground && !changed_x && !changed_y) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s already uses camera X=%d Y=%d and fighter ground Y=%d.",
+                 block_label, g_stage_start_camera_x, g_stage_start_camera_y,
+                 g_stage_start_ground_y);
+        return true;
+    }
+
+    char backup[640] = "";
+    if (!mk2_copy_file_unique(bgnd, ".pre_match_start_sync", backup, sizeof backup)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status, "Could not back up BGND.ASM.");
+        return false;
+    }
+    if (!mk2_write_text_lines(bgnd, lines)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not write BGND.ASM; backup: %s", backup);
+        return false;
+    }
+
+    int removed = 0;
+    mk2_palette_sync_remove_stale_outputs(bgnd, &removed);
+    bdd_invalidate_stage_module_cache();
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Patched %s match start: camera X=%d Y=%d, fighter ground Y=%d. Backup: %s. Removed %d stale product(s).",
+             block_label, g_stage_start_camera_x, g_stage_start_camera_y,
+             g_stage_start_ground_y, backup, removed);
+    stage_set_toast("Patched match start placement");
     return true;
 }
 

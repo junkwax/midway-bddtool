@@ -1,5 +1,6 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
+#include "Core/path_utils.h"
 #include "Core/project_header.h"
 
 #include <cerrno>
@@ -15,19 +16,7 @@
 #include <strings.h>
 #endif
 
-static void backup_base_dir(char *out, size_t outsz, const char *fallback_path)
-{
-    if (!out || outsz == 0) return;
-    const char *root = g_bdd_path[0] ? g_bdd_path : fallback_path;
-    snprintf(out, outsz, "%s", root ? root : "");
-    char *sep = strrchr(out, '\\');
-    char *slash = strrchr(out, '/');
-    if (!sep || (slash && slash > sep)) sep = slash;
-    if (sep) sep[1] = '\0';
-    else out[0] = '\0';
-}
-
-/* Backup original to the BDD folder's tmp/ directory before overwriting. */
+/* Backup original to bddtool's local backups/pre-save directory before overwriting. */
 static void backup_to_tmp(const char *filepath)
 {
     if (!filepath || !filepath[0]) return;
@@ -40,35 +29,12 @@ static void backup_to_tmp(const char *filepath)
         return;
     }
 
-    char tmpdir[520], bakpath[520];
-    backup_base_dir(tmpdir, sizeof tmpdir, filepath);
-    snprintf(tmpdir + strlen(tmpdir), sizeof(tmpdir) - strlen(tmpdir), "tmp");
-#ifdef _WIN32
-    if (!CreateDirectoryA(tmpdir, NULL)) {
-        DWORD err = GetLastError();
-        if (err != ERROR_ALREADY_EXISTS) {
-            bdd_save_logf("pre-save backup failed: cannot create dir=\"%s\" source=\"%s\" winerr=%lu",
-                          tmpdir, filepath, (unsigned long)err);
-            return;
-        }
-    }
-#else
-    if (mkdir(tmpdir, 0755) != 0 && errno != EEXIST) {
-        int err = errno;
-        bdd_save_logf("pre-save backup failed: cannot create dir=\"%s\" source=\"%s\" errno=%d (%s)",
-                      tmpdir, filepath, err, strerror(err));
+    char bakpath[520];
+    if (!bddtool_backup_path(bakpath, sizeof bakpath, filepath, ".bak", "pre-save")) {
+        bdd_save_logf("pre-save backup failed: cannot create local backup path source=\"%s\"",
+                      filepath);
         return;
     }
-#endif
-    const char *fname = filepath;
-    for (const char *p = filepath; *p; p++) if (*p == '\\' || *p == '/') fname = p + 1;
-    snprintf(bakpath, sizeof bakpath, "%s%c%s.bak", tmpdir,
-#ifdef _WIN32
-             '\\',
-#else
-             '/',
-#endif
-             fname);
     FILE *src = fopen(filepath, "rb");
     if (!src) {
         int err = errno;

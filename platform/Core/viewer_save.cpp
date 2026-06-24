@@ -5,6 +5,7 @@
 #include "Core/bdd_metadata.h"
 #include "Core/editor_project_globals.h"
 #include "Core/editor_project_storage.h"
+#include "Core/path_utils.h"
 #include "UI/tools/mk2_runtime_actor_tool.h"
 #include "UI/view/toast_notifications.h"
 
@@ -90,28 +91,10 @@ static void make_save_temp_path(const char *path, char *out, size_t outsz)
     snprintf(out, outsz, "%s.tmp.%lu", path ? path : "bddview-save", pid);
 }
 
-static void make_save_backup_path(const char *path, char *out, size_t outsz)
+static int make_save_backup_path(const char *path, char *out, size_t outsz)
 {
-    char dir[512] = "";
-    const char *src = (path && path[0]) ? path : "bddview-save";
-    const char *fname = src;
-    const char *root = g_bdd_path[0] ? g_bdd_path : src;
-
-    if (!out || outsz == 0) return;
-
-    for (const char *p = src; *p; p++)
-        if (*p == '\\' || *p == '/') fname = p + 1;
-
-    snprintf(dir, sizeof dir, "%s", root);
-    char *sep = strrchr(dir, '\\');
-    char *slash = strrchr(dir, '/');
-    if (!sep || (slash && slash > sep)) sep = slash;
-    if (sep) {
-        sep[1] = '\0';
-        snprintf(out, outsz, "%s%s.BAK", dir, fname);
-    } else {
-        snprintf(out, outsz, "%s.BAK", src);
-    }
+    if (!out || outsz == 0) return 0;
+    return bddtool_backup_path(out, outsz, path ? path : "bddview-save", ".BAK", "save") ? 1 : 0;
 }
 
 static int save_target_is_readonly(const char *path)
@@ -132,7 +115,13 @@ static int replace_saved_file_with_backup(const char *path, const char *tmp)
 {
     char bak[560];
     int had_original;
-    make_save_backup_path(path, bak, sizeof bak);
+    if (!make_save_backup_path(path, bak, sizeof bak)) {
+        fprintf(stderr, "save: could not create local backup path for %s\n", path);
+        bdd_save_logf("save backup failed: cannot create local backup path target=\"%s\" temp=\"%s\"",
+                      path ? path : "", tmp ? tmp : "");
+        remove(tmp);
+        return 0;
+    }
     had_original = file_exists_readable(path);
 
     if (had_original && save_target_is_readonly(path)) {

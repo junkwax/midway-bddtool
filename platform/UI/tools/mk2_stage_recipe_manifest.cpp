@@ -54,6 +54,9 @@ bool stage_write_package_manifest(void)
     fprintf(f, "- Stage start camera: `%s`, X `%d`, Y `%d`\n",
             g_stage_start_camera_enabled ? "enabled" : "disabled",
             g_stage_start_camera_x, g_stage_start_camera_y);
+    fprintf(f, "- Fighter ground Y: `%s`, Y `%d`\n",
+            g_stage_start_ground_enabled ? "enabled" : "disabled",
+            g_stage_start_ground_y);
     fprintf(f, "- Palette mode: `%s`\n", stage_palette_mode_name());
     fprintf(f, "- Visible colors: `%d`\n", g_stage_visible_colors);
     fprintf(f, "- BG grid: `%d x %d`\n", g_stage_bg_cols, g_stage_bg_rows);
@@ -249,6 +252,8 @@ bool stage_write_patch_recipe(void)
     fprintf(f, "    \"start_camera_enabled\": %s,\n", g_stage_start_camera_enabled ? "true" : "false");
     fprintf(f, "    \"start_camera_x\": %d,\n", g_stage_start_camera_x);
     fprintf(f, "    \"start_camera_y\": %d,\n", g_stage_start_camera_y);
+    fprintf(f, "    \"start_ground_enabled\": %s,\n", g_stage_start_ground_enabled ? "true" : "false");
+    fprintf(f, "    \"start_ground_y\": %d,\n", g_stage_start_ground_y);
     fprintf(f, "    \"start_camera_patch_bgnd\": %s\n", g_stage_start_camera_patch_bgnd ? "true" : "false");
     fprintf(f, "  },\n");
     fprintf(f, "  \"files\": {\n");
@@ -476,6 +481,8 @@ bool stage_import_patch_recipe(void)
     json_get_bool_value(json, "start_camera_enabled", &g_stage_start_camera_enabled);
     json_get_int_value(json, "start_camera_x", &g_stage_start_camera_x);
     json_get_int_value(json, "start_camera_y", &g_stage_start_camera_y);
+    json_get_bool_value(json, "start_ground_enabled", &g_stage_start_ground_enabled);
+    json_get_int_value(json, "start_ground_y", &g_stage_start_ground_y);
     json_get_bool_value(json, "start_camera_patch_bgnd", &g_stage_start_camera_patch_bgnd);
     json_get_int_value(json, "visible_colors", &g_stage_visible_colors);
     json_get_int_value(json, "bg_cols", &g_stage_bg_cols);

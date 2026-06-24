@@ -61,6 +61,8 @@ void bdd_center_game_preview_camera(void);
 
 /* Read and apply the MK2 stage's match-load camera when available; falls back to centering. */
 int bdd_get_stage_start_camera(int *camera_x, int *camera_y);
+/* Read the stage's fighter ground Y (<stage>_mod word 2). */
+int bdd_get_stage_ground_y(int *ground_y);
 /* Read the stage's BGND.ASM scroll left/right limits (<stage>_mod words 5,6). */
 int bdd_get_stage_scroll_limits(int *scroll_left, int *scroll_right);
 /* Read the stage's in-game background colour (<stage>_mod word 1) as RGB555. */

@@ -516,6 +516,47 @@ static int bdd_read_bgnd_camera_from_file(const char *path, const char *label,
     return 0;
 }
 
+static int bdd_read_bgnd_ground_from_file(const char *path, const char *label,
+                                          int is_lst, int scrrgt,
+                                          int wy_offset, int *ground_y)
+{
+    FILE *f;
+    char line[512];
+    int in_block = 0;
+    int word_count = 0;
+
+    if (!path || !label || !ground_y) return 0;
+    f = fopen(path, "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        int value = 0;
+        if (!in_block) {
+            int label_hit = is_lst ? bdd_line_has_label_token(line, label)
+                                   : bdd_line_is_label(line, label);
+            if (label_hit && (!is_lst || (!strstr(line, ".long") && !strstr(line, ".word"))))
+                in_block = 1;
+            continue;
+        }
+        if (!bdd_line_has_active_word(line))
+            continue;
+        word_count++;
+        if (word_count != 2)
+            continue;
+        if (is_lst) {
+            if (!bdd_bgnd_lst_word_value(line, &value))
+                continue;
+        } else {
+            if (!bdd_bgnd_asm_word_expr_value(line, scrrgt, wy_offset, &value))
+                continue;
+        }
+        fclose(f);
+        *ground_y = value;
+        return 1;
+    }
+    fclose(f);
+    return 0;
+}
+
 static int bdd_read_bgnd_scroll_limits_from_file(const char *path, const char *label,
                                                  int is_lst, int scrrgt,
                                                  int wy_offset,
@@ -620,6 +661,18 @@ static int bdd_try_bgnd_camera_candidate(const char *root, const char *rel,
                                           camera_x, camera_y);
 }
 
+static int bdd_try_bgnd_ground_candidate(const char *root, const char *rel,
+                                         const char *label, int is_lst,
+                                         int *ground_y)
+{
+    char path[512];
+    if (!root || !root[0] || !rel || !label) return 0;
+    path_join(path, sizeof path, root, rel);
+    if (!stage_file_exists(path)) return 0;
+    return bdd_read_bgnd_ground_from_file(path, label, is_lst, 399, 0xe0,
+                                          ground_y);
+}
+
 static int bdd_try_bgnd_scroll_limits_candidate(const char *root, const char *rel,
                                                 const char *label, int is_lst,
                                                 int *scroll_left,
@@ -651,6 +704,27 @@ static int bdd_read_bgnd_stage_start_camera(const char *label,
         return 1;
     if (bdd_try_bgnd_camera_candidate(root, "src-refactor\\src\\BGND.ASM",
                                       label, 0, camera_x, camera_y))
+        return 1;
+    return 0;
+}
+
+static int bdd_read_bgnd_stage_ground_y(const char *label, int *ground_y)
+{
+    char root[512];
+    bdd_stage_root_from_loaded_path(root, sizeof root);
+    if (!root[0]) return 0;
+
+    if (bdd_try_bgnd_ground_candidate(root, "src-refactor\\src\\BGND.LST",
+                                      label, 1, ground_y))
+        return 1;
+    if (bdd_try_bgnd_ground_candidate(root, "src\\BGND.LST",
+                                      label, 1, ground_y))
+        return 1;
+    if (bdd_try_bgnd_ground_candidate(root, "src\\BGND.ASM",
+                                      label, 0, ground_y))
+        return 1;
+    if (bdd_try_bgnd_ground_candidate(root, "src-refactor\\src\\BGND.ASM",
+                                      label, 0, ground_y))
         return 1;
     return 0;
 }
@@ -717,6 +791,8 @@ typedef struct {
     int floor_y;             /* skew Y position word from <stage>_floor_info */
     int floor_height;        /* floor height word from <stage>_floor_info */
     int floor_skew_shift;    /* sra N in the floor's skew_calla (shear = -dx>>N), 0 = none */
+    int ground_valid;        /* <stage>_mod word 2 captured (fighter ground Y) */
+    int ground_y;
     int camera_valid;        /* <stage>_mod words 3,4 captured (init worldy/worldx) */
     int camera_x, camera_y;
     int limits_valid;        /* <stage>_mod words 5,6 captured (scroll left/right) */
@@ -917,6 +993,7 @@ static int bdd_parse_stage_mod_block(const char *path, const char *label,
                 header_word++;
                 switch (header_word) {
                     case 1: table->bg_color = hv & 0x7FFF; table->bg_valid = 1; break;
+                    case 2: table->ground_y = hv; table->ground_valid = 1; break;
                     case 3: table->camera_y = hv; break;
                     case 4: table->camera_x = hv; table->camera_valid = 1; break;
                     case 5: table->scroll_left = hv; break;
@@ -1362,6 +1439,8 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
     table->floor_y = 0;
     table->floor_height = 0;
     table->floor_skew_shift = 0;
+    table->ground_valid = 0;
+    table->ground_y = 0;
     table->camera_valid = 0;
     table->limits_valid = 0;
     table->calla_label[0] = '\0';
@@ -2592,6 +2671,33 @@ int bdd_get_stage_start_camera(int *camera_x, int *camera_y)
 
     if (camera_x) *camera_x = x;
     if (camera_y) *camera_y = y;
+    return 1;
+}
+
+int bdd_get_stage_ground_y(int *ground_y)
+{
+    const char *label;
+    int y = 0;
+
+    if (g_stage_start_ground_enabled) {
+        if (ground_y) *ground_y = g_stage_start_ground_y;
+        return 1;
+    }
+
+    label = bdd_bgnd_stage_label();
+    if (!label)
+        return 0;
+
+    {
+        const BddStageModuleTable *table = bdd_get_stage_module_table();
+        if (table && table->ground_valid) {
+            y = table->ground_y;
+        } else if (!bdd_read_bgnd_stage_ground_y(label, &y)) {
+            return 0;
+        }
+    }
+
+    if (ground_y) *ground_y = y;
     return 1;
 }
 

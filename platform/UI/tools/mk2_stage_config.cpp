@@ -275,6 +275,8 @@ bool stage_load_config(void)
         json_get_bool_value(section, "enabled", &g_stage_start_camera_enabled);
         json_get_int_value(section, "worldx", &g_stage_start_camera_x);
         json_get_int_value(section, "worldy", &g_stage_start_camera_y);
+        json_get_bool_value(section, "ground_enabled", &g_stage_start_ground_enabled);
+        json_get_int_value(section, "ground_y", &g_stage_start_ground_y);
         json_get_bool_value(section, "patch_bgnd", &g_stage_start_camera_patch_bgnd);
     }
     if (json_get_object_value(json, "perspective_layers", section, sizeof section)) {
@@ -398,6 +400,8 @@ bool stage_write_config(void)
     fprintf(f, "    \"enabled\": %s,\n", g_stage_start_camera_enabled ? "true" : "false");
     fprintf(f, "    \"worldx\": %d,\n", g_stage_start_camera_x);
     fprintf(f, "    \"worldy\": %d,\n", g_stage_start_camera_y);
+    fprintf(f, "    \"ground_enabled\": %s,\n", g_stage_start_ground_enabled ? "true" : "false");
+    fprintf(f, "    \"ground_y\": %d,\n", g_stage_start_ground_y);
     fprintf(f, "    \"patch_bgnd\": %s\n", g_stage_start_camera_patch_bgnd ? "true" : "false");
     fprintf(f, "  },\n");
     fprintf(f, "  \"red_shift\": {\n");

@@ -110,7 +110,7 @@ void draw_mk2_workflow(void)
         if (mk2_tool_header("Stage Preview Dashboard", true))
             draw_mk2_stage_preview_dashboard();
         ImGui::Separator();
-        if (mk2_tool_header("Stage Start Camera"))
+        if (mk2_tool_header("Match Start Placement", true))
             draw_mk2_stage_start_camera_tool();
         ImGui::Separator();
         if (mk2_tool_header("ROM Preview Diff", g_mk2_focus_tool == 9))

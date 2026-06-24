@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.26] - 2026-06-24
+
+### Added
+- Match Start Placement controls now expose fighter ground Y alongside the
+  start camera X/Y, with one-click BGND.ASM patching and stage-config/recipe
+  persistence.
+
+### Changed
+- Save backups, autosaves, pre-save copies, BGND/BGNDPAL patch backups, and
+  outside-object delete backups now go under bddtool's local `backups/`
+  folder instead of beside files in the game repo.
+
 ## [1.0.25] - 2026-06-23
 
 ### Added
