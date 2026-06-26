@@ -190,6 +190,11 @@ extern int  g_stage_start_ground_y;
 extern bool g_stage_start_camera_patch_bgnd;
 extern char g_stage_start_bgnd_path[512];
 extern char g_stage_start_status[512];
+extern bool g_match_start_fighter_box_visible;
+extern int  g_match_start_fighter_box_x;
+extern int  g_match_start_fighter_box_y;
+extern int  g_match_start_fighter_box_w;
+extern int  g_match_start_fighter_box_h;
 extern int  g_pan_scan_start_x;
 extern int  g_pan_scan_end_x;
 extern int  g_pan_scan_step;
@@ -416,6 +421,9 @@ struct CardTemplate {
 
 void merge_duplicate_palettes(void);
 extern bool g_canvas_scrollbar_mouse_capture;
+extern bool g_module_bounds_mouse_capture;
+extern bool g_game_view_focus_module_enabled;
+extern int  g_game_view_focus_module_idx;
 void batch_palette_rebuild(void);
 int remove_unused_palettes_impl(bool do_remove);
 void capacity_warn_check(void);
@@ -538,11 +546,14 @@ bool stage_start_apply_bgnd_ground(int ground_y);
 bool stage_start_apply_bgnd_limits(int scroll_left, int scroll_right);
 bool stage_bgnd_set_module_offset(const char *module_name, int ox, int oy);
 bool stage_bgnd_set_module_parallax(const char *module_name, float factor);
+bool stage_bgnd_reset_all_module_parallax(float factor);
 bool stage_bgnd_create_module_placement(const char *module_name, int ox, int oy);
+bool stage_bgnd_sync_runtime_offsets_from_bdb(void);
 bool stage_bgnd_set_bg_color(int r5, int g5, int b5);
 bool stage_draft_bgnd_path(char *out, size_t outsz);
 bool stage_create_draft_bgnd(void);
 bool stage_promote_draft_to_bgnd(void);
+bool stage_promote_draft_parallax_to_bgnd(void);
 
 /* Drop the cached <stage>_mod label/plane table after writing BGND.ASM (or its
  * per-stage draft), so the Modules panel and Game Preview re-parse instead of
@@ -600,6 +611,7 @@ int module_select_objects(int module_idx);
 void module_center_view(int module_idx);
 int mk2_first_unassigned_object(void);
 int mk2_select_unassigned_objects(void);
+int mk2_isolate_unassigned_objects(void);
 int mk2_include_unassigned_objects_in_modules(void);
 int mk2_delete_unassigned_objects(void);
 void mk2_toast_outside_delete_result(int removed);
@@ -810,6 +822,8 @@ int hide_runtime_guide_for_session(int guide_idx);
 void draw_mk2_runtime_extras_overlay(void);
 void draw_game_view_overlay(void);
 void draw_game_view_controls(void);
+void open_quick_size_audit(void);
+void draw_quick_size_audit_window(void);
 void draw_world_context_overlay(void);
 void draw_world_object_overlays(void);
 void run_auto_save_tick(void);

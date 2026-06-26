@@ -230,6 +230,44 @@ static int bdd_parse_signed16_hex_token(const char *tok, int *out)
     return 1;
 }
 
+static int bdd_parse_asm_long_literal(const char *tok, long *out)
+{
+    char buf[64];
+    int n = 0;
+    int neg = 0;
+    int hex = 0;
+    unsigned long long v;
+    char *end = NULL;
+
+    if (!tok || !out) return 0;
+    while (*tok && isspace((unsigned char)*tok)) tok++;
+    if (*tok == '+' || *tok == '-') {
+        neg = (*tok == '-');
+        tok++;
+    }
+    if (*tok == '>') {
+        hex = 1;
+        tok++;
+        while (isxdigit((unsigned char)*tok) && n < (int)sizeof buf - 1)
+            buf[n++] = *tok++;
+    } else {
+        while ((isalnum((unsigned char)*tok) || *tok == '_') &&
+               n < (int)sizeof buf - 1) {
+            buf[n++] = *tok++;
+        }
+        if (n > 1 && (buf[n - 1] == 'h' || buf[n - 1] == 'H')) {
+            hex = 1;
+            n--;
+        }
+    }
+    buf[n] = '\0';
+    if (n <= 0) return 0;
+    v = strtoull(buf, &end, hex ? 16 : 10);
+    if (end == buf || *end) return 0;
+    *out = neg ? -(long)v : (long)v;
+    return 1;
+}
+
 static int bdd_bgnd_lst_word_value(const char *line, int *out)
 {
     char prefix[256];
@@ -918,19 +956,8 @@ static void bdd_stage_apply_center_x_entry(BddStageModuleTable *table,
 static int bdd_bgnd_asm_long_number(const char *line, long *out)
 {
     const char *operand = bdd_bgnd_asm_active_directive(line, ".long");
-    char *end = NULL;
-    long v;
     if (!operand || !out) return 0;
-    if (*operand == '>') {
-        v = strtol(operand + 1, &end, 16);
-    } else if (isdigit((unsigned char)*operand)) {
-        v = strtol(operand, &end, 10);
-    } else {
-        return 0;
-    }
-    if (end == operand + (*operand == '>' ? 1 : 0)) return 0;
-    *out = v;
-    return 1;
+    return bdd_parse_asm_long_literal(operand, out);
 }
 
 /* Parse the two comma-separated values of a baklst ".word x,y" offset line. */
@@ -2587,6 +2614,17 @@ void bdd_get_game_preview_bounds(int *wx_min, int *wx_max, int *wy_min, int *wy_
         x1 = 400;
         y0 = 0;
         y1 = 254;
+    }
+    {
+        char nm[64] = "";
+        int ww = 0, wh = 0, md = 0, nmods = 0, npals = 0, nobj = 0;
+        if (sscanf(g_bdb_header, "%63s %d %d %d %d %d %d",
+                   nm, &ww, &wh, &md, &nmods, &npals, &nobj) >= 3) {
+            if (x0 > 0) x0 = 0;
+            if (y0 > 0) y0 = 0;
+            if (ww > x1) x1 = ww;
+            if (wh > y1) y1 = wh;
+        }
     }
     {
         const char *label = bdd_bgnd_stage_label();

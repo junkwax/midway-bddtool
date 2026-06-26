@@ -331,6 +331,35 @@ int mk2_select_unassigned_objects(void)
     return count;
 }
 
+int mk2_isolate_unassigned_objects(void)
+{
+    int count = 0;
+    mk2_clear_selection_flags();
+    g_hl_obj = -1;
+    for (int i = 0; i < g_no; i++) {
+        Img *im = img_find(g_obj[i].ii);
+        if (!im) {
+            g_obj_hidden[i] = 1;
+            continue;
+        }
+        if (assign_module(g_obj[i].depth, g_obj[i].sy, im->w, im->h) >= 0) {
+            g_obj_hidden[i] = 1;
+            continue;
+        }
+        g_obj_hidden[i] = 0;
+        g_sel_flags[i] = 1;
+        g_hl_obj = i;
+        count++;
+    }
+    if (count > 0) {
+        center_view_on_object(g_hl_obj);
+        g_show_obj_properties = true;
+        g_focus_obj_properties_next = true;
+    }
+    g_view_changed = 1;
+    return count;
+}
+
 static int mk2_expand_nearest_module_to_object(int obj_idx)
 {
     if (obj_idx < 0 || obj_idx >= g_no || g_bdb_num_modules <= 0) return 0;

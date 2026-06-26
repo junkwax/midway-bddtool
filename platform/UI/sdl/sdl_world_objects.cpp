@@ -1,6 +1,7 @@
 #include "UI/sdl/sdl_world_objects.h"
 
 #include "Core/image_lookup.h"
+#include "Core/world_module_utils.h"
 #include "UI/sdl/sdl_selection_rect.h"
 #include "UI/assets/texture_cache.h"
 #include "bg_editor.h"
@@ -8,7 +9,11 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstdio>
+#include <cstring>
 #include <vector>
+
+static const Uint8 k_game_view_focus_dim_alpha = 48;
 
 static void bdd_build_object_draw_order(std::vector<int> &order)
 {
@@ -29,6 +34,86 @@ static void bdd_build_object_draw_order(std::vector<int> &order)
         if (oa != ob) return oa < ob;
         return a < b;
     });
+}
+
+static bool sdl_name_ieq(const char *a, const char *b)
+{
+    if (!a || !b) return false;
+    for (; *a && *b; a++, b++) {
+        char ca = *a;
+        char cb = *b;
+        if (ca >= 'a' && ca <= 'z') ca = (char)(ca - 32);
+        if (cb >= 'a' && cb <= 'z') cb = (char)(cb - 32);
+        if (ca != cb) return false;
+    }
+    return *a == *b;
+}
+
+static void sdl_strip_bmod_suffix(const char *name, char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (!name) return;
+    snprintf(out, out_sz, "%s", name);
+    size_t n = strlen(out);
+    if (n >= 4 && sdl_name_ieq(out + n - 4, "BMOD"))
+        out[n - 4] = '\0';
+}
+
+static bool game_view_focus_active(void)
+{
+    return g_game_view &&
+           g_game_view_focus_module_enabled &&
+           g_game_view_focus_module_idx >= 0 &&
+           g_game_view_focus_module_idx < g_bdb_num_modules;
+}
+
+static bool game_view_focus_matches_module_name(const char *module_name)
+{
+    if (!game_view_focus_active() || !module_name || !module_name[0])
+        return true;
+
+    char focus_name[64] = "";
+    if (!parse_module_bounds(g_game_view_focus_module_idx, focus_name,
+                             NULL, NULL, NULL, NULL))
+        return true;
+
+    char a[64] = "";
+    char b[64] = "";
+    sdl_strip_bmod_suffix(module_name, a, sizeof a);
+    sdl_strip_bmod_suffix(focus_name, b, sizeof b);
+    return sdl_name_ieq(a, b);
+}
+
+static bool game_view_focus_matches_object(int obj_idx, const Img *im)
+{
+    if (!game_view_focus_active())
+        return true;
+    if (!im || obj_idx < 0 || obj_idx >= g_no)
+        return false;
+    int mod = assign_module(g_obj[obj_idx].depth, g_obj[obj_idx].sy, im->w, im->h);
+    return mod == g_game_view_focus_module_idx;
+}
+
+static void render_copy_ex_alpha(SDL_Renderer *rend, SDL_Texture *tex,
+                                 const SDL_Rect *src, const SDL_Rect *dst,
+                                 double angle, const SDL_Point *center,
+                                 SDL_RendererFlip flip, Uint8 alpha)
+{
+    if (!tex)
+        return;
+    if (alpha >= 255) {
+        SDL_RenderCopyEx(rend, tex, src, dst, angle, center, flip);
+        return;
+    }
+
+    SDL_BlendMode old_blend = SDL_BLENDMODE_NONE;
+    SDL_GetTextureBlendMode(tex, &old_blend);
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureAlphaMod(tex, alpha);
+    SDL_RenderCopyEx(rend, tex, src, dst, angle, center, flip);
+    SDL_SetTextureAlphaMod(tex, 255);
+    SDL_SetTextureBlendMode(tex, old_blend);
 }
 
 /* Render the loaded stage's background straight from the game's *BLKS block
@@ -78,6 +163,9 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
         if (!bdd_stage_plane_info(order[oi], mod, sizeof mod, &ox, &oy, &scroll, NULL))
             continue;
         bdd_stage_plane_scroll_origin(order[oi], &scroll_origin_x);
+        Uint8 plane_alpha = game_view_focus_matches_module_name(mod)
+                          ? 255
+                          : k_game_view_focus_dim_alpha;
         int nb = bdd_stage_module_blocks(mod, blocks, (int)(sizeof blocks / sizeof blocks[0]));
         for (int b = 0; b < nb; b++) {
             int hdr = blocks[b].hdr;
@@ -104,7 +192,7 @@ static void bdd_block_background_draw(SDL_Renderer *rend,
             SDL_RendererFlip flip = SDL_FLIP_NONE;
             if (blocks[b].flags & 0x0010) flip = (SDL_RendererFlip)(flip | SDL_FLIP_HORIZONTAL);
             if (blocks[b].flags & 0x0020) flip = (SDL_RendererFlip)(flip | SDL_FLIP_VERTICAL);
-            SDL_RenderCopyEx(rend, tex, NULL, &dst, 0.0, NULL, flip);
+            render_copy_ex_alpha(rend, tex, NULL, &dst, 0.0, NULL, flip, plane_alpha);
         }
     }
 }
@@ -158,7 +246,10 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
                 SDL_RendererFlip flip2 = SDL_FLIP_NONE;
                 if (o->hfl) flip2 = (SDL_RendererFlip)(flip2 | SDL_FLIP_HORIZONTAL);
                 if (o->vfl) flip2 = (SDL_RendererFlip)(flip2 | SDL_FLIP_VERTICAL);
-                SDL_RenderCopyEx(rend, tex2, NULL, &dst2, 0.0, NULL, flip2);
+                Uint8 alpha = game_view_focus_matches_object(i, im)
+                            ? 255
+                            : k_game_view_focus_dim_alpha;
+                render_copy_ex_alpha(rend, tex2, NULL, &dst2, 0.0, NULL, flip2, alpha);
             }
         }
         SDL_RenderSetClipRect(rend, NULL);
@@ -220,6 +311,9 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
             SDL_RendererFlip flip = SDL_FLIP_NONE;
             if (o->hfl) flip = (SDL_RendererFlip)(flip | SDL_FLIP_HORIZONTAL);
             if (o->vfl) flip = (SDL_RendererFlip)(flip | SDL_FLIP_VERTICAL);
+            Uint8 alpha = game_view_focus_matches_object(i, im)
+                        ? 255
+                        : k_game_view_focus_dim_alpha;
 
             /* The MK2 floor shears per scanline as the camera pans (skew_calla):
                line i leans by i*shear source px. Replicate by drawing the floor
@@ -232,10 +326,10 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
                     SDL_Rect sdst = { screen_rect.x + floor_shear * row * zoom,
                                       screen_rect.y + row * zoom,
                                       im->w * zoom, zoom };
-                    SDL_RenderCopyEx(rend, tex, &ssrc, &sdst, 0.0, NULL, flip);
+                    render_copy_ex_alpha(rend, tex, &ssrc, &sdst, 0.0, NULL, flip, alpha);
                 }
             } else {
-                SDL_RenderCopyEx(rend, tex, NULL, &dst, 0.0, NULL, flip);
+                render_copy_ex_alpha(rend, tex, NULL, &dst, 0.0, NULL, flip, alpha);
             }
 
             if (g_show_borders && !g_game_view) {

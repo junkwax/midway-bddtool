@@ -250,9 +250,17 @@ void draw_world_context_overlay(void)
                         }
                         if (ImGui::IsItemHovered())
                             ImGui::SetTooltip("Already placed -- opens the Modules panel with this "
-                                              "module selected in Edit placement & parallax.");
+                                              "module selected in Edit runtime placement.");
                     }
                     ImGui::Separator();
+                    bool mod_selected = module_selection_get(m);
+                    if (ImGui::MenuItem(mod_selected ? "Remove module highlight" : "Highlight module",
+                                        NULL, mod_selected)) {
+                        module_selection_set(m, !mod_selected);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Highlighted modules move with selected assets when dragged or centered.");
                     bool mod_locked = module_is_locked(mn);
                     if (ImGui::MenuItem(mod_locked ? "Unlock module" : "Lock module")) {
                         module_set_locked(mn, !mod_locked);

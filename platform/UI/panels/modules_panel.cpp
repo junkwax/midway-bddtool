@@ -2,6 +2,7 @@
 #include "bg_editor_globals.h"
 #include "Core/world_module_utils.h"
 #include "imgui.h"
+#include "UI/actions/selection_helpers.h"
 #include "undo_manager.h"
 
 #include <limits.h>
@@ -279,6 +280,96 @@ static bool runtime_name_ieq(const char *a, const char *b)
     return *a == *b;
 }
 
+static void load2_module_label_stem(const char *name, char *out, size_t outsz)
+{
+    if (!out || outsz == 0) return;
+    out[0] = '\0';
+    if (!name) return;
+    size_t n = 0;
+    while (name[n] && n < 10 && n + 1 < outsz) {
+        char c = name[n];
+        if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+        out[n] = c;
+        n++;
+    }
+    out[n] = '\0';
+}
+
+static bool load2_first_module_stem_collision(char *first, size_t first_sz,
+                                              char *second, size_t second_sz,
+                                              char *stem, size_t stem_sz)
+{
+    for (int a = 0; a < g_bdb_num_modules; a++) {
+        char an[64] = "";
+        if (sscanf(g_bdb_modules[a], "%63s", an) != 1 || !an[0]) continue;
+        char as[16] = "";
+        load2_module_label_stem(an, as, sizeof as);
+        for (int b = a + 1; b < g_bdb_num_modules; b++) {
+            char bn[64] = "";
+            if (sscanf(g_bdb_modules[b], "%63s", bn) != 1 || !bn[0]) continue;
+            char bs[16] = "";
+            load2_module_label_stem(bn, bs, sizeof bs);
+            if (!as[0] || !runtime_name_ieq(as, bs)) continue;
+            if (first && first_sz) snprintf(first, first_sz, "%s", an);
+            if (second && second_sz) snprintf(second, second_sz, "%s", bn);
+            if (stem && stem_sz) snprintf(stem, stem_sz, "%s", as);
+            return true;
+        }
+    }
+    return false;
+}
+
+static int load2_min_source_x(void)
+{
+    int min_x = INT_MAX;
+    for (int i = 0; i < g_no; i++)
+        if (g_obj[i].depth < min_x)
+            min_x = g_obj[i].depth;
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        int x1 = 0;
+        if (parse_module_bounds(m, NULL, &x1, NULL, NULL, NULL) && x1 < min_x)
+            min_x = x1;
+    }
+    return min_x == INT_MAX ? 0 : min_x;
+}
+
+static void shift_stage_x_for_load2(void)
+{
+    int min_x = load2_min_source_x();
+    if (min_x >= 0) {
+        stage_set_toast("No negative X coordinates to shift");
+        return;
+    }
+    int delta = -min_x;
+    undo_save_ex("Shift Stage X For LOAD2");
+    for (int i = 0; i < g_no; i++)
+        g_obj[i].depth += delta;
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        char name[64] = "";
+        int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        if (!parse_module_bounds(m, name, &x1, &x2, &y1, &y2)) continue;
+        module_rewrite_bounds(m, name, x1 + delta, x2 + delta, y1, y2);
+    }
+
+    char nm[64] = "";
+    int ww = 0, wh = 0, md = 255, nm_n = 0, np = 0, no = 0;
+    if (sscanf(g_bdb_header, "%63s %d %d %d %d %d %d",
+               nm, &ww, &wh, &md, &nm_n, &np, &no) == 7) {
+        ww += delta;
+        snprintf(g_bdb_header, sizeof g_bdb_header, "%s %d %d %d %d %d %d",
+                 nm, ww, wh, md, g_bdb_num_modules, g_n_pals, g_no);
+    } else {
+        sync_bdb_header_counts();
+    }
+    g_dirty = 1;
+    g_view_changed = 1;
+    bdd_invalidate_stage_module_cache();
+
+    char msg[96];
+    snprintf(msg, sizeof msg, "Shifted stage right %d px for LOAD2-safe X coordinates", delta);
+    stage_set_toast(msg);
+}
+
 static const char *runtime_parallax_label(float s)
 {
     if (s <= 0.01f) return "screen-fixed";
@@ -349,9 +440,10 @@ static void fit_stage_width_and_scroll_to_content(void)
 /* Per-module runtime binding from BGND.ASM: where the stage opens, how far it
    scrolls, and the parallax plane each module rides. World position itself comes
    from the module bounds above; this is the assembly-side placement that bddtool
-   normally cannot touch. Camera, scroll limits, per-module parallax and runtime
-   placement are all editable here and write BGND.ASM with a timestamped backup;
-   the overview table stays read-only. */
+   normally cannot touch. Camera, scroll limits, and runtime placement are
+   editable here and write BGND.ASM with a timestamped backup; parallax is
+   adjusted from the Game Preview panel so the tuning control stays next to the
+   scrolling view. */
 static void draw_module_runtime_binding(void)
 {
     if (g_runtime_binding_jump_module >= 0)
@@ -362,8 +454,9 @@ static void draw_module_runtime_binding(void)
     ImGui::TextWrapped(
         "Module bounds above set world position. The values here come from the "
         "stage's BGND.ASM and decide where the stage opens, how far it scrolls, and "
-        "which parallax plane each module rides. Applying edits rewrites BGND.ASM "
-        "after saving a local backup under bddtool's backups folder.");
+        "which runtime plane each module rides. Applying edits rewrites BGND.ASM "
+        "after saving a local backup under bddtool's backups folder. Parallax tuning "
+        "is handled in the Game Preview panel.");
 
     /* Reload the editable fields whenever the loaded stage changes. */
     static char loaded_stage[160] = "";
@@ -376,7 +469,6 @@ static void draw_module_runtime_binding(void)
         rb_loaded = -2;
         g_runtime_binding_jump_module = -1;
     }
-    static float rb_factor = 1.0f;
     static int rb_ox = 0, rb_oy = 0;
     static bool rb_placed = false;
     static float bg_rgb[3] = { 0, 0, 0 };
@@ -402,6 +494,15 @@ static void draw_module_runtime_binding(void)
         if (stage_draft_bgnd_path(draft_path, sizeof draft_path)) {
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f),
                 "Editing a DRAFT (%s) -- the shared BGND.ASM is untouched.", draft_path);
+            if (ImGui::Button("Promote Draft Parallax to Existing Stage", ImVec2(-1, 0))) {
+                if (stage_promote_draft_parallax_to_bgnd())
+                    rb_loaded = -2;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Copies only the draft scroll table into this stage's existing "
+                                  "*_mod block in the real BGND.ASM. This is the safe path when "
+                                  "the level already exists in MK2 source and you only changed "
+                                  "parallax.");
             if (ImGui::Button("Promote to BGND.ASM", ImVec2(-1, 0)))
                 stage_promote_draft_to_bgnd();
             if (ImGui::IsItemHovered())
@@ -419,13 +520,18 @@ static void draw_module_runtime_binding(void)
         cam_ok = bdd_get_stage_start_camera(&cam_x, &cam_y);
         ground_ok = bdd_get_stage_ground_y(&ground_y);
         lim_ok = bdd_get_stage_scroll_limits(&lim_l, &lim_r);
+        if (ground_ok)
+            g_match_start_fighter_box_y = ground_y - g_match_start_fighter_box_h;
     }
 
     ImGui::SetNextItemWidth(96.0f); ImGui::InputInt("Open camera X", &cam_x);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(96.0f); ImGui::InputInt("Y", &cam_y);
     if (!cam_ok) ImGui::TextDisabled("No start camera parsed yet — values shown are defaults.");
+    int old_ground_y = ground_y;
     ImGui::SetNextItemWidth(120.0f); ImGui::InputInt("Fighter ground Y", &ground_y);
+    if (old_ground_y != ground_y)
+        g_match_start_fighter_box_y = ground_y - g_match_start_fighter_box_h;
     if (!ground_ok) ImGui::TextDisabled("No fighter ground Y parsed yet.");
     if (ImGui::Button("Apply Open Camera to BGND.ASM", ImVec2(-1, 0))) {
         g_stage_start_camera_x = cam_x;
@@ -438,6 +544,7 @@ static void draw_module_runtime_binding(void)
     if (ImGui::Button("Apply Fighter Ground Y to BGND.ASM", ImVec2(-1, 0))) {
         g_stage_start_ground_y = ground_y;
         g_stage_start_ground_enabled = true;
+        g_match_start_fighter_box_y = g_stage_start_ground_y - g_match_start_fighter_box_h;
         stage_start_apply_bgnd_ground(ground_y);
     }
     if (ImGui::IsItemHovered())
@@ -446,6 +553,7 @@ static void draw_module_runtime_binding(void)
         g_stage_start_camera_x = cam_x;
         g_stage_start_camera_y = cam_y;
         g_stage_start_ground_y = ground_y;
+        g_match_start_fighter_box_y = g_stage_start_ground_y - g_match_start_fighter_box_h;
         g_stage_start_camera_enabled = true;
         g_stage_start_ground_enabled = true;
         stage_start_apply_bgnd_start_placement();
@@ -553,6 +661,26 @@ static void draw_module_runtime_binding(void)
         }
     }
 
+    static bool allow_source_offset_sync = false;
+    ImGui::Checkbox("Enable source-layout offset sync", &allow_source_offset_sync);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Advanced repair for stages whose BDB source is already composed.");
+    bool source_offset_sync_disabled = !allow_source_offset_sync;
+    if (source_offset_sync_disabled) ImGui::BeginDisabled();
+    if (ImGui::Button("Sync placed runtime offsets from current BDB layout", ImVec2(-1, 0))) {
+        if (stage_bgnd_sync_runtime_offsets_from_bdb())
+            rb_loaded = -2;
+        allow_source_offset_sync = false;
+    }
+    if (source_offset_sync_disabled) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "Writes each already-placed module's BGND.ASM .word x,y offset from that module's\n"
+            "current BDB source rectangle. Use this when source view is already the composed\n"
+            "stage (like this FLAPJACK edit). Do not use it on shelf-style stages where\n"
+            "source modules are intentionally separated and Runtime/Game Preview is the\n"
+            "assembled view.");
+
     if (ImGui::BeginTable("module_planes", 4,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                           ImGuiTableFlags_SizingStretchProp)) {
@@ -593,12 +721,12 @@ static void draw_module_runtime_binding(void)
                         }
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Adds a new *BMOD entry to BGND.ASM on the next free\nbackground plane, so this module is drawn at runtime.\nSet its parallax afterward in \"Edit placement & parallax\" below.");
+                        ImGui::SetTooltip("Adds a new *BMOD entry to BGND.ASM on the next free\nbackground plane, so this module is drawn at runtime.\nSet its parallax afterward in the Game Preview panel.");
                 } else {
                     if (ImGui::MenuItem("Edit runtime placement"))
                         { rb_sel = m; rb_loaded = -2; }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Jumps to this module in \"Edit placement & parallax\" below.");
+                        ImGui::SetTooltip("Jumps to this module in \"Edit runtime placement\" below.");
                 }
                 ImGui::EndPopup();
             }
@@ -624,8 +752,8 @@ static void draw_module_runtime_binding(void)
         ImGui::EndTable();
     }
 
-    /* Editable placement + parallax for one module (writes BGND.ASM). */
-    ImGui::SeparatorText("Edit placement & parallax");
+    /* Editable runtime placement for one module (writes BGND.ASM). */
+    ImGui::SeparatorText("Edit runtime placement");
     if (g_bdb_num_modules <= 0) {
         ImGui::TextDisabled("No modules to edit.");
         return;
@@ -653,30 +781,20 @@ static void draw_module_runtime_binding(void)
            doesn't shift it from wherever it's anchored today in Runtime Layout view. */
         int seed_x1 = 0, seed_y1 = 0;
         parse_module_bounds(rb_sel, NULL, &seed_x1, NULL, &seed_y1, NULL);
-        rb_factor = 1.0f; rb_ox = seed_x1; rb_oy = seed_y1; rb_placed = false;
+        rb_ox = seed_x1; rb_oy = seed_y1; rb_placed = false;
         char want[64] = "";
         sscanf(g_bdb_modules[rb_sel], "%63s", want);
         int pc = bdd_stage_plane_count();
         for (int p = 0; p < pc; p++) {
-            char pn[32]; int pox = 0, poy = 0, prank = -1; float ps = 1.0f;
-            if (bdd_stage_plane_info(p, pn, sizeof pn, &pox, &poy, &ps, &prank) &&
+            char pn[32]; int pox = 0, poy = 0, prank = -1;
+            if (bdd_stage_plane_info(p, pn, sizeof pn, &pox, &poy, NULL, &prank) &&
                 runtime_name_ieq(pn, want)) {
-                rb_factor = ps; rb_ox = pox; rb_oy = poy; rb_placed = true;
+                rb_ox = pox; rb_oy = poy; rb_placed = true;
                 break;
             }
         }
     }
-
-    ImGui::TextDisabled("Parallax: 1.00 = moves with playfield, lower = further back, 0.00 = locked to screen.");
-    ImGui::SetNextItemWidth(220.0f);
-    ImGui::SliderFloat("Parallax##rb", &rb_factor, 0.0f, 1.0f, "%.2fx");
-    ImGui::SameLine();
-    if (ImGui::Button("Apply parallax")) {
-        char nm[64] = ""; sscanf(g_bdb_modules[rb_sel], "%63s", nm);
-        stage_bgnd_set_module_parallax(nm, rb_factor);
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Writes the plane's scroll rate in BGND.ASM.\nAffects every module sharing the same baklst plane.");
+    ImGui::TextDisabled("Parallax is edited from Game Preview, using a module dropdown that does not depend on screen picking.");
 
     if (!rb_placed)
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
@@ -874,6 +992,32 @@ void draw_modules(void)
         ImGui::TextWrapped("LOAD2 assigns each object to the first module whose inclusive rectangle fully contains the sprite image. Parallax/floor choice comes from the object's Layer.");
         ImGui::Text("Assigned: %d / %d objects   Outside: %d   Modules: %d / %d",
                     assigned_total, g_no, outside, g_bdb_num_modules, MK2_LOAD2_MAX_MODULES);
+        int min_load2_x = load2_min_source_x();
+        if (min_load2_x < 0) {
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+                "LOAD2 warning: minimum source X is %d; negative coordinates wrap in LOAD2.",
+                min_load2_x);
+            if (ImGui::Button("Shift X >= 0 for LOAD2", ImVec2(-1, 0)))
+                shift_stage_x_for_load2();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Moves every object and module right by %d px and grows "
+                                  "the world width by the same amount, preserving relative "
+                                  "layout while avoiding unsigned LOAD2 coordinate wrap.",
+                                  -min_load2_x);
+        }
+        {
+            char a[64] = "", b[64] = "", stem[16] = "";
+            if (load2_first_module_stem_collision(a, sizeof a, b, sizeof b,
+                                                  stem, sizeof stem)) {
+                ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+                    "LOAD2 label collision: %s and %s both emit %s* symbols.",
+                    a, b, stem);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("LOAD2-generated ASM labels use a shortened module-name stem. "
+                                      "Rename modules so their first 10 characters are unique before "
+                                      "promoting BGNDTBL/BGND records.");
+            }
+        }
         if (outside > 0) {
             if (ImGui::Button("Select Outside", ImVec2(130, 0))) {
                 int n = mk2_select_unassigned_objects();
@@ -881,6 +1025,16 @@ void draw_modules(void)
                 snprintf(msg, sizeof msg, "Selected %d outside-module object(s)", n);
                 stage_set_toast(msg);
             }
+            ImGui::SameLine();
+            if (ImGui::Button("Isolate Outside", ImVec2(130, 0))) {
+                int n = mk2_isolate_unassigned_objects();
+                char msg[128];
+                snprintf(msg, sizeof msg,
+                         "Showing only %d outside-module object(s)", n);
+                stage_set_toast(msg);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Select objects not covered by any module and hide every assigned object.");
             ImGui::SameLine();
             if (ImGui::Button("Include Outside", ImVec2(140, 0))) {
                 int n = mk2_include_unassigned_objects_in_modules();
@@ -895,13 +1049,27 @@ void draw_modules(void)
                 int n = mk2_delete_unassigned_objects();
                 mk2_toast_outside_delete_result(n);
             }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Show All Objects"))
+                show_all_objects();
         }
         if (g_outside_delete_backup_status[0])
             ImGui::TextWrapped("%s", g_outside_delete_backup_status);
 
-        if (ImGui::BeginTable("module_summary", 7,
+        int selected_modules = module_selection_count();
+        if (selected_modules > 0) {
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.35f, 1.0f),
+                               "%d module%s highlighted for group moves",
+                               selected_modules, selected_modules == 1 ? "" : "s");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear module highlights"))
+                module_selection_clear();
+        }
+
+        if (ImGui::BeginTable("module_summary", 8,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("sel", ImGuiTableColumnFlags_WidthFixed, 34.0f);
             ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f);
             ImGui::TableSetupColumn("name");
             ImGui::TableSetupColumn("bounds");
@@ -923,6 +1091,14 @@ void draw_modules(void)
                                   : ImVec4(0.75f, 0.9f, 1.0f, 1.0f));
                 ImGui::PushID(m);
                 ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                {
+                    bool selected = module_selection_get(m);
+                    if (ImGui::Checkbox("##module_select", &selected))
+                        module_selection_set(m, selected);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Highlight this module rectangle for group drag/center moves.");
+                }
                 ImGui::TableNextColumn(); ImGui::Text("%d", m);
                 ImGui::TableNextColumn();
                 if (ok) {

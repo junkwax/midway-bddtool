@@ -106,6 +106,7 @@ void bg_editor_render(void)
     draw_welcome();
     draw_new_project();
     draw_help();
+    draw_quick_size_audit_window();
     draw_verify();
     draw_ref_settings();
     draw_tile_fill();

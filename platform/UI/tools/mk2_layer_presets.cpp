@@ -15,8 +15,8 @@ struct Mk2LayerPreset {
  * spatial containment, never by z) and live BGND.ASM scroll tables (each
  * stage's baklst 1-8 has its own hand-authored rate, e.g. dedpool_scroll vs
  * tower_scroll use entirely different values for the same slot numbers).
- * Real scroll speed is a per-module property — set it in the Modules panel's
- * "Edit placement & parallax" (Runtime Binding) section, not here. */
+ * Real scroll speed is a per-module property -- set it in Game Preview's
+ * Runtime Parallax controls, not here. */
 static const Mk2LayerPreset k_mk2_layers[] = {
     {"0x32  Sky/back (depth)",      0x32},
     {"0x3B  Mid- (depth)",          0x3B},

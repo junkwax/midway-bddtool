@@ -200,12 +200,15 @@ int bg_editor_wants_input(void)
 {
     return (ImGui::GetIO().WantCaptureMouse ||
             g_runtime_guide_mouse_capture ||
+            g_module_bounds_mouse_capture ||
             g_canvas_scrollbar_mouse_capture) ? 1 : 0;
 }
 
 int bg_editor_wants_wheel(void)
 {
-    if (g_runtime_guide_mouse_capture || g_canvas_scrollbar_mouse_capture)
+    if (g_runtime_guide_mouse_capture ||
+        g_module_bounds_mouse_capture ||
+        g_canvas_scrollbar_mouse_capture)
         return 1;
     if (ImGui::IsAnyItemActive())
         return 1;

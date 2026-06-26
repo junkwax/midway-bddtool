@@ -11,6 +11,7 @@
 #include <climits>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #ifdef _WIN32
 #define module_name_strcasecmp _stricmp
@@ -102,6 +103,135 @@ bool module_is_locked_by_index(int module_idx)
     if (module_idx < 0 || module_idx >= g_bdb_num_modules) return false;
     if (sscanf(g_bdb_modules[module_idx], "%63s", mn) != 1) return false;
     return module_is_locked(mn);
+}
+
+static std::vector<unsigned char> g_selected_modules;
+static char g_selected_modules_key[640] = "";
+
+static void module_selection_sync(void)
+{
+    char key[640];
+    snprintf(key, sizeof key, "%s|%s", g_bdb_path, g_name);
+    if (strcmp(key, g_selected_modules_key) != 0) {
+        g_selected_modules.clear();
+        snprintf(g_selected_modules_key, sizeof g_selected_modules_key, "%s", key);
+    }
+
+    int cap = editor_project_module_capacity();
+    if (cap < g_bdb_num_modules) cap = g_bdb_num_modules;
+    if (cap < 0) cap = 0;
+    if ((int)g_selected_modules.size() < cap)
+        g_selected_modules.resize((size_t)cap, 0);
+    for (int i = g_bdb_num_modules; i < (int)g_selected_modules.size(); i++)
+        g_selected_modules[(size_t)i] = 0;
+}
+
+void module_selection_clear(void)
+{
+    module_selection_sync();
+    for (size_t i = 0; i < g_selected_modules.size(); i++)
+        g_selected_modules[i] = 0;
+}
+
+void module_selection_set_all(bool selected)
+{
+    module_selection_sync();
+    for (int i = 0; i < g_bdb_num_modules && i < (int)g_selected_modules.size(); i++)
+        g_selected_modules[(size_t)i] = selected ? 1 : 0;
+}
+
+int module_selection_count(void)
+{
+    module_selection_sync();
+    int count = 0;
+    for (int i = 0; i < g_bdb_num_modules && i < (int)g_selected_modules.size(); i++)
+        if (g_selected_modules[(size_t)i])
+            count++;
+    return count;
+}
+
+int module_selection_first(void)
+{
+    module_selection_sync();
+    for (int i = 0; i < g_bdb_num_modules && i < (int)g_selected_modules.size(); i++)
+        if (g_selected_modules[(size_t)i])
+            return i;
+    return -1;
+}
+
+bool module_selection_get(int module_idx)
+{
+    module_selection_sync();
+    if (module_idx < 0 || module_idx >= g_bdb_num_modules ||
+        module_idx >= (int)g_selected_modules.size())
+        return false;
+    return g_selected_modules[(size_t)module_idx] != 0;
+}
+
+void module_selection_set(int module_idx, bool selected)
+{
+    module_selection_sync();
+    if (module_idx < 0 || module_idx >= g_bdb_num_modules ||
+        module_idx >= (int)g_selected_modules.size())
+        return;
+    g_selected_modules[(size_t)module_idx] = selected ? 1 : 0;
+}
+
+void module_selection_toggle(int module_idx)
+{
+    module_selection_set(module_idx, !module_selection_get(module_idx));
+}
+
+void module_selection_select_only(int module_idx)
+{
+    module_selection_clear();
+    module_selection_set(module_idx, true);
+}
+
+bool module_selection_bounds(int *x1, int *x2, int *y1, int *y2)
+{
+    module_selection_sync();
+    int bx1 = INT_MAX, bx2 = INT_MIN, by1 = INT_MAX, by2 = INT_MIN;
+    bool any = false;
+    for (int m = 0; m < g_bdb_num_modules && m < (int)g_selected_modules.size(); m++) {
+        int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+        if (!g_selected_modules[(size_t)m]) continue;
+        if (!parse_module_bounds(m, NULL, &mx1, &mx2, &my1, &my2)) continue;
+        if (mx2 < mx1 || my2 < my1) continue;
+        if (mx1 < bx1) bx1 = mx1;
+        if (mx2 > bx2) bx2 = mx2;
+        if (my1 < by1) by1 = my1;
+        if (my2 > by2) by2 = my2;
+        any = true;
+    }
+    if (!any) return false;
+    if (x1) *x1 = bx1;
+    if (x2) *x2 = bx2;
+    if (y1) *y1 = by1;
+    if (y2) *y2 = by2;
+    return true;
+}
+
+int module_selection_translate(int dx, int dy)
+{
+    module_selection_sync();
+    if (dx == 0 && dy == 0) return 0;
+    int moved = 0;
+    for (int m = 0; m < g_bdb_num_modules && m < (int)g_selected_modules.size(); m++) {
+        char name[64] = "";
+        int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        if (!g_selected_modules[(size_t)m]) continue;
+        if (module_is_locked_by_index(m)) continue;
+        if (!parse_module_bounds(m, name, &x1, &x2, &y1, &y2)) continue;
+        char line[256];
+        snprintf(line, sizeof line, "%s %d %d %d %d",
+                 name, x1 + dx, x2 + dx, y1 + dy, y2 + dy);
+        if (editor_project_set_module_line(m, line))
+            moved++;
+    }
+    if (moved > 0)
+        g_dirty = 1;
+    return moved;
 }
 
 int module_smallest_containing(int depth, int sy, int width, int height)

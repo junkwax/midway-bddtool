@@ -2,6 +2,7 @@
 #include "UI/panels/ToolbarPanel.h"
 #include "bg_editor_globals.h"
 #include "Core/editor_commands.h"
+#include "Core/world_module_utils.h"
 #include "UI/actions/object_position_undo.h"
 #include "undo_manager.h"
 
@@ -225,9 +226,11 @@ void ToolbarPanel::render()
         float avail = ImGui::GetContentRegionAvail().x;
         char zbuf[32];
         int sel_c = 0; for (int i = 0; i < g_no; i++) if (g_sel_flags[i]) sel_c++;
-        /* alignment / distribute buttons when multiple objects selected */
-        if (sel_c >= 2 && g_have_bdb && avail > 300) {
+        int mod_sel_c = module_selection_count();
+        /* alignment/distribute buttons need objects; center can also target highlighted modules. */
+        if ((sel_c >= 2 || mod_sel_c > 0) && g_have_bdb && avail > 300) {
             tb_sep();
+            if (sel_c >= 2 && sel_c != g_no && mod_sel_c == 0) {
             if (tb_button("Align L", false, "Align left edges")) {
                 ObjectPositionUndoCapture undo;
                 if (object_position_undo_capture_selected(&undo)) {
@@ -320,6 +323,7 @@ void ToolbarPanel::render()
                     }
                 }
             }
+            }
             /* center on stage — parse stage dimensions */
             {
                 int stg_w2 = 1024, stg_h2 = 256;
@@ -328,29 +332,63 @@ void ToolbarPanel::render()
                     sscanf(g_bdb_header, "%63s %d %d %d %d %d %d",
                            _n2, &stg_w2, &stg_h2, &_d2, &_m2, &_p2, &_o2);
                 }
+                auto do_center_toolbar = [&](bool horiz) {
+                    if (module_selection_count() == 0 && sel_c == g_no && g_no > 0) {
+                        module_selection_set_all(true);
+                        mod_sel_c = module_selection_count();
+                    }
+                    int sl=INT_MAX, sr=INT_MIN, st=INT_MAX, sb=INT_MIN;
+                    bool any = false;
+                    for(int i=0;i<g_no;i++){
+                        if(!g_sel_flags[i])continue;
+                        Img*im=img_find(g_obj[i].ii);
+                        if(g_obj[i].depth<sl)sl=g_obj[i].depth;
+                        int r=g_obj[i].depth+(im?im->w:0); if(r>sr)sr=r;
+                        if(g_obj[i].sy<st)st=g_obj[i].sy;
+                        int b=g_obj[i].sy+(im?im->h:0); if(b>sb)sb=b;
+                        any = true;
+                    }
+                    int mx1=0,mx2=0,my1=0,my2=0;
+                    if(module_selection_bounds(&mx1,&mx2,&my1,&my2)){
+                        if(mx1<sl)sl=mx1; if(mx2+1>sr)sr=mx2+1;
+                        if(my1<st)st=my1; if(my2+1>sb)sb=my2+1;
+                        any = true;
+                    }
+                    if(!any)return;
+                    int dx=horiz?((stg_w2-(sr-sl))/2-sl):0;
+                    int dy=horiz?0:((stg_h2-(sb-st))/2-st);
+                    if(dx==0&&dy==0)return;
+                    if(mod_sel_c>0){
+                        undo_save_ex("Center on Stage");
+                        for(int i=0;i<g_no;i++){
+                            if(!g_sel_flags[i])continue;
+                            g_obj[i].depth+=dx;
+                            g_obj[i].sy+=dy;
+                        }
+                        int moved_modules=module_selection_translate(dx,dy);
+                        if(sel_c>0||moved_modules>0){
+                            g_dirty=1; g_need_rebuild=1; g_view_changed=1;
+                        }
+                    } else {
+                        ObjectPositionUndoCapture undo;
+                        if(!object_position_undo_capture_selected(&undo))return;
+                        for(int i=0;i<g_no;i++){
+                            if(!g_sel_flags[i])continue;
+                            g_obj[i].depth+=dx;
+                            g_obj[i].sy+=dy;
+                        }
+                        if(object_position_undo_commit(&undo, "Center on Stage") > 0) g_need_rebuild=1;
+                    }
+                };
                 ImGui::SameLine(0, 6);
                 char ctr_tip[64];
-                snprintf(ctr_tip, sizeof ctr_tip, "Center selection on stage horizontally  (stage %d px wide)", stg_w2);
+                snprintf(ctr_tip, sizeof ctr_tip, "Center selection/highlighted modules horizontally  (stage %d px wide)", stg_w2);
                 if (tb_button("Ctr H", false, ctr_tip)) {
-                    ObjectPositionUndoCapture undo;
-                    if (object_position_undo_capture_selected(&undo)) {
-                        int sl=INT_MAX, sr=INT_MIN;
-                        for(int i=0;i<g_no;i++){if(!g_sel_flags[i])continue;Img*im=img_find(g_obj[i].ii);if(g_obj[i].depth<sl)sl=g_obj[i].depth;int r=g_obj[i].depth+(im?im->w:0);if(r>sr)sr=r;}
-                        int dx=(stg_w2-(sr-sl))/2-sl;
-                        for(int i=0;i<g_no;i++) if(g_sel_flags[i]) g_obj[i].depth+=dx;
-                        if (object_position_undo_commit(&undo, "Center on Stage") > 0) g_need_rebuild=1;
-                    }
+                    do_center_toolbar(true);
                 } ImGui::SameLine(0,2);
-                snprintf(ctr_tip, sizeof ctr_tip, "Center selection on stage vertically  (stage %d px tall)", stg_h2);
+                snprintf(ctr_tip, sizeof ctr_tip, "Center selection/highlighted modules vertically  (stage %d px tall)", stg_h2);
                 if (tb_button("Ctr V", false, ctr_tip)) {
-                    ObjectPositionUndoCapture undo;
-                    if (object_position_undo_capture_selected(&undo)) {
-                        int st=INT_MAX, sb=INT_MIN;
-                        for(int i=0;i<g_no;i++){if(!g_sel_flags[i])continue;Img*im=img_find(g_obj[i].ii);if(g_obj[i].sy<st)st=g_obj[i].sy;int b=g_obj[i].sy+(im?im->h:0);if(b>sb)sb=b;}
-                        int dy=(stg_h2-(sb-st))/2-st;
-                        for(int i=0;i<g_no;i++) if(g_sel_flags[i]) g_obj[i].sy+=dy;
-                        if (object_position_undo_commit(&undo, "Center on Stage") > 0) g_need_rebuild=1;
-                    }
+                    do_center_toolbar(false);
                 }
             }
         }

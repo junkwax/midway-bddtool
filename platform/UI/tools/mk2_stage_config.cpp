@@ -457,8 +457,123 @@ int stage_effective_preview_worldx(void)
     return g_stage_start_camera_enabled ? g_stage_start_camera_x : g_stage_preview_worldx;
 }
 
+static bool stage_is_flapjack_sidecar(void)
+{
+    return strcasecmp(g_stage_internal_name, "FLAPJACK") == 0;
+}
+
+static void stage_append_ps_string(char *out, size_t outsz, const char *arg)
+{
+    stage_append(out, outsz, "'");
+    for (const char *p = arg ? arg : ""; *p; p++) {
+        if (*p == '\'')
+            stage_append(out, outsz, "''");
+        else {
+            char one[2] = {*p, '\0'};
+            stage_append(out, outsz, one);
+        }
+    }
+    stage_append(out, outsz, "'");
+}
+
+static void stage_flapjack_project_path(const char *ext, char *out, size_t outsz)
+{
+    if (ext && ext[0]) {
+        char fname[96];
+        snprintf(fname, sizeof fname, "FLAPJACK%s", ext);
+        path_join(out, outsz, g_stage_dir, fname);
+        return;
+    }
+    path_join(out, outsz, g_stage_dir, "FLAPJACK");
+}
+
+static void stage_append_flapjack_copy(char *out, size_t outsz,
+                                       const char *src, const char *dst,
+                                       bool optional)
+{
+    if (optional) {
+        stage_append(out, outsz, "if (Test-Path -LiteralPath ");
+        stage_append_ps_string(out, outsz, src);
+        stage_append(out, outsz, ") { ");
+    }
+    stage_append(out, outsz, "Copy-Item -LiteralPath ");
+    stage_append_ps_string(out, outsz, src);
+    stage_append(out, outsz, " -Destination ");
+    stage_append_ps_string(out, outsz, dst);
+    stage_append(out, outsz, " -Force");
+    if (optional)
+        stage_append(out, outsz, " }");
+    stage_append(out, outsz, "; ");
+}
+
+static void stage_build_flapjack_command(const char *action, char *out, size_t outsz)
+{
+    char bdb[640], bdd[640], meta[640], lod[640];
+    char dst_bdb[640], dst_bdd[640], dst_meta[640], dst_lod[640], mk2_data[640];
+    const char *src_bdb = g_bdb_path[0] ? g_bdb_path : bdb;
+    const char *src_bdd = g_bdd_path[0] ? g_bdd_path : bdd;
+
+    stage_flapjack_project_path(".BDB", bdb, sizeof bdb);
+    stage_flapjack_project_path(".BDD", bdd, sizeof bdd);
+    stage_flapjack_project_path(".BDD.meta", meta, sizeof meta);
+    stage_flapjack_project_path(".LOD", lod, sizeof lod);
+
+    path_join(mk2_data, sizeof mk2_data, g_stage_mk2_root, "data");
+    path_join(dst_bdb, sizeof dst_bdb, mk2_data, "FLAPJACK.BDB");
+    path_join(dst_bdd, sizeof dst_bdd, mk2_data, "FLAPJACK.BDD");
+    path_join(dst_meta, sizeof dst_meta, mk2_data, "FLAPJACK.BDD.meta");
+    path_join(dst_lod, sizeof dst_lod, mk2_data, "FLAPJACK.LOD");
+
+    out[0] = '\0';
+    stage_append_arg(out, outsz, "powershell");
+    stage_append(out, outsz, " -NoProfile -ExecutionPolicy Bypass -Command \"");
+    stage_append(out, outsz, "$ErrorActionPreference='Stop'; ");
+
+    if (strcmp(action, "rebuild") == 0) {
+        stage_append(out, outsz, "& ");
+        stage_append_ps_string(out, outsz, "build-win\\Release\\bddtool.exe");
+        stage_append(out, outsz, " validate ");
+        stage_append_ps_string(out, outsz, src_bdb);
+        stage_append(out, outsz, " ");
+        stage_append_ps_string(out, outsz, src_bdd);
+        stage_append(out, outsz, "\"");
+        return;
+    }
+
+    stage_append_flapjack_copy(out, outsz, src_bdb, dst_bdb, false);
+    stage_append_flapjack_copy(out, outsz, src_bdd, dst_bdd, false);
+    stage_append_flapjack_copy(out, outsz, meta, dst_meta, true);
+    stage_append_flapjack_copy(out, outsz, lod, dst_lod, true);
+    stage_append(out, outsz, "Push-Location ");
+    stage_append_ps_string(out, outsz, g_stage_mk2_root);
+    stage_append(out, outsz, "; $env:ALLOW_STOCK_BG_DRIFT='1'; python build.py; ");
+    stage_append(out, outsz, "if ($LASTEXITCODE) { Pop-Location; exit $LASTEXITCODE }; ");
+
+    if (strcmp(action, "package") == 0) {
+        stage_append(out, outsz, "python makerom.py; if ($LASTEXITCODE) { Pop-Location; exit $LASTEXITCODE }; ");
+        stage_append(out, outsz, "python makevrom.py; if ($LASTEXITCODE) { Pop-Location; exit $LASTEXITCODE }; ");
+        stage_append(out, outsz, "python mamerom.py ");
+        stage_append_ps_string(out, outsz, g_stage_source_zip);
+        stage_append(out, outsz, " --source-video");
+        if (g_stage_no_install)
+            stage_append(out, outsz, " --no-install");
+        stage_append(out, outsz, "; ");
+    } else if (strcmp(action, "rom-preview") == 0) {
+        stage_append(out, outsz, "Write-Host ");
+        stage_append_ps_string(out, outsz, "FLAPJACK sidecar preview: run the packaged mk2.zip from rom\\test or your MAME rompath.");
+        stage_append(out, outsz, "; ");
+    }
+
+    stage_append(out, outsz, "Pop-Location\"");
+}
+
 void stage_build_command(const char *action, char *out, size_t outsz)
 {
+    if (stage_is_flapjack_sidecar()) {
+        stage_build_flapjack_command(action, out, outsz);
+        return;
+    }
+
     out[0] = '\0';
     stage_append_arg(out, outsz, "python");
     stage_append(out, outsz, " ");

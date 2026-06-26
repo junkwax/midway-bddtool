@@ -60,6 +60,7 @@ extern bool g_show_modules;
 extern bool g_preview_mode;
 extern bool g_gv_needs_autozoom;
 extern bool g_canvas_scrollbar_mouse_capture;
+extern bool g_module_bounds_mouse_capture;
 extern bool g_show_new;
 extern bool g_new_project_apply_allowed_after_discard;
 extern bool g_show_grid_set;

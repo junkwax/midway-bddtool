@@ -76,6 +76,7 @@ void mk2_collect_diag(Mk2Diag *d);
 int mk2_create_default_module(void);
 int mk2_first_unassigned_object(void);
 int mk2_select_unassigned_objects(void);
+int mk2_isolate_unassigned_objects(void);
 int mk2_include_unassigned_objects_in_modules(void);
 int mk2_include_object_in_nearest_module(int obj_idx);
 int mk2_fit_module_bounds_to_objects(void);

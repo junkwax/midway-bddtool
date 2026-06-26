@@ -4,15 +4,25 @@
 #include "bg_editor_globals.h"
 #include "Core/editor_project_storage.h"
 #include "Core/image_lookup.h"
+#include "Core/world_module_utils.h"
 #include "UI/sdl/sdl_object_drag_autopan.h"
 #include "UI/sdl/sdl_object_picker.h"
 #include "UI/sdl/sdl_selection_rect.h"
 #include "UI/sdl/sdl_tooltip.h"
 #include "undo_manager.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
+
+static std::vector<int> s_module_drag_x1;
+static std::vector<int> s_module_drag_x2;
+static std::vector<int> s_module_drag_y1;
+static std::vector<int> s_module_drag_y2;
+static std::vector<unsigned char> s_module_drag_mask;
+static std::vector<unsigned char> s_module_drag_obj_mask;
 
 static int first_selected_object(void)
 {
@@ -76,6 +86,26 @@ static int ensure_drag_capacity(BddSdlMouseState *state)
     return 1;
 }
 
+static int ensure_module_drag_capacity(BddSdlMouseState *state)
+{
+    if (!ensure_drag_capacity(state))
+        return 0;
+
+    int module_cap = editor_project_module_capacity();
+    if (module_cap < g_bdb_num_modules) module_cap = g_bdb_num_modules;
+    if (module_cap < 1) module_cap = 1;
+    if ((int)s_module_drag_x1.size() < module_cap) {
+        s_module_drag_x1.resize((size_t)module_cap, 0);
+        s_module_drag_x2.resize((size_t)module_cap, 0);
+        s_module_drag_y1.resize((size_t)module_cap, 0);
+        s_module_drag_y2.resize((size_t)module_cap, 0);
+        s_module_drag_mask.resize((size_t)module_cap, 0);
+    }
+    if ((int)s_module_drag_obj_mask.size() < state->obj_drag_capacity)
+        s_module_drag_obj_mask.resize((size_t)state->obj_drag_capacity, 0);
+    return 1;
+}
+
 static int hit_object_at(int wx, int wy, int skip_hidden, int skip_locked)
 {
     for (int i = g_no - 1; i >= 0; i--) {
@@ -85,6 +115,30 @@ static int hit_object_at(int wx, int wy, int skip_hidden, int skip_locked)
 
         if (skip_hidden && g_obj_hidden[i]) continue;
         if (skip_locked && g_obj_lock[i]) continue;
+        o = &g_obj[i];
+        im = img_find(o->ii);
+        if (!im) continue;
+
+        ox = o->depth;
+        oy = o->sy;
+        bdd_object_editor_origin(i, &ox, &oy);
+        if (bg_editor_object_hit_test_at(i, ox, oy, wx, wy))
+            return i;
+    }
+    return -1;
+}
+
+static int hit_selected_object_at(int wx, int wy)
+{
+    for (int i = g_no - 1; i >= 0; i--) {
+        int ox, oy;
+        Obj *o;
+        Img *im;
+
+        if (!g_sel_flags[i]) continue;
+        if (g_obj_hidden[i]) continue;
+        if (g_obj_lock[i]) continue;
+        if (object_in_locked_module(i)) continue;
         o = &g_obj[i];
         im = img_find(o->ii);
         if (!im) continue;
@@ -124,9 +178,91 @@ static int hit_module_at(int wx, int wy, int *ox1, int *ox2, int *oy1, int *oy2)
     return best;
 }
 
-/* Move the dragged module rectangle and every object inside it by the same
-   world delta. The undo snapshot and the member capture happen lazily on the
-   first real movement so a plain click on a module has no side effects. */
+/* Module rectangles are often large enough to cover most of a stage, so using
+   the full filled rect as a drag target makes object editing feel sticky.
+   Keep selection/context hits broad, but only start a module move from an edge
+   grab. */
+static int hit_module_drag_edge_at(int wx, int wy, int zoom,
+                                   int *ox1, int *ox2, int *oy1, int *oy2)
+{
+    int best = -1;
+    long best_area = 0;
+    int tol = 8;
+
+    if (!g_show_module_bounds) return -1;
+    if (zoom > 1)
+        tol = (tol + zoom - 1) / zoom;
+    if (tol < 1)
+        tol = 1;
+
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        if (!parse_module_bounds(m, NULL, &x1, &x2, &y1, &y2)) continue;
+        if (x2 < x1 || y2 < y1) continue;
+        if (wx < x1 - tol || wx > x2 + tol ||
+            wy < y1 - tol || wy > y2 + tol)
+            continue;
+        bool on_edge = (std::abs(wx - x1) <= tol || std::abs(wx - x2) <= tol ||
+                        std::abs(wy - y1) <= tol || std::abs(wy - y2) <= tol);
+        if (!on_edge) continue;
+
+        long area = (long)(x2 - x1 + 1) * (long)(y2 - y1 + 1);
+        if (best < 0 || area < best_area) {
+            best = m;
+            best_area = area;
+            if (ox1) *ox1 = x1;
+            if (ox2) *ox2 = x2;
+            if (oy1) *oy1 = y1;
+            if (oy2) *oy2 = y2;
+        }
+    }
+    return best;
+}
+
+static int begin_module_drag(BddSdlMouseState *state, int module_idx,
+                             int mouse_x, int mouse_y,
+                             int mx1, int mx2, int my1, int my2)
+{
+    if (!state || module_idx < 0 || module_idx >= g_bdb_num_modules)
+        return 0;
+    if (!ensure_module_drag_capacity(state))
+        return 0;
+
+    if (!module_selection_get(module_idx))
+        module_selection_select_only(module_idx);
+
+    std::fill(s_module_drag_mask.begin(), s_module_drag_mask.end(), 0);
+    int drag_count = 0;
+    for (int m = 0; m < g_bdb_num_modules && m < (int)s_module_drag_mask.size(); m++) {
+        int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        if (!module_selection_get(m)) continue;
+        if (module_is_locked_by_index(m)) continue;
+        if (!parse_module_bounds(m, NULL, &x1, &x2, &y1, &y2)) continue;
+        s_module_drag_mask[(size_t)m] = 1;
+        s_module_drag_x1[(size_t)m] = x1;
+        s_module_drag_x2[(size_t)m] = x2;
+        s_module_drag_y1[(size_t)m] = y1;
+        s_module_drag_y2[(size_t)m] = y2;
+        drag_count++;
+    }
+    if (drag_count <= 0)
+        return 0;
+
+    state->module_drag_idx = module_idx;
+    state->module_drag_ox = mouse_x;
+    state->module_drag_oy = mouse_y;
+    state->module_drag_x1 = mx1;
+    state->module_drag_x2 = mx2;
+    state->module_drag_y1 = my1;
+    state->module_drag_y2 = my2;
+    state->module_drag_undo_saved = 0;
+    return 1;
+}
+
+/* Move selected module rectangles, their member objects, and any separately
+   selected loose objects by the same world delta. The undo snapshot and target
+   capture happen lazily on the first real movement so a plain click on a
+   module has no side effects. */
 static void module_drag_apply(BddSdlMouseState *state, int mouse_x, int mouse_y, int zoom)
 {
     int m = state->module_drag_idx;
@@ -143,37 +279,69 @@ static void module_drag_apply(BddSdlMouseState *state, int mouse_x, int mouse_y,
     if (!state->module_drag_undo_saved) {
         if (dwx == 0 && dwy == 0)
             return;
-        if (!ensure_drag_capacity(state))
+        if (!ensure_module_drag_capacity(state))
             return;
-        undo_save_ex("Move Module");
-        editor_project_clear_selection();
+
+        std::fill(s_module_drag_obj_mask.begin(), s_module_drag_obj_mask.end(), 0);
         int first_member = -1;
+        int target_objects = 0;
+
+        for (int i = 0; i < g_no && i < state->obj_drag_capacity; i++) {
+            if (!g_sel_flags[i] || g_obj_lock[i])
+                continue;
+            Img *lim = img_find(g_obj[i].ii);
+            if (lim) {
+                int lm = module_smallest_containing(g_obj[i].depth, g_obj[i].sy, lim->w, lim->h);
+                if (lm >= 0 && module_is_locked_by_index(lm))
+                    continue;
+            }
+            s_module_drag_obj_mask[(size_t)i] = 1;
+        }
+
         for (int i = 0; i < g_no; i++) {
             Img *im = img_find(g_obj[i].ii);
             if (!im) continue;
-            if (assign_module(g_obj[i].depth, g_obj[i].sy, im->w, im->h) != m)
+            int assigned = assign_module(g_obj[i].depth, g_obj[i].sy, im->w, im->h);
+            if (assigned < 0 || assigned >= (int)s_module_drag_mask.size() ||
+                !s_module_drag_mask[(size_t)assigned])
                 continue;
-            g_sel_flags[i] = 1;
-            if (first_member < 0) first_member = i;
-            if (i < state->obj_drag_capacity) {
-                state->obj_drag_depth_a[i] = g_obj[i].depth;
-                state->obj_drag_sy_a[i] = g_obj[i].sy;
-            }
+            if (i < (int)s_module_drag_obj_mask.size())
+                s_module_drag_obj_mask[(size_t)i] = 1;
         }
-        g_hl_obj = first_member;
+
+        for (int i = 0; i < g_no && i < state->obj_drag_capacity; i++) {
+            if (!s_module_drag_obj_mask[(size_t)i]) continue;
+            if (first_member < 0) first_member = i;
+            state->obj_drag_depth_a[i] = g_obj[i].depth;
+            state->obj_drag_sy_a[i] = g_obj[i].sy;
+            target_objects++;
+        }
+
+        undo_save_ex((module_selection_count() > 1 || target_objects > 0)
+                     ? "Move Modules/Assets"
+                     : "Move Module");
+        if (first_member >= 0)
+            g_hl_obj = first_member;
         state->module_drag_undo_saved = 1;
     }
 
-    char name[64] = "";
-    if (parse_module_bounds(m, name, NULL, NULL, NULL, NULL)) {
+    for (int mi = 0; mi < g_bdb_num_modules && mi < (int)s_module_drag_mask.size(); mi++) {
+        char name[64] = "";
+        if (!s_module_drag_mask[(size_t)mi]) continue;
+        if (!parse_module_bounds(mi, name, NULL, NULL, NULL, NULL)) continue;
         char line[256];
         snprintf(line, sizeof line, "%s %d %d %d %d", name,
-                 state->module_drag_x1 + dwx, state->module_drag_x2 + dwx,
-                 state->module_drag_y1 + dwy, state->module_drag_y2 + dwy);
-        editor_project_set_module_line(m, line);
+                 s_module_drag_x1[(size_t)mi] + dwx,
+                 s_module_drag_x2[(size_t)mi] + dwx,
+                 s_module_drag_y1[(size_t)mi] + dwy,
+                 s_module_drag_y2[(size_t)mi] + dwy);
+        editor_project_set_module_line(mi, line);
     }
     for (int i = 0; i < g_no; i++) {
-        if (!g_sel_flags[i] || i >= state->obj_drag_capacity) continue;
+        if (i >= state->obj_drag_capacity ||
+            i >= (int)s_module_drag_obj_mask.size() ||
+            !s_module_drag_obj_mask[(size_t)i])
+            continue;
         g_obj[i].depth = state->obj_drag_depth_a[i] + dwx;
         g_obj[i].sy = state->obj_drag_sy_a[i] + dwy;
     }
@@ -397,11 +565,47 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
         if (g_have_bdb) {
             int wx2 = 0, wy2 = 0;
             int ctrl_down = (SDL_GetModState() & KMOD_CTRL) != 0;
+            int alt_down = (SDL_GetModState() & KMOD_ALT) != 0;
             int found_obj = 0;
 
             bdd_screen_to_world(bx, by, *view_x, *view_y, *zoom, &wx2, &wy2);
             state->obj_drag_idx = -1;
             state->obj_drag_use_position_delta = 0;
+
+            if (!ctrl_down && !alt_down) {
+                int selected_hit = hit_selected_object_at(wx2, wy2);
+                if (selected_hit >= 0) {
+                    state->obj_drag_use_position_delta = 1;
+                    start_drag_for_selected(state, selected_hit, bx, by);
+                    module_selection_clear();
+                    bdd_tooltip_free();
+                    return;
+                }
+            }
+
+            if (g_show_modules && g_show_module_bounds && !alt_down) {
+                int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+                int mhit = hit_module_at(wx2, wy2, &mx1, &mx2, &my1, &my2);
+                if (mhit >= 0 && ctrl_down) {
+                    module_selection_toggle(mhit);
+                    bdd_tooltip_free();
+                    return;
+                }
+                if (mhit >= 0 && module_is_locked_by_index(mhit)) {
+                    bdd_tooltip_free();
+                    return;
+                }
+                if (mhit >= 0) {
+                    if (!module_selection_get(mhit))
+                        module_selection_select_only(mhit);
+                    if (begin_module_drag(state, mhit, bx, by, mx1, mx2, my1, my2)) {
+                        SDL_CaptureMouse(SDL_TRUE);
+                        bdd_tooltip_free();
+                        return;
+                    }
+                }
+            }
+
             for (int i = g_no - 1; i >= 0; i--) {
                 Obj *o;
                 Img *im;
@@ -419,13 +623,13 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
                 if (!bg_editor_object_hit_test_at(i, ox, oy, wx2, wy2)) continue;
 
                 found_obj = 1;
-                if (ctrl_down && !(SDL_GetModState() & KMOD_ALT)) {
+                if (ctrl_down && !alt_down) {
                     toggle_object_selection_local(i);
                     bdd_tooltip_free();
                     return;
                 }
 
-                if (SDL_GetModState() & KMOD_ALT) {
+                if (alt_down) {
                     Obj src = *o;
                     bg_editor_set_action_label("Clone");
                     bg_editor_undo_save();
@@ -457,6 +661,8 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
                     editor_project_clear_selection();
                     g_sel_flags[i] = 1;
                 }
+                if (!(SDL_GetModState() & KMOD_ALT))
+                    module_selection_clear();
                 for (int si = 0; si < g_no; si++) {
                     if (g_sel_flags[si]) {
                         state->obj_drag_depth_a[si] = g_obj[si].depth;
@@ -468,22 +674,24 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
             }
 
             if (!found_obj) {
-                if (!ctrl_down) {
-                    int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
-                    int mhit = hit_module_at(wx2, wy2, &mx1, &mx2, &my1, &my2);
-                    if (mhit >= 0 && module_is_locked_by_index(mhit)) {
-                        bdd_tooltip_free();
-                        return;
-                    }
-                    if (mhit >= 0) {
-                        state->module_drag_idx = mhit;
-                        state->module_drag_ox = bx;
-                        state->module_drag_oy = by;
-                        state->module_drag_x1 = mx1;
-                        state->module_drag_x2 = mx2;
-                        state->module_drag_y1 = my1;
-                        state->module_drag_y2 = my2;
-                        state->module_drag_undo_saved = 0;
+                int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+                int mhit = hit_module_at(wx2, wy2, &mx1, &mx2, &my1, &my2);
+                if (mhit >= 0 && ctrl_down) {
+                    module_selection_toggle(mhit);
+                    bdd_tooltip_free();
+                    return;
+                }
+                bool module_mode = g_show_modules && g_show_module_bounds;
+                if (!module_mode)
+                    mhit = hit_module_drag_edge_at(wx2, wy2, *zoom, &mx1, &mx2, &my1, &my2);
+                if (mhit >= 0 && module_is_locked_by_index(mhit)) {
+                    bdd_tooltip_free();
+                    return;
+                }
+                if (mhit >= 0) {
+                    if (!module_selection_get(mhit))
+                        module_selection_select_only(mhit);
+                    if (begin_module_drag(state, mhit, bx, by, mx1, mx2, my1, my2)) {
                         SDL_CaptureMouse(SDL_TRUE);
                         bdd_tooltip_free();
                         return;

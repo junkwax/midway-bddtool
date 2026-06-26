@@ -1,5 +1,8 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
+#include "Core/editor_project_storage.h"
+#include "Core/project_header.h"
+#include "Core/world_module_utils.h"
 #include "undo_manager.h"
 #include "libs/stb_image_write.h"
 #include <imgui.h>
@@ -218,6 +221,451 @@ static int clone_game_preview_drag_targets(int hit)
     return new_hit;
 }
 
+enum GameViewModuleResizeHandle {
+    GV_MOD_HANDLE_NONE   = 0,
+    GV_MOD_HANDLE_LEFT   = 1 << 0,
+    GV_MOD_HANDLE_RIGHT  = 1 << 1,
+    GV_MOD_HANDLE_TOP    = 1 << 2,
+    GV_MOD_HANDLE_BOTTOM = 1 << 3
+};
+
+struct GameViewModuleRect {
+    int module_idx;
+    char name[64];
+    int x1, x2, y1, y2;
+    float sx1, sy1, sx2, sy2;
+    bool runtime;
+    bool locked;
+};
+
+static bool game_view_name_ieq(const char *a, const char *b)
+{
+    if (!a || !b) return false;
+    for (; *a && *b; a++, b++) {
+        char ca = *a;
+        char cb = *b;
+        if (ca >= 'a' && ca <= 'z') ca = (char)(ca - 32);
+        if (cb >= 'a' && cb <= 'z') cb = (char)(cb - 32);
+        if (ca != cb) return false;
+    }
+    return *a == *b;
+}
+
+static void game_view_strip_bmod_suffix(const char *name, char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (!name) return;
+    snprintf(out, out_sz, "%s", name);
+    size_t n = strlen(out);
+    if (n >= 4 && game_view_name_ieq(out + n - 4, "BMOD"))
+        out[n - 4] = '\0';
+}
+
+static int game_view_find_stage_plane(const char *module_name, int *ox, int *oy,
+                                      float *scroll, int *plane_idx)
+{
+    char want[64] = "";
+    game_view_strip_bmod_suffix(module_name, want, sizeof want);
+    if (!want[0])
+        return 0;
+
+    int n = bdd_stage_plane_count();
+    for (int p = 0; p < n; p++) {
+        char pn[64] = "";
+        int px = 0, py = 0;
+        float ps = 1.0f;
+        if (!bdd_stage_plane_info(p, pn, sizeof pn, &px, &py, &ps, NULL))
+            continue;
+        char plane_base[64] = "";
+        game_view_strip_bmod_suffix(pn, plane_base, sizeof plane_base);
+        if (!game_view_name_ieq(want, plane_base))
+            continue;
+        if (ox) *ox = px;
+        if (oy) *oy = py;
+        if (scroll) *scroll = ps;
+        if (plane_idx) *plane_idx = p;
+        return 1;
+    }
+    return 0;
+}
+
+static bool game_view_module_block_bounds(const char *module_name,
+                                          int *x1, int *x2,
+                                          int *y1, int *y2)
+{
+    static BddBgndBlock blocks[768];
+    int n = bdd_stage_module_blocks(module_name, blocks,
+                                    (int)(sizeof blocks / sizeof blocks[0]));
+    if (n <= 0)
+        return false;
+
+    int bx1 = INT_MAX, bx2 = INT_MIN;
+    int by1 = INT_MAX, by2 = INT_MIN;
+    for (int i = 0; i < n; i++) {
+        int hdr = blocks[i].hdr;
+        if (hdr < 0 || hdr >= g_ni)
+            continue;
+        Img *im = &g_img[hdr];
+        if (im->w <= 0 || im->h <= 0)
+            continue;
+        if (blocks[i].x < bx1) bx1 = blocks[i].x;
+        if (blocks[i].y < by1) by1 = blocks[i].y;
+        if (blocks[i].x + im->w > bx2) bx2 = blocks[i].x + im->w;
+        if (blocks[i].y + im->h > by2) by2 = blocks[i].y + im->h;
+    }
+    if (bx1 == INT_MAX || bx2 == INT_MIN || by1 == INT_MAX || by2 == INT_MIN)
+        return false;
+    if (x1) *x1 = bx1;
+    if (x2) *x2 = bx2;
+    if (y1) *y1 = by1;
+    if (y2) *y2 = by2;
+    return true;
+}
+
+static bool game_view_project_module_rect(int module_idx,
+                                          float gx, float gy, int zoom,
+                                          GameViewModuleRect *out)
+{
+    if (!out || module_idx < 0 || module_idx >= g_bdb_num_modules)
+        return false;
+
+    memset(out, 0, sizeof *out);
+    out->module_idx = module_idx;
+    if (!parse_module_bounds(module_idx, out->name, &out->x1, &out->x2,
+                             &out->y1, &out->y2))
+        return false;
+    if (out->x2 < out->x1 || out->y2 < out->y1)
+        return false;
+
+    int ox = 0;
+    int oy = 0;
+    int plane_idx = -1;
+    float scroll = 1.0f;
+    int local_w = out->x2 - out->x1 + 1;
+    int local_h = out->y2 - out->y1 + 1;
+    float z = (float)(zoom > 0 ? zoom : 1);
+    out->locked = module_is_locked(out->name);
+
+    out->runtime = game_view_find_stage_plane(out->name, &ox, &oy,
+                                              &scroll, &plane_idx) != 0;
+    if (out->runtime) {
+        int bx1 = 0, bx2 = local_w, by1 = 0, by2 = local_h;
+        int start_x = 0, start_y = 0;
+        int scroll_origin_x = 0;
+        bdd_get_stage_start_camera(&start_x, &start_y);
+        scroll_origin_x = start_x;
+        if (plane_idx >= 0)
+            bdd_stage_plane_scroll_origin(plane_idx, &scroll_origin_x);
+        if (!game_view_module_block_bounds(out->name, &bx1, &bx2, &by1, &by2)) {
+            bx1 = 0;
+            by1 = 0;
+            bx2 = local_w;
+            by2 = local_h;
+        }
+        int parallax = scroll_origin_x + (int)((float)(g_scroll_pos - start_x) * scroll);
+        out->sx1 = gx + (float)(ox + bx1 - parallax) * z;
+        out->sy1 = gy + (float)(oy + by1 - g_game_view_y) * z;
+        out->sx2 = gx + (float)(ox + bx2 - parallax) * z;
+        out->sy2 = gy + (float)(oy + by2 - g_game_view_y) * z;
+        return true;
+    }
+
+    out->sx1 = gx + (float)(out->x1 - g_scroll_pos) * z;
+    out->sy1 = gy + (float)(out->y1 - g_game_view_y) * z;
+    out->sx2 = out->sx1 + (float)local_w * z;
+    out->sy2 = out->sy1 + (float)local_h * z;
+    return true;
+}
+
+static void game_view_rewrite_module_bounds(int module_idx, const char *name,
+                                            int x1, int x2, int y1, int y2)
+{
+    if (module_idx < 0 || module_idx >= g_bdb_num_modules)
+        return;
+    if (x2 < x1) x2 = x1;
+    if (y2 < y1) y2 = y1;
+    char line[256];
+    snprintf(line, sizeof line, "%s %d %d %d %d",
+             (name && name[0]) ? name : "MOD", x1, x2, y1, y2);
+    if (!editor_project_set_module_line(module_idx, line))
+        return;
+    sync_bdb_header_counts();
+    g_dirty = 1;
+    g_view_changed = 1;
+}
+
+static int game_view_module_handle_at(const GameViewModuleRect *r, ImVec2 mouse,
+                                      float tol)
+{
+    if (!r) return GV_MOD_HANDLE_NONE;
+    if (mouse.x < r->sx1 - tol || mouse.x > r->sx2 + tol ||
+        mouse.y < r->sy1 - tol || mouse.y > r->sy2 + tol)
+        return GV_MOD_HANDLE_NONE;
+
+    float dl = fabsf(mouse.x - r->sx1);
+    float dr = fabsf(mouse.x - r->sx2);
+    float dt = fabsf(mouse.y - r->sy1);
+    float db = fabsf(mouse.y - r->sy2);
+    bool near_l = dl <= tol;
+    bool near_r = dr <= tol;
+    bool near_t = dt <= tol;
+    bool near_b = db <= tol;
+
+    int h = GV_MOD_HANDLE_NONE;
+    if (near_l && near_r)
+        h |= dl <= dr ? GV_MOD_HANDLE_LEFT : GV_MOD_HANDLE_RIGHT;
+    else if (near_l)
+        h |= GV_MOD_HANDLE_LEFT;
+    else if (near_r)
+        h |= GV_MOD_HANDLE_RIGHT;
+
+    if (near_t && near_b)
+        h |= dt <= db ? GV_MOD_HANDLE_TOP : GV_MOD_HANDLE_BOTTOM;
+    else if (near_t)
+        h |= GV_MOD_HANDLE_TOP;
+    else if (near_b)
+        h |= GV_MOD_HANDLE_BOTTOM;
+    return h;
+}
+
+static void game_view_set_resize_cursor(int handle)
+{
+    bool x = (handle & (GV_MOD_HANDLE_LEFT | GV_MOD_HANDLE_RIGHT)) != 0;
+    bool y = (handle & (GV_MOD_HANDLE_TOP | GV_MOD_HANDLE_BOTTOM)) != 0;
+    if (x && y) {
+        bool nwse = ((handle & GV_MOD_HANDLE_LEFT) && (handle & GV_MOD_HANDLE_TOP)) ||
+                    ((handle & GV_MOD_HANDLE_RIGHT) && (handle & GV_MOD_HANDLE_BOTTOM));
+        ImGui::SetMouseCursor(nwse ? ImGuiMouseCursor_ResizeNWSE
+                                   : ImGuiMouseCursor_ResizeNESW);
+    } else if (x) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    } else if (y) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    }
+}
+
+static void game_view_draw_module_handles(ImDrawList *dl,
+                                          const GameViewModuleRect *r,
+                                          ImU32 col)
+{
+    if (!dl || !r) return;
+    float cx = (r->sx1 + r->sx2) * 0.5f;
+    float cy = (r->sy1 + r->sy2) * 0.5f;
+    const float s = 4.0f;
+    ImVec2 pts[8] = {
+        ImVec2(r->sx1, r->sy1), ImVec2(cx, r->sy1), ImVec2(r->sx2, r->sy1),
+        ImVec2(r->sx1, cy),                         ImVec2(r->sx2, cy),
+        ImVec2(r->sx1, r->sy2), ImVec2(cx, r->sy2), ImVec2(r->sx2, r->sy2)
+    };
+    for (int i = 0; i < 8; i++) {
+        dl->AddRectFilled(ImVec2(pts[i].x - s, pts[i].y - s),
+                          ImVec2(pts[i].x + s, pts[i].y + s),
+                          IM_COL32(6, 10, 16, 220), 1.0f);
+        dl->AddRect(ImVec2(pts[i].x - s, pts[i].y - s),
+                    ImVec2(pts[i].x + s, pts[i].y + s),
+                    col, 1.0f, 0, 1.5f);
+    }
+}
+
+static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
+                                                 float gx, float gy,
+                                                 float gw, float gh,
+                                                 int zoom,
+                                                 ImVec2 mouse,
+                                                 bool hov,
+                                                 bool blocked)
+{
+    static bool s_resize = false;
+    static int  s_resize_mod = -1;
+    static int  s_resize_handle = GV_MOD_HANDLE_NONE;
+    static float s_resize_mouse_x = 0.0f;
+    static float s_resize_mouse_y = 0.0f;
+    static int s_resize_x1 = 0, s_resize_x2 = 0;
+    static int s_resize_y1 = 0, s_resize_y2 = 0;
+    static char s_resize_name[64] = "";
+    static bool s_resize_undo_saved = false;
+
+    if (!g_show_module_bounds || g_bdb_num_modules <= 0 || !dl) {
+        if (!ImGui::IsMouseDown(0)) {
+            s_resize = false;
+            s_resize_mod = -1;
+            s_resize_handle = GV_MOD_HANDLE_NONE;
+            s_resize_undo_saved = false;
+        }
+        return false;
+    }
+
+    std::vector<GameViewModuleRect> rects;
+    rects.reserve((size_t)g_bdb_num_modules);
+    int hot_mod = -1;
+    int hot_handle = GV_MOD_HANDLE_NONE;
+    long hot_area = 0;
+    float tol = 7.0f;
+    if (zoom > 2) tol = 8.0f;
+
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        GameViewModuleRect r;
+        if (!game_view_project_module_rect(m, gx, gy, zoom, &r))
+            continue;
+        if (r.sx2 < gx || r.sx1 > gx + gw || r.sy2 < gy || r.sy1 > gy + gh) {
+            rects.push_back(r);
+            continue;
+        }
+
+        int handle = (!blocked && hov && g_cur_tool == 0)
+            ? game_view_module_handle_at(&r, mouse, tol)
+            : GV_MOD_HANDLE_NONE;
+        if (handle != GV_MOD_HANDLE_NONE) {
+            long area = (long)(r.x2 - r.x1 + 1) * (long)(r.y2 - r.y1 + 1);
+            if (hot_mod < 0 || area < hot_area) {
+                hot_mod = m;
+                hot_handle = handle;
+                hot_area = area;
+            }
+        }
+        rects.push_back(r);
+    }
+
+    if (!s_resize && hot_mod >= 0 && !blocked && hov &&
+        g_cur_tool == 0 && ImGui::IsMouseClicked(0)) {
+        GameViewModuleRect *hot_rect = NULL;
+        for (size_t i = 0; i < rects.size(); i++) {
+            if (rects[i].module_idx == hot_mod) {
+                hot_rect = &rects[i];
+                break;
+            }
+        }
+        if (hot_rect && !hot_rect->locked) {
+            module_selection_select_only(hot_mod);
+            s_resize = true;
+            s_resize_mod = hot_mod;
+            s_resize_handle = hot_handle;
+            s_resize_mouse_x = mouse.x;
+            s_resize_mouse_y = mouse.y;
+            s_resize_x1 = hot_rect->x1;
+            s_resize_x2 = hot_rect->x2;
+            s_resize_y1 = hot_rect->y1;
+            s_resize_y2 = hot_rect->y2;
+            snprintf(s_resize_name, sizeof s_resize_name, "%s", hot_rect->name);
+            s_resize_undo_saved = false;
+        } else if (hot_rect && hot_rect->locked) {
+            stage_set_toast("Module is locked");
+        }
+    }
+
+    if (s_resize && ImGui::IsMouseDown(0)) {
+        int dx = (int)((mouse.x - s_resize_mouse_x) / (float)(zoom > 0 ? zoom : 1));
+        int dy = (int)((mouse.y - s_resize_mouse_y) / (float)(zoom > 0 ? zoom : 1));
+        if (g_grid_snap) {
+            if (g_grid_sx > 1)
+                dx = rounded_div_nearest(dx, g_grid_sx) * g_grid_sx;
+            if (g_grid_sy > 1)
+                dy = rounded_div_nearest(dy, g_grid_sy) * g_grid_sy;
+        }
+
+        int nx1 = s_resize_x1;
+        int nx2 = s_resize_x2;
+        int ny1 = s_resize_y1;
+        int ny2 = s_resize_y2;
+        if (s_resize_handle & GV_MOD_HANDLE_LEFT)   nx1 = s_resize_x1 + dx;
+        if (s_resize_handle & GV_MOD_HANDLE_RIGHT)  nx2 = s_resize_x2 + dx;
+        if (s_resize_handle & GV_MOD_HANDLE_TOP)    ny1 = s_resize_y1 + dy;
+        if (s_resize_handle & GV_MOD_HANDLE_BOTTOM) ny2 = s_resize_y2 + dy;
+        if (nx2 < nx1) {
+            if (s_resize_handle & GV_MOD_HANDLE_LEFT) nx1 = nx2;
+            else nx2 = nx1;
+        }
+        if (ny2 < ny1) {
+            if (s_resize_handle & GV_MOD_HANDLE_TOP) ny1 = ny2;
+            else ny2 = ny1;
+        }
+
+        if (nx1 != s_resize_x1 || nx2 != s_resize_x2 ||
+            ny1 != s_resize_y1 || ny2 != s_resize_y2) {
+            if (!s_resize_undo_saved) {
+                undo_save_ex("Resize Module Frame");
+                s_resize_undo_saved = true;
+            }
+            game_view_rewrite_module_bounds(s_resize_mod, s_resize_name,
+                                            nx1, nx2, ny1, ny2);
+        }
+    }
+
+    if (s_resize && !ImGui::IsMouseDown(0)) {
+        if (s_resize_undo_saved) {
+            char msg[128];
+            int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+            char name[64] = "";
+            if (parse_module_bounds(s_resize_mod, name, &x1, &x2, &y1, &y2)) {
+                snprintf(msg, sizeof msg, "Resized %s to %dx%d",
+                         name, x2 - x1 + 1, y2 - y1 + 1);
+                stage_set_toast(msg);
+            }
+        }
+        s_resize = false;
+        s_resize_mod = -1;
+        s_resize_handle = GV_MOD_HANDLE_NONE;
+        s_resize_undo_saved = false;
+    }
+
+    for (size_t i = 0; i < rects.size(); i++) {
+        const GameViewModuleRect &r = rects[i];
+        bool selected = module_selection_get(r.module_idx);
+        bool hot = (r.module_idx == hot_mod);
+        bool active = s_resize && r.module_idx == s_resize_mod;
+        ImU32 fill = r.locked ? IM_COL32(255, 150, 30, 18) :
+                    selected ? IM_COL32(255, 220, 60, 24) :
+                               IM_COL32(80, 130, 255, 13);
+        ImU32 line = r.locked ? IM_COL32(255, 165, 40, 225) :
+                    (hot || active) ? IM_COL32(110, 240, 255, 245) :
+                    selected ? IM_COL32(255, 230, 90, 235) :
+                               IM_COL32(130, 170, 255, 160);
+        float thick = (hot || active || selected) ? 2.2f : 1.3f;
+        dl->AddRectFilled(ImVec2(r.sx1, r.sy1), ImVec2(r.sx2, r.sy2), fill);
+        dl->AddRect(ImVec2(r.sx1, r.sy1), ImVec2(r.sx2, r.sy2), line, 0.0f, 0, thick);
+
+        if (selected || hot || active)
+            game_view_draw_module_handles(dl, &r, line);
+
+        if (selected || hot || active) {
+            char label[128];
+            snprintf(label, sizeof label, "%s%d %s  %dx%d%s",
+                     r.locked ? "[LOCKED] " : "", r.module_idx, r.name,
+                     r.x2 - r.x1 + 1, r.y2 - r.y1 + 1,
+                     r.runtime ? "" : " src");
+            ImVec2 ts = ImGui::CalcTextSize(label);
+            float lx = r.sx1 + 5.0f;
+            float ly = r.sy1 + 4.0f;
+            if (lx + ts.x + 8.0f > gx + gw)
+                lx = gx + gw - ts.x - 8.0f;
+            if (lx < gx + 3.0f) lx = gx + 3.0f;
+            if (ly + ts.y + 5.0f > gy + gh)
+                ly = gy + gh - ts.y - 5.0f;
+            if (ly < gy + 3.0f) ly = gy + 3.0f;
+            dl->AddRectFilled(ImVec2(lx - 3.0f, ly - 2.0f),
+                              ImVec2(lx + ts.x + 4.0f, ly + ts.y + 3.0f),
+                              IM_COL32(4, 7, 12, 195), 2.0f);
+            dl->AddText(ImVec2(lx, ly), r.locked ? IM_COL32(255, 210, 150, 245)
+                                                 : IM_COL32(230, 245, 255, 245),
+                        label);
+        }
+    }
+
+    if (s_resize) {
+        game_view_set_resize_cursor(s_resize_handle);
+        return true;
+    }
+    if (hot_mod >= 0 && !blocked && hov && g_cur_tool == 0) {
+        game_view_set_resize_cursor(hot_handle);
+        if (ImGui::IsMouseDown(0))
+            return true;
+        ImGui::SetTooltip("Drag module edge to resize; drag a corner to resize width and height.");
+        return true;
+    }
+    return false;
+}
+
 /* ---- export one 400x254 game view frame as PNG -------------------- */
 
 static void export_game_frame_png(int frame_n)
@@ -385,7 +833,93 @@ void draw_game_view_overlay(void)
         s_init_depth.assign((size_t)object_cap, 0);
         s_init_sy.assign((size_t)object_cap, 0);
     }
-    bool mouse_clicked = hov && ImGui::IsMouseClicked(0);
+
+    static bool  s_fighter_box_drag = false;
+    static float s_fighter_box_grab_x = 0.0f;
+    static float s_fighter_box_grab_y = 0.0f;
+    bool fighter_box_hover = false;
+    if (g_match_start_fighter_box_visible) {
+        if (g_match_start_fighter_box_w < 8) g_match_start_fighter_box_w = 8;
+        if (g_match_start_fighter_box_h < 16) g_match_start_fighter_box_h = 16;
+        if (g_match_start_fighter_box_w > 160) g_match_start_fighter_box_w = 160;
+        if (g_match_start_fighter_box_h > 240) g_match_start_fighter_box_h = 240;
+        if (g_match_start_fighter_box_x < 0) g_match_start_fighter_box_x = 0;
+        int max_box_x = 400 - g_match_start_fighter_box_w;
+        if (max_box_x < 0) max_box_x = 0;
+        if (g_match_start_fighter_box_x > max_box_x)
+            g_match_start_fighter_box_x = max_box_x;
+        int min_box_y = wy_min - g_match_start_fighter_box_h;
+        int max_box_y = wy_max;
+        if (max_box_y < min_box_y) max_box_y = min_box_y;
+        if (g_match_start_fighter_box_y < min_box_y)
+            g_match_start_fighter_box_y = min_box_y;
+        if (g_match_start_fighter_box_y > max_box_y)
+            g_match_start_fighter_box_y = max_box_y;
+
+        float z = (float)(g_zoom > 0 ? g_zoom : 1);
+        float bx1 = gx + (float)g_match_start_fighter_box_x * z;
+        float by1 = gy + (float)(g_match_start_fighter_box_y - g_game_view_y) * z;
+        float bx2 = bx1 + (float)g_match_start_fighter_box_w * z;
+        float by2 = by1 + (float)g_match_start_fighter_box_h * z;
+        fighter_box_hover = hov && mpos.x >= bx1 && mpos.x <= bx2 &&
+                            mpos.y >= by1 && mpos.y <= by2;
+
+        if (fighter_box_hover && ImGui::IsMouseClicked(0) && g_cur_tool == 0) {
+            s_fighter_box_drag = true;
+            s_fighter_box_grab_x = (mpos.x - bx1) / z;
+            s_fighter_box_grab_y = (mpos.y - by1) / z;
+        }
+        if (s_fighter_box_drag && ImGui::IsMouseDown(0)) {
+            int nx = (int)((mpos.x - gx) / z - s_fighter_box_grab_x);
+            int ny = g_game_view_y + (int)((mpos.y - gy) / z - s_fighter_box_grab_y);
+            if (nx < 0) nx = 0;
+            if (nx > max_box_x) nx = max_box_x;
+            if (ny < min_box_y) ny = min_box_y;
+            if (ny > max_box_y) ny = max_box_y;
+            g_match_start_fighter_box_x = nx;
+            g_match_start_fighter_box_y = ny;
+            g_stage_start_ground_y = g_match_start_fighter_box_y + g_match_start_fighter_box_h;
+            g_stage_start_ground_enabled = true;
+        }
+        if (!ImGui::IsMouseDown(0))
+            s_fighter_box_drag = false;
+
+        bx1 = gx + (float)g_match_start_fighter_box_x * z;
+        by1 = gy + (float)(g_match_start_fighter_box_y - g_game_view_y) * z;
+        bx2 = bx1 + (float)g_match_start_fighter_box_w * z;
+        by2 = by1 + (float)g_match_start_fighter_box_h * z;
+        ImU32 box_line = s_fighter_box_drag || fighter_box_hover
+                       ? IM_COL32(110, 240, 170, 245)
+                       : IM_COL32(110, 240, 170, 190);
+        dl->AddRectFilled(ImVec2(bx1, by1), ImVec2(bx2, by2),
+                          IM_COL32(50, 180, 120, 28));
+        dl->AddRect(ImVec2(bx1, by1), ImVec2(bx2, by2), box_line, 0.0f, 0, 2.0f);
+        dl->AddLine(ImVec2(gx, by2), ImVec2(gx + gw, by2),
+                    IM_COL32(110, 240, 170, 150), 1.0f);
+        char flabel[48];
+        snprintf(flabel, sizeof flabel, "Ground Y %d", g_stage_start_ground_y);
+        ImVec2 fs = ImGui::CalcTextSize(flabel);
+        float tx = bx2 + 5.0f;
+        if (tx + fs.x + 6.0f > gx + gw) tx = bx1 - fs.x - 9.0f;
+        if (tx < gx + 3.0f) tx = gx + 3.0f;
+        float ty = by2 - fs.y - 3.0f;
+        dl->AddRectFilled(ImVec2(tx - 3.0f, ty - 2.0f),
+                          ImVec2(tx + fs.x + 3.0f, ty + fs.y + 2.0f),
+                          IM_COL32(4, 14, 10, 185), 2.0f);
+        dl->AddText(ImVec2(tx, ty), IM_COL32(190, 255, 220, 245), flabel);
+        if (fighter_box_hover || s_fighter_box_drag)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    } else if (!ImGui::IsMouseDown(0)) {
+        s_fighter_box_drag = false;
+    }
+
+    bool fighter_box_blocks_mouse = fighter_box_hover || s_fighter_box_drag;
+    bool module_blocks_mouse =
+        draw_game_view_module_resize_overlay(dl, gx, gy, gw, gh, g_zoom,
+                                             mpos, hov, fighter_box_blocks_mouse);
+    g_module_bounds_mouse_capture = module_blocks_mouse;
+    bool mouse_clicked = hov && ImGui::IsMouseClicked(0) &&
+                         !fighter_box_blocks_mouse && !module_blocks_mouse;
     bool select_double_to_pan = false;
     if (mouse_clicked && g_cur_tool == 0) {
         select_double_to_pan = ImGui::IsMouseDoubleClicked(0);
@@ -569,7 +1103,7 @@ void draw_game_view_overlay(void)
     }
 
     /* hover highlight */
-    if (hov && !s_drag) {
+    if (hov && !s_drag && !fighter_box_blocks_mouse && !module_blocks_mouse) {
         int hi = hit_obj(mpos.x, mpos.y);
         if (hi >= 0 && !g_sel_flags[hi]) {
             Obj *o  = &g_obj[hi];
@@ -609,7 +1143,7 @@ void draw_game_view_overlay(void)
     }
 
     /* right-click context menu in game view for layer assignment */
-    if (hov && ImGui::IsMouseClicked(1) && !s_drag) {
+    if (hov && ImGui::IsMouseClicked(1) && !s_drag && !module_blocks_mouse) {
         int hit = hit_obj(mpos.x, mpos.y);
         if (hit >= 0) {
             if (!g_sel_flags[hit]) {

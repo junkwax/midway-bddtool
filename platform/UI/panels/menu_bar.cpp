@@ -2,10 +2,12 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/editor_commands.h"
+#include "Core/world_module_utils.h"
 #include "UI/sdl/sdl_object_picker.h"
 #include "UI/actions/object_position_undo.h"
 #include "imgui.h"
 #include "undo_manager.h"
+#include <sys/stat.h>
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
@@ -23,6 +25,14 @@ static int menu_bar_animation_metadata_count(void)
             count++;
     }
     return count;
+}
+
+static long long menu_bar_file_size(const char *path)
+{
+    if (!path || !path[0]) return -1;
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    return (long long)st.st_size;
 }
 
 static void menu_bar_diag_tooltip(const Mk2Diag *d, int hard, int cautions)
@@ -56,6 +66,37 @@ static void menu_bar_diag_tooltip(const Mk2Diag *d, int hard, int cautions)
     ImGui::EndTooltip();
 }
 
+static void menu_bar_size_tooltip(const Mk2Budget *b)
+{
+    if (!b) return;
+    long long bdb_sz = menu_bar_file_size(g_bdb_path);
+    long long bdd_sz = menu_bar_file_size(g_bdd_path);
+
+    ImGui::BeginTooltip();
+    ImGui::Text("Current map estimate: %.1f KB", b->estimated_payload / 1024.0);
+    ImGui::TextDisabled("pixels %.1f | palettes %.1f | tables %.1f KB",
+                        b->raw_image_bytes / 1024.0,
+                        (g_n_pals * 512.0) / 1024.0,
+                        ((g_ni * 32.0) + (g_no * 16.0) + 256.0) / 1024.0);
+    if (g_gate_payload_limit > 0) {
+        double gate_k = g_gate_payload_limit / 1024.0;
+        double delta_k = ((double)b->estimated_payload - (double)g_gate_payload_limit) / 1024.0;
+        ImGui::Separator();
+        if (delta_k > 0.0)
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.30f, 1.0f),
+                               "Gate: %.1f KB over by %.1f KB", gate_k, delta_k);
+        else
+            ImGui::TextColored(ImVec4(0.55f, 0.95f, 0.60f, 1.0f),
+                               "Gate: %.1f KB, %.1f KB free", gate_k, -delta_k);
+    }
+    if (bdb_sz >= 0 || bdd_sz >= 0) {
+        ImGui::Separator();
+        if (bdb_sz >= 0) ImGui::TextDisabled("BDB file: %.1f KB", bdb_sz / 1024.0);
+        if (bdd_sz >= 0) ImGui::TextDisabled("BDD file: %.1f KB", bdd_sz / 1024.0);
+    }
+    ImGui::EndTooltip();
+}
+
 static void draw_menu_bar_stage_info(void)
 {
     if (!g_name[0] && g_ni <= 0) return;
@@ -73,6 +114,7 @@ static void draw_menu_bar_stage_info(void)
     int hard = mk2_diag_hard_issues(&d);
     int cautions = mk2_diag_cautions(&d);
     int anim_meta = menu_bar_animation_metadata_count();
+    Mk2Budget budget = mk2_collect_budget();
 
     char build[48];
     if (hard > 0)
@@ -87,10 +129,14 @@ static void draw_menu_bar_stage_info(void)
     char anim[32] = "";
     if (anim_meta > 0)
         snprintf(anim, sizeof anim, "ANIM %d", anim_meta);
+    char size[32] = "";
+    if (g_ni > 0)
+        snprintf(size, sizeof size, "SIZE %.1fK", budget.estimated_payload / 1024.0);
 
     const float gap = 10.0f;
-    float total_w = ImGui::CalcTextSize(info).x + gap + ImGui::CalcTextSize(build).x +
-                    gap + ImGui::CalcTextSize(pal).x;
+    float total_w = ImGui::CalcTextSize(info).x;
+    if (size[0]) total_w += gap + ImGui::CalcTextSize(size).x;
+    total_w += gap + ImGui::CalcTextSize(build).x + gap + ImGui::CalcTextSize(pal).x;
     if (anim[0]) total_w += gap + ImGui::CalcTextSize(anim).x;
 
     float right = ImGui::GetWindowContentRegionMax().x;
@@ -101,6 +147,17 @@ static void draw_menu_bar_stage_info(void)
     if (g_dirty) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,0.8f,0.2f,1));
     ImGui::Text("%s", info);
     if (g_dirty) ImGui::PopStyleColor();
+
+    if (size[0]) {
+        ImGui::SameLine(0, gap);
+        ImVec4 size_col = (g_gate_payload_limit > 0 &&
+                           budget.estimated_payload > (size_t)g_gate_payload_limit)
+            ? ImVec4(1.0f, 0.45f, 0.30f, 1.0f)
+            : ImVec4(0.75f, 0.88f, 1.0f, 1.0f);
+        ImGui::TextColored(size_col, "%s", size);
+        if (ImGui::IsItemHovered())
+            menu_bar_size_tooltip(&budget);
+    }
 
     ImGui::SameLine(0, gap);
     ImVec4 build_col = hard > 0 ? ImVec4(1.0f, 0.34f, 0.22f, 1.0f) :
@@ -403,12 +460,13 @@ void MenuBarPanel::render()
                     sscanf(g_bdb_header, "%63s %d %d %d %d %d %d",
                            _nm, &stg_w, &stg_h, &_d, &_nm2, &_np, &_no);
                 }
-                bool can_ctr = has_sel && g_have_bdb;
+                bool can_ctr = g_have_bdb && (has_sel || module_selection_count() > 0);
                 if (ImGui::BeginMenu("Center on Stage", can_ctr)) {
                     auto do_center = [&](bool horiz, bool vert) {
-                        ObjectPositionUndoCapture undo;
-                        if (!object_position_undo_capture_selected(&undo)) return;
+                        if (module_selection_count() == 0 && selected_count() == g_no && g_no > 0)
+                            module_selection_set_all(true);
                         int sl = INT_MAX, sr = INT_MIN, st = INT_MAX, sb = INT_MIN;
+                        bool any = false;
                         for (int i = 0; i < g_no; i++) {
                             if (!g_sel_flags[i]) continue;
                             Img *im = img_find(g_obj[i].ii);
@@ -418,16 +476,44 @@ void MenuBarPanel::render()
                             if (r > sr) sr = r;
                             if (g_obj[i].sy < st) st = g_obj[i].sy;
                             if (b > sb) sb = b;
+                            any = true;
                         }
+                        int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+                        if (module_selection_bounds(&mx1, &mx2, &my1, &my2)) {
+                            if (mx1 < sl) sl = mx1;
+                            if (mx2 + 1 > sr) sr = mx2 + 1;
+                            if (my1 < st) st = my1;
+                            if (my2 + 1 > sb) sb = my2 + 1;
+                            any = true;
+                        }
+                        if (!any) return;
                         int dx = horiz ? ((stg_w - (sr - sl)) / 2 - sl) : 0;
                         int dy = vert  ? ((stg_h - (sb - st)) / 2 - st) : 0;
-                        for (int i = 0; i < g_no; i++) {
-                            if (!g_sel_flags[i]) continue;
-                            if (horiz) g_obj[i].depth += dx;
-                            if (vert)  g_obj[i].sy    += dy;
+                        if (dx == 0 && dy == 0) return;
+                        if (module_selection_count() > 0) {
+                            undo_save_ex("Center on Stage");
+                            for (int i = 0; i < g_no; i++) {
+                                if (!g_sel_flags[i]) continue;
+                                g_obj[i].depth += dx;
+                                g_obj[i].sy += dy;
+                            }
+                            int moved_modules = module_selection_translate(dx, dy);
+                            if (has_sel || moved_modules > 0) {
+                                g_dirty = 1;
+                                g_need_rebuild = 1;
+                                g_view_changed = 1;
+                            }
+                        } else {
+                            ObjectPositionUndoCapture undo;
+                            if (!object_position_undo_capture_selected(&undo)) return;
+                            for (int i = 0; i < g_no; i++) {
+                                if (!g_sel_flags[i]) continue;
+                                g_obj[i].depth += dx;
+                                g_obj[i].sy += dy;
+                            }
+                            if (object_position_undo_commit(&undo, "Center on Stage") > 0)
+                                g_need_rebuild = 1;
                         }
-                        if (object_position_undo_commit(&undo, "Center on Stage") > 0)
-                            g_need_rebuild = 1;
                     };
                     if (ImGui::MenuItem("Center Horizontally")) do_center(true,  false);
                     if (ImGui::MenuItem("Center Vertically"))   do_center(false, true);
@@ -440,13 +526,21 @@ void MenuBarPanel::render()
             if (ImGui::MenuItem("Select All",     "Ctrl+A", false, g_have_bdb && g_no > 0)) {
                 int sel_n = 0;
                 for (int i = 0; i < g_no; i++) if (g_sel_flags[i]) sel_n++;
-                int val = (sel_n == g_no) ? 0 : 1;
+                int mod_sel_n = module_selection_count();
+                int val = (sel_n == g_no && mod_sel_n == g_bdb_num_modules) ? 0 : 1;
                 for (int i = 0; i < g_no; i++) g_sel_flags[i] = val;
+                module_selection_set_all(val != 0);
+                g_show_module_bounds = val != 0;
             }
-            if (ImGui::MenuItem("Invert Selection","Ctrl+I", false, g_have_bdb && g_no > 0))
+            if (ImGui::MenuItem("Invert Selection","Ctrl+I", false, g_have_bdb && g_no > 0)) {
                 for (int i = 0; i < g_no; i++) g_sel_flags[i] ^= 1;
-            if (ImGui::MenuItem("Deselect All",   "Escape",  false, has_sel))
+                for (int m = 0; m < g_bdb_num_modules; m++)
+                    module_selection_toggle(m);
+            }
+            if (ImGui::MenuItem("Deselect All",   "Escape",  false, has_sel || module_selection_count() > 0)) {
                 editor_project_clear_selection();
+                module_selection_clear();
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Delete Unused Images", NULL, false, g_ni > 0)) {
                 delete_unused_images_impl(false, "Delete Unused Images");
@@ -758,6 +852,8 @@ void MenuBarPanel::render()
         if (ImGui::BeginMenu("Help")) {
             if (ImGui::MenuItem("Keyboard Shortcuts", "F1"))
                 g_show_help = true;
+            if (ImGui::MenuItem("Quick Size Audit", NULL, false, g_have_bdb && g_ni > 0))
+                open_quick_size_audit();
             if (ImGui::MenuItem("Debug Info", "F9", g_show_debug_info))
                 g_show_debug_info = !g_show_debug_info;
             if (ImGui::MenuItem("About"))

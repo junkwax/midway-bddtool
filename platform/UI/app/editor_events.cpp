@@ -1,5 +1,6 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
+#include "Core/world_module_utils.h"
 #include "UI/sdl/sdl_object_picker.h"
 #include "undo_manager.h"
 
@@ -122,16 +123,21 @@ void bg_editor_process_event(SDL_Event *event)
             return;
         }
         if (ctrl && event->key.keysym.sym == SDLK_a && g_have_bdb && g_no > 0) {
-            /* Ctrl+A: select all (or deselect all if all already selected) */
+            /* Ctrl+A: select all assets/modules, or deselect all if all are already selected. */
             int sel_n = 0;
             for (int i = 0; i < g_no; i++) if (g_sel_flags[i]) sel_n++;
-            int val = (sel_n == g_no) ? 0 : 1;
+            int mod_sel_n = module_selection_count();
+            int val = (sel_n == g_no && mod_sel_n == g_bdb_num_modules) ? 0 : 1;
             for (int i = 0; i < g_no; i++) g_sel_flags[i] = val;
+            module_selection_set_all(val != 0);
+            g_show_module_bounds = val != 0;
             return;
         }
         if (ctrl && event->key.keysym.sym == SDLK_i && g_have_bdb && g_no > 0) {
             /* Ctrl+I: invert selection */
             for (int i = 0; i < g_no; i++) g_sel_flags[i] ^= 1;
+            for (int m = 0; m < g_bdb_num_modules; m++)
+                module_selection_toggle(m);
             return;
         }
         if (!ctrl && event->key.keysym.sym == SDLK_ESCAPE && !ImGui::IsPopupOpen("")) {
@@ -139,8 +145,9 @@ void bg_editor_process_event(SDL_Event *event)
             if (g_have_bdb) {
                 int had = 0;
                 for (int i = 0; i < g_no; i++) if (g_sel_flags[i]) { had = 1; break; }
-                if (had) {
+                if (had || module_selection_count() > 0) {
                     editor_project_clear_selection();
+                    module_selection_clear();
                     g_hl_obj = -1;
                     return;
                 }

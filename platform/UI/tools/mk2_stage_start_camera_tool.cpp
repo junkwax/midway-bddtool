@@ -20,8 +20,10 @@ void draw_mk2_stage_start_camera_tool(void)
             g_stage_start_camera_x = parsed_x;
             g_stage_start_camera_y = parsed_y;
         }
-        if (parsed_ground_ok)
+        if (parsed_ground_ok) {
             g_stage_start_ground_y = parsed_ground;
+            g_match_start_fighter_box_y = g_stage_start_ground_y - g_match_start_fighter_box_h;
+        }
     }
 
     ImGui::Text("Match Start Placement");
@@ -48,8 +50,11 @@ void draw_mk2_stage_start_camera_tool(void)
 
     ImGui::Separator();
     ImGui::Checkbox("Use custom fighter ground Y", &g_stage_start_ground_enabled);
+    int old_ground_y = g_stage_start_ground_y;
     ImGui::SetNextItemWidth(110.0f);
     ImGui::InputInt("Fighter Ground Y", &g_stage_start_ground_y);
+    if (old_ground_y != g_stage_start_ground_y)
+        g_match_start_fighter_box_y = g_stage_start_ground_y - g_match_start_fighter_box_h;
     if (parsed_ground_ok)
         ImGui::TextDisabled("BGND fighter ground Y: %d", parsed_ground);
     else
@@ -63,6 +68,7 @@ void draw_mk2_stage_start_camera_tool(void)
         if (parsed_ground_ok) {
             g_stage_start_ground_y = parsed_ground;
             g_stage_start_ground_enabled = true;
+            g_match_start_fighter_box_y = g_stage_start_ground_y - g_match_start_fighter_box_h;
         }
         stage_set_toast((parsed_cam_ok || parsed_ground_ok)
                         ? "Loaded BGND match start values"

@@ -144,18 +144,42 @@ static bool mk2_copy_file_unique(const char *src, const char *suffix, char *back
     if (backup_out && backup_outsz) backup_out[0] = '\0';
     FILE *in = fopen(src, "rb");
     if (!in) return false;
+    const char *base_suffix = (suffix && suffix[0]) ? suffix : ".bak";
     char dst[640];
     bool found = false;
     for (int i = 0; i < 100 && !found; i++) {
         char unique_suffix[128];
-        if (i == 0) snprintf(unique_suffix, sizeof unique_suffix, "%s", suffix ? suffix : ".bak");
-        else snprintf(unique_suffix, sizeof unique_suffix, "%s.%d", suffix ? suffix : ".bak", i);
+        if (i == 0) snprintf(unique_suffix, sizeof unique_suffix, "%s", base_suffix);
+        else snprintf(unique_suffix, sizeof unique_suffix, "%s.%d", base_suffix, i);
         if (!bddtool_backup_path(dst, sizeof dst, src, unique_suffix, "asm")) {
             fclose(in);
             return false;
         }
         if (!stage_file_exists(dst))
             found = true;
+    }
+    if (!found) {
+        char stamp[32] = ".next";
+        time_t now = time(NULL);
+        struct tm tmv = {};
+#ifdef _WIN32
+        if (localtime_s(&tmv, &now) == 0)
+#else
+        if (localtime_r(&now, &tmv))
+#endif
+            strftime(stamp, sizeof stamp, ".%Y%m%d_%H%M%S", &tmv);
+
+        for (int i = 0; i < 10000 && !found; i++) {
+            char unique_suffix[128];
+            if (i == 0) snprintf(unique_suffix, sizeof unique_suffix, "%s%s", base_suffix, stamp);
+            else snprintf(unique_suffix, sizeof unique_suffix, "%s%s.%d", base_suffix, stamp, i);
+            if (!bddtool_backup_path(dst, sizeof dst, src, unique_suffix, "asm")) {
+                fclose(in);
+                return false;
+            }
+            if (!stage_file_exists(dst))
+                found = true;
+        }
     }
     if (!found) { fclose(in); return false; }
     FILE *out = fopen(dst, "wb");
@@ -312,10 +336,9 @@ static bool mk2_replace_or_insert_palette_block(std::vector<std::string> &lines,
 static void mk2_palette_sync_remove_stale_outputs(const char *bgnpal, int *removed);
 
 /* Background-palette region budget. The pristine shipped BGNDPAL assembles to
-   ~18.8 KB; its .DATA links into the shared ROM region ahead of the address-
-   fixed REVX/MK8MIL movie space, which has no headroom. We flag well before
-   that: this soft cap leaves room for a handful of genuinely new stage palettes
-   but catches runaway duplication (the failure that overran ARMORY). */
+   ~18.8 KB; its .DATA links into the program-ROM palette window next to the
+   already-packed MK8MIL movie payload. FLAPJACK art is promoted through its
+   video-ROM sidecar, but shared palette tables still need this cap. */
 #define MK2_BGNDPAL_BUDGET_BYTES 32768
 
 static long mk2_asm_word_value(const std::string &tok)
@@ -332,8 +355,8 @@ static long mk2_asm_word_value(const std::string &tok)
 }
 
 /* Assembled data size of BGNDPAL.ASM: each .word value = 2 bytes, .long = 4.
-   The whole file is .DATA, so this equals the BGNDPAL.OBJ footprint competing
-   for ROM space ahead of the reserved REVX/MK8MIL region. */
+   The whole file is .DATA, so this equals the BGNDPAL.OBJ footprint in the
+   program-ROM palette window next to the already-packed MK8MIL payload. */
 static long mk2_bgndpal_assembled_bytes(const std::vector<std::string> &lines)
 {
     long bytes = 0;
@@ -579,6 +602,24 @@ static void mk2_palette_sync_stage_key(char *out, size_t outsz)
     mk2_sync_uppercase_ascii_inplace(out);
 }
 
+static void mk2_sync_project_basename_key(char *out, size_t outsz)
+{
+    if (!out || outsz == 0) return;
+    out[0] = '\0';
+    if (!g_bdb_path[0] && !g_bdd_path[0]) return;
+    mk2_sync_stage_basename_no_ext(g_bdb_path[0] ? g_bdb_path : g_bdd_path, out, outsz);
+    mk2_sync_uppercase_ascii_inplace(out);
+}
+
+static void mk2_push_unique_ci(std::vector<std::string> &list, const std::string &value)
+{
+    if (value.empty()) return;
+    for (const std::string &old : list)
+        if (mk2_string_eq_ci(old, value))
+            return;
+    list.push_back(value);
+}
+
 static bool mk2_palette_sync_infer_table_from_bgndtbl(const char *bgnpal, char *out, size_t outsz)
 {
     out[0] = '\0';
@@ -586,20 +627,41 @@ static bool mk2_palette_sync_infer_table_from_bgndtbl(const char *bgnpal, char *
     if (!mk2_palette_sync_bgndtbl_for_bgnpal(bgnpal, tbl, sizeof tbl))
         return false;
 
-    std::vector<std::string> wanted;
+    std::vector<std::string> wanted_blks;
+    std::vector<std::string> wanted_bmods;
     for (int i = 0; i < g_bdb_num_modules; i++) {
         char mod[64] = "";
         if (sscanf(g_bdb_modules[i], "%63s", mod) == 1 && mod[0]) {
             std::string w = mod;
             w += "BLKS";
-            wanted.push_back(w);
+            mk2_push_unique_ci(wanted_blks, w);
+            w = mod;
+            w += "BMOD";
+            mk2_push_unique_ci(wanted_bmods, w);
         }
     }
-    if (wanted.empty()) return false;
+    char stage_key[96] = "";
+    mk2_palette_sync_stage_key(stage_key, sizeof stage_key);
+    if (stage_key[0]) {
+        mk2_push_unique_ci(wanted_blks, std::string(stage_key) + "BLKS");
+        mk2_push_unique_ci(wanted_bmods, std::string(stage_key) + "BMOD");
+    }
+    char file_key[96] = "";
+    mk2_sync_project_basename_key(file_key, sizeof file_key);
+    if (file_key[0]) {
+        mk2_push_unique_ci(wanted_blks, std::string(file_key) + "BLKS");
+        mk2_push_unique_ci(wanted_bmods, std::string(file_key) + "BMOD");
+    }
+    if (wanted_blks.empty() && wanted_bmods.empty()) return false;
 
     std::vector<std::string> lines;
     if (!mk2_read_text_lines(tbl, lines)) return false;
+    std::string current_label;
     for (const std::string &line_raw : lines) {
+        std::string label;
+        if (mk2_label_name_from_line(line_raw, &label))
+            current_label = label;
+
         std::string line = line_raw;
         size_t semi = line.find(';');
         if (semi != std::string::npos) line.resize(semi);
@@ -619,8 +681,14 @@ static bool mk2_palette_sync_infer_table_from_bgndtbl(const char *bgnpal, char *
             start = comma + 1;
         }
         if (tok.size() < 3) continue;
-        for (const std::string &w : wanted) {
+        for (const std::string &w : wanted_blks) {
             if (mk2_string_eq_ci(tok[0], w)) {
+                snprintf(out, outsz, "%s", tok[2].c_str());
+                return true;
+            }
+        }
+        for (const std::string &w : wanted_bmods) {
+            if (mk2_string_eq_ci(current_label, w)) {
                 snprintf(out, outsz, "%s", tok[2].c_str());
                 return true;
             }
@@ -766,32 +834,33 @@ static bool mk2_palette_sync_current_matches(const char *bgnpal, const char *tab
     return true;
 }
 
-static bool mk2_palette_sync_apply(const char *bgnpal, const char *table_label,
-                                   char *status, size_t statussz)
+static bool mk2_palette_sync_build_candidate(const char *bgnpal, const char *table_label,
+                                             std::vector<std::string> &lines,
+                                             bool *changed_out,
+                                             char *status, size_t statussz)
 {
     if (status && statussz) status[0] = '\0';
-    g_mk2_palette_sync_output[0] = '\0';
+    lines.clear();
+    if (changed_out) *changed_out = false;
     if (!bgnpal || !bgnpal[0] || !stage_file_exists(bgnpal)) {
-        snprintf(status, statussz, "BGNDPAL.ASM path is missing.");
+        if (status && statussz) snprintf(status, statussz, "BGNDPAL.ASM path is missing.");
         return false;
     }
     if (!table_label || !table_label[0]) {
-        snprintf(status, statussz, "Palette table label is missing.");
+        if (status && statussz) snprintf(status, statussz, "Palette table label is missing.");
         return false;
     }
     if (g_n_pals <= 0) {
-        snprintf(status, statussz, "Current BDD has no palettes to sync.");
+        if (status && statussz) snprintf(status, statussz, "Current BDD has no palettes to sync.");
         return false;
     }
-
-    std::vector<std::string> lines;
     if (!mk2_read_text_lines(bgnpal, lines)) {
-        snprintf(status, statussz, "Could not read %s", bgnpal);
+        if (status && statussz) snprintf(status, statussz, "Could not read %s", bgnpal);
         return false;
     }
     int table_start = mk2_find_label_line(lines, table_label);
     if (table_start < 0) {
-        snprintf(status, statussz, "Palette table %s was not found.", table_label);
+        if (status && statussz) snprintf(status, statussz, "Palette table %s was not found.", table_label);
         return false;
     }
 
@@ -837,6 +906,35 @@ static bool mk2_palette_sync_apply(const char *bgnpal, const char *table_label,
         changed = true;
     }
 
+    if (changed_out) *changed_out = changed;
+    return true;
+}
+
+static bool mk2_palette_sync_projected_bytes(const char *bgnpal, const char *table_label,
+                                             long *bytes_out, bool *changed_out)
+{
+    std::vector<std::string> lines;
+    bool changed = false;
+    char status[256];
+    if (!mk2_palette_sync_build_candidate(bgnpal, table_label, lines, &changed,
+                                          status, sizeof status))
+        return false;
+    if (bytes_out) *bytes_out = mk2_bgndpal_assembled_bytes(lines);
+    if (changed_out) *changed_out = changed;
+    return true;
+}
+
+static bool mk2_palette_sync_apply(const char *bgnpal, const char *table_label,
+                                   char *status, size_t statussz)
+{
+    if (status && statussz) status[0] = '\0';
+    g_mk2_palette_sync_output[0] = '\0';
+    std::vector<std::string> lines;
+    bool changed = false;
+    if (!mk2_palette_sync_build_candidate(bgnpal, table_label, lines, &changed,
+                                          status, statussz))
+        return false;
+
     if (!changed) {
         snprintf(status, statussz, "Runtime palette table is already synced.");
         snprintf(g_mk2_palette_sync_output, sizeof g_mk2_palette_sync_output,
@@ -847,14 +945,17 @@ static bool mk2_palette_sync_apply(const char *bgnpal, const char *table_label,
 
     long assembled = mk2_bgndpal_assembled_bytes(lines);
     if (assembled > MK2_BGNDPAL_BUDGET_BYTES && !g_mk2_palette_allow_over_budget) {
+        long over_by = assembled - MK2_BGNDPAL_BUDGET_BYTES;
         snprintf(status, statussz,
-                 "Refused: BGNDPAL.ASM would assemble to %ld bytes (budget %d). This "
-                 "risks overrunning the reserved REVX/MK8MIL ROM space. Run \"Compact "
-                 "duplicates\" first, or enable the over-budget override.",
-                 assembled, MK2_BGNDPAL_BUDGET_BYTES);
+                 "Refused: BGNDPAL.ASM would assemble to %ld bytes (budget %d, over by "
+                 "%ld). This risks growing program-ROM palette data into the "
+                 "already-packed MK8MIL movie payload. Run "
+                 "\"Compact duplicates\" first, reduce palette colours, or enable the "
+                 "over-budget override.",
+                 assembled, MK2_BGNDPAL_BUDGET_BYTES, over_by);
         snprintf(g_mk2_palette_sync_output, sizeof g_mk2_palette_sync_output,
-                 "Not written. Assembled palette data %ld bytes exceeds the %d-byte budget.",
-                 assembled, MK2_BGNDPAL_BUDGET_BYTES);
+                 "Not written. Assembled palette data %ld bytes exceeds the %d-byte budget by %ld bytes.",
+                 assembled, MK2_BGNDPAL_BUDGET_BYTES, over_by);
         return false;
     }
 
@@ -979,9 +1080,32 @@ void draw_mk2_palette_sync_prompt(void)
                                    bytes / 1024.0, MK2_BGNDPAL_BUDGET_BYTES / 1024.0,
                                    over ? "   OVER BUDGET" : "");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("BGNDPAL.ASM links ahead of the reserved REVX/MK8MIL ROM\n"
-                                      "space. Duplicate palette blocks across stages bloat this\n"
-                                      "and overrun that region (the failure that broke ARMORY).");
+                    ImGui::SetTooltip("BGNDPAL.ASM is program-ROM palette data near the packed MK8MIL\n"
+                                      "movie payload. FLAPJACK art stays in its video-ROM sidecar,\n"
+                                      "but duplicate shared palettes can still bloat this table.");
+                long projected_bytes = 0;
+                bool projected_changed = false;
+                bool projected_ok = g_mk2_palette_sync_table[0] && g_n_pals > 0 &&
+                    mk2_palette_sync_projected_bytes(g_mk2_palette_sync_asm,
+                                                     g_mk2_palette_sync_table,
+                                                     &projected_bytes,
+                                                     &projected_changed);
+                bool projected_over = projected_ok &&
+                    projected_bytes > MK2_BGNDPAL_BUDGET_BYTES;
+                if (projected_ok && projected_changed && projected_bytes != bytes) {
+                    long projected_over_by = projected_bytes - MK2_BGNDPAL_BUDGET_BYTES;
+                    long projected_delta = projected_over ? projected_over_by : -projected_over_by;
+                    ImGui::TextColored(projected_over ? ImVec4(1.0f, 0.45f, 0.30f, 1.0f)
+                                                      : ImVec4(0.55f, 0.85f, 1.0f, 1.0f),
+                                       "After sync: %.1f / %.1f KB%s%ld bytes",
+                                       projected_bytes / 1024.0,
+                                       MK2_BGNDPAL_BUDGET_BYTES / 1024.0,
+                                       projected_over ? "   OVER by " : "   under by ",
+                                       projected_delta);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Projected size after replacing %s with the current BDD palettes.",
+                                          g_mk2_palette_sync_table);
+                }
                 if (ImGui::Button("Compact duplicates", ImVec2(160, 0))) {
                     int n = mk2_bgndpal_compact(g_mk2_palette_sync_asm,
                                                 g_mk2_palette_sync_status,
@@ -993,11 +1117,11 @@ void draw_mk2_palette_sync_prompt(void)
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Remove palette blocks with identical colours and repoint every\n"
                                       "*PALS table to the survivor. Makes a .pre_bgndpal_compact backup.");
-                if (over) {
+                if (over || projected_over) {
                     ImGui::SameLine();
                     ImGui::Checkbox("Override budget", &g_mk2_palette_allow_over_budget);
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Write past the budget anyway. Only if you know the ROM has room.");
+                        ImGui::SetTooltip("Write past the budget anyway. Use only after a ROM build/map check confirms this stage has room.");
                 }
             }
         }
@@ -1672,6 +1796,179 @@ static bool bgnd_find_exact_label_line(const std::vector<std::string> &lines,
     return false;
 }
 
+static bool bgnd_label_ends_with_ci(const std::string &label, const char *suffix)
+{
+    if (!suffix) return false;
+    size_t n = label.size();
+    size_t s = strlen(suffix);
+    return n >= s && mk2_sync_strcasecmp(label.c_str() + n - s, suffix) == 0;
+}
+
+static bool bgnd_block_scroll_label(const std::vector<std::string> &lines,
+                                    int block_line, std::string *scroll_label)
+{
+    if (scroll_label) scroll_label->clear();
+    if (block_line < 0) return false;
+    int long_count = 0;
+    for (int i = block_line + 1; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL))
+            break;
+        std::string tok = bgnd_directive_token(lines[(size_t)i], ".long");
+        if (tok.empty()) continue;
+        long_count++;
+        if (long_count == 2) {
+            if (scroll_label) *scroll_label = tok;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool bgnd_find_first_mod_block_with_scroll(const std::vector<std::string> &lines,
+                                                  char *label_out, size_t label_sz,
+                                                  int *line_out,
+                                                  std::string *scroll_label)
+{
+    for (int i = 0; i < (int)lines.size(); i++) {
+        std::string label;
+        if (!stage_start_asm_label_line(lines[(size_t)i], &label))
+            continue;
+        if (!bgnd_label_ends_with_ci(label, "_mod"))
+            continue;
+        std::string scroll;
+        if (!bgnd_block_scroll_label(lines, i, &scroll))
+            continue;
+        if (label_out && label_sz) snprintf(label_out, label_sz, "%s", label.c_str());
+        if (line_out) *line_out = i;
+        if (scroll_label) *scroll_label = scroll;
+        return true;
+    }
+    return false;
+}
+
+static bool bgnd_find_existing_stage_block(const std::vector<std::string> &lines,
+                                           char *label_out, size_t label_sz,
+                                           int *line_out,
+                                           std::string *scroll_label)
+{
+    std::vector<std::string> candidates;
+    char file_key[96] = "";
+    mk2_sync_project_basename_key(file_key, sizeof file_key);
+    if (file_key[0])
+        mk2_push_unique_ci(candidates, std::string(file_key) + "_mod");
+    char stage_key[96] = "";
+    mk2_palette_sync_stage_key(stage_key, sizeof stage_key);
+    if (stage_key[0])
+        mk2_push_unique_ci(candidates, std::string(stage_key) + "_mod");
+
+    for (const std::string &want : candidates) {
+        int line = -1;
+        std::string scroll;
+        if (bgnd_find_exact_label_line(lines, want.c_str(), &line) &&
+            bgnd_block_scroll_label(lines, line, &scroll)) {
+            if (label_out && label_sz) snprintf(label_out, label_sz, "%s", want.c_str());
+            if (line_out) *line_out = line;
+            if (scroll_label) *scroll_label = scroll;
+            return true;
+        }
+    }
+
+    int inferred_line = -1;
+    char inferred_label[96] = "";
+    if (stage_start_infer_bgnd_block(lines, inferred_label, sizeof inferred_label,
+                                     &inferred_line)) {
+        std::string scroll;
+        if (bgnd_block_scroll_label(lines, inferred_line, &scroll)) {
+            if (label_out && label_sz) snprintf(label_out, label_sz, "%s", inferred_label);
+            if (line_out) *line_out = inferred_line;
+            if (scroll_label) *scroll_label = scroll;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool bgnd_read_scroll_rows(const std::vector<std::string> &lines,
+                                  const std::string &scroll_label,
+                                  std::vector<std::string> &rows,
+                                  char *status, size_t statussz)
+{
+    rows.clear();
+    int label_line = -1;
+    if (!bgnd_find_exact_label_line(lines, scroll_label.c_str(), &label_line)) {
+        if (status && statussz)
+            snprintf(status, statussz, "Scroll table %s was not found.", scroll_label.c_str());
+        return false;
+    }
+    for (int i = label_line + 1; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL))
+            break;
+        std::string tok = bgnd_directive_token(lines[(size_t)i], ".long");
+        if (tok.empty()) continue;
+        rows.push_back(tok);
+        if (rows.size() == 9) break;
+    }
+    if (rows.size() != 9) {
+        if (status && statussz)
+            snprintf(status, statussz, "Scroll table %s has %d rows; expected 9.",
+                     scroll_label.c_str(), (int)rows.size());
+        rows.clear();
+        return false;
+    }
+    return true;
+}
+
+static bool bgnd_replace_scroll_rows(std::vector<std::string> &lines,
+                                     const std::string &scroll_label,
+                                     const std::vector<std::string> &rows,
+                                     bool *changed_out,
+                                     char *status, size_t statussz)
+{
+    if (changed_out) *changed_out = false;
+    if (rows.size() != 9) {
+        if (status && statussz)
+            snprintf(status, statussz, "Need 9 draft scroll rows before promotion.");
+        return false;
+    }
+    int label_line = -1;
+    if (!bgnd_find_exact_label_line(lines, scroll_label.c_str(), &label_line)) {
+        if (status && statussz)
+            snprintf(status, statussz, "Target scroll table %s was not found.",
+                     scroll_label.c_str());
+        return false;
+    }
+    bool changed = false;
+    int row = 0;
+    for (int i = label_line + 1; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL))
+            break;
+        if (bgnd_directive_token(lines[(size_t)i], ".long").empty())
+            continue;
+        std::string comment;
+        size_t semi = lines[(size_t)i].find(';');
+        if (semi != std::string::npos)
+            comment = lines[(size_t)i].substr(semi);
+        char nl[192];
+        snprintf(nl, sizeof nl, "\t.long\t%s%s%s",
+                 rows[(size_t)row].c_str(),
+                 comment.empty() ? "" : "\t\t", comment.c_str());
+        if (lines[(size_t)i] != nl) {
+            lines[(size_t)i] = nl;
+            changed = true;
+        }
+        row++;
+        if (row == 9) break;
+    }
+    if (row != 9) {
+        if (status && statussz)
+            snprintf(status, statussz, "Target scroll table %s has %d rows; expected 9.",
+                     scroll_label.c_str(), row);
+        return false;
+    }
+    if (changed_out) *changed_out = changed;
+    return true;
+}
+
 static bool bgnd_load_block(std::vector<std::string> &lines, char *block_label, size_t lbsz,
                             int *block_line, char *bgnd_out, size_t bgnd_sz)
 {
@@ -1705,7 +2002,9 @@ static bool bgnd_commit(const char *bgnd, std::vector<std::string> &lines,
                         const char *suffix, char *backup_out, size_t backup_sz)
 {
     if (!mk2_copy_file_unique(bgnd, suffix, backup_out, backup_sz)) {
-        snprintf(g_stage_start_status, sizeof g_stage_start_status, "Could not back up BGND.ASM.");
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not back up %s before writing BGND.ASM edits.",
+                 bgnd && bgnd[0] ? bgnd : "BGND.ASM");
         return false;
     }
     if (!mk2_write_text_lines(bgnd, lines)) {
@@ -1797,7 +2096,7 @@ bool stage_bgnd_create_module_placement(const char *module_name, int ox, int oy)
         return false;
     snprintf(g_stage_start_status, sizeof g_stage_start_status,
              "Placed %s on new plane %d (offset %d,%d) in %s. Backup: %s. "
-             "Set its parallax below -- it starts at whatever that plane's scroll row already holds.",
+             "Set its parallax from Game Preview -- it starts at whatever that plane's scroll row already holds.",
              module_name, baklst_num + 1, ox, oy, block_label, backup);
     stage_set_toast("Created runtime placement");
     return true;
@@ -1849,6 +2148,74 @@ bool stage_bgnd_set_module_offset(const char *module_name, int ox, int oy)
     snprintf(g_stage_start_status, sizeof g_stage_start_status,
              "Set %s runtime offset to %d,%d. Backup: %s.", module_name, ox, oy, backup);
     stage_set_toast("Patched module runtime offset");
+    return true;
+}
+
+bool stage_bgnd_sync_runtime_offsets_from_bdb(void)
+{
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line, bgnd, sizeof bgnd))
+        return false;
+
+    int changed = 0;
+    int already = 0;
+    int skipped = 0;
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        char name[64] = "";
+        int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        if (sscanf(g_bdb_modules[m], "%63s %d %d %d %d", name, &x1, &x2, &y1, &y2) < 5 ||
+            !name[0]) {
+            skipped++;
+            continue;
+        }
+
+        BgndModLoc loc;
+        if (!bgnd_locate_module(lines, block_line, name, &loc)) {
+            skipped++;
+            continue;
+        }
+
+        std::string comment;
+        if (loc.offset_line >= 0) {
+            size_t semi = lines[(size_t)loc.offset_line].find(';');
+            if (semi != std::string::npos)
+                comment = lines[(size_t)loc.offset_line].substr(semi);
+        }
+        char wline[192];
+        snprintf(wline, sizeof wline, "\t.word\t%d,%d%s%s", x1, y1,
+                 comment.empty() ? "" : "\t\t", comment.c_str());
+        if (loc.offset_line >= 0) {
+            if (lines[(size_t)loc.offset_line] == wline) {
+                already++;
+            } else {
+                lines[(size_t)loc.offset_line] = wline;
+                changed++;
+            }
+        } else {
+            lines.insert(lines.begin() + loc.bmod_line + 1, wline);
+            changed++;
+        }
+    }
+
+    if (changed <= 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Runtime offsets in %s already match current BDB source positions. "
+                 "Skipped %d not-placed/bad module(s).",
+                 block_label, skipped);
+        return true;
+    }
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_source_offset_sync", backup, sizeof backup))
+        return false;
+
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Synced %d runtime offset(s) in %s from current BDB module positions. "
+             "%d already matched; %d skipped. Backup: %s.",
+             changed, block_label, already, skipped, backup);
+    stage_set_toast("Synced runtime offsets from BDB");
     return true;
 }
 
@@ -1928,6 +2295,83 @@ bool stage_bgnd_set_module_parallax(const char *module_name, float factor)
     return true;
 }
 
+bool stage_bgnd_reset_all_module_parallax(float factor)
+{
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line, bgnd, sizeof bgnd))
+        return false;
+
+    std::string scroll_label;
+    if (!bgnd_block_scroll_label(lines, block_line, &scroll_label) || scroll_label.empty()) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "No scroll table found for %s.", block_label);
+        return false;
+    }
+
+    if (factor < 0.0f) factor = 0.0f;
+    if (factor > 2.0f) factor = 2.0f;
+    long rate = (long)(factor * 131072.0f + 0.5f);   /* playfield = 0x20000 */
+    char val[32];
+    if (rate == 0) snprintf(val, sizeof val, "0");
+    else snprintf(val, sizeof val, "0%lxh", rate);
+
+    int sl = -1;
+    std::string lbl;
+    for (int i = 0; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], &lbl) &&
+            bgnd_token_ieq(lbl, scroll_label.c_str())) { sl = i; break; }
+    }
+    if (sl < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Scroll table %s not found.", scroll_label.c_str());
+        return false;
+    }
+
+    int row = 0, changed = 0;
+    for (int i = sl + 1; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL)) break;
+        if (bgnd_directive_token(lines[(size_t)i], ".long").empty()) continue;
+        if (row >= 8) break;                         /* rows 0..7 = baklst8..1 */
+
+        std::string comment;
+        size_t semi = lines[(size_t)i].find(';');
+        if (semi != std::string::npos)
+            comment = lines[(size_t)i].substr(semi);
+        char nl[192];
+        snprintf(nl, sizeof nl, "\t.long\t%s%s%s",
+                 val, comment.empty() ? "" : "\t\t", comment.c_str());
+        if (lines[(size_t)i] != nl) {
+            lines[(size_t)i] = nl;
+            changed++;
+        }
+        row++;
+    }
+
+    if (row < 8) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Scroll table %s has only %d module row(s); expected 8.",
+                 scroll_label.c_str(), row);
+        return false;
+    }
+    if (changed == 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "All module parallax rows in %s are already %.2fx.",
+                 scroll_label.c_str(), factor);
+        return true;
+    }
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_all_plane_parallax", backup, sizeof backup))
+        return false;
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Set all module parallax rows in %s to %.2fx. Backup: %s.",
+             scroll_label.c_str(), factor, backup);
+    stage_set_toast("Reset all module parallax");
+    return true;
+}
+
 bool stage_bgnd_set_bg_color(int r5, int g5, int b5)
 {
     char bgnd[640], block_label[96] = "";
@@ -1974,6 +2418,82 @@ bool stage_bgnd_set_bg_color(int r5, int g5, int b5)
              "Set %s background colour to RGB555 %d,%d,%d. Backup: %s.",
              block_label, r5, g5, b5, backup);
     stage_set_toast("Patched stage background colour");
+    return true;
+}
+
+bool stage_promote_draft_parallax_to_bgnd(void)
+{
+    char draft_path[640];
+    if (!stage_draft_bgnd_path(draft_path, sizeof draft_path)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "No draft BGND.ASM for this stage to promote parallax from.");
+        return false;
+    }
+
+    std::vector<std::string> draft_lines;
+    if (!mk2_read_text_lines(draft_path, draft_lines)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not read %s.", draft_path);
+        return false;
+    }
+
+    char draft_label[96] = "";
+    int draft_line = -1;
+    std::string draft_scroll;
+    if (!bgnd_find_first_mod_block_with_scroll(draft_lines, draft_label, sizeof draft_label,
+                                               &draft_line, &draft_scroll)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not find a *_mod block with a scroll table in %s.", draft_path);
+        return false;
+    }
+
+    std::vector<std::string> draft_rows;
+    if (!bgnd_read_scroll_rows(draft_lines, draft_scroll, draft_rows,
+                               g_stage_start_status, sizeof g_stage_start_status))
+        return false;
+
+    char real_path[640];
+    if (!stage_real_bgnd_path(real_path, sizeof real_path)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not locate the real BGND.ASM to promote parallax into.");
+        return false;
+    }
+
+    std::vector<std::string> real_lines;
+    if (!mk2_read_text_lines(real_path, real_lines)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not read %s.", real_path);
+        return false;
+    }
+
+    char real_label[96] = "";
+    int real_line = -1;
+    std::string real_scroll;
+    if (!bgnd_find_existing_stage_block(real_lines, real_label, sizeof real_label,
+                                        &real_line, &real_scroll)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not find this stage's existing *_mod block in the real BGND.ASM.");
+        return false;
+    }
+
+    bool changed = false;
+    if (!bgnd_replace_scroll_rows(real_lines, real_scroll, draft_rows, &changed,
+                                  g_stage_start_status, sizeof g_stage_start_status))
+        return false;
+    if (!changed) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s already matches draft parallax from %s.", real_label, draft_label);
+        return true;
+    }
+
+    char backup[640] = "";
+    if (!bgnd_commit(real_path, real_lines, ".pre_draft_parallax_promote",
+                     backup, sizeof backup))
+        return false;
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Promoted draft parallax %s/%s into %s/%s. Backup: %s.",
+             draft_label, draft_scroll.c_str(), real_label, real_scroll.c_str(), backup);
+    stage_set_toast("Promoted draft parallax");
     return true;
 }
 
@@ -2094,15 +2614,22 @@ bool stage_promote_draft_to_bgnd(void)
         return false;
     }
 
-    char promoted_path[680];
-    snprintf(promoted_path, sizeof promoted_path, "%s.promoted", draft_path);
-    remove(promoted_path);
-    rename(draft_path, promoted_path);
+    char promoted_path[680] = "";
+    bool archived = mk2_copy_file_unique(draft_path, ".promoted",
+                                         promoted_path, sizeof promoted_path);
+    if (archived)
+        remove(draft_path);
     bdd_invalidate_stage_module_cache();
 
-    snprintf(g_stage_start_status, sizeof g_stage_start_status,
-             "Promoted %s into %s as table_o_mods entry %d. Backup: %s.",
-             g_name, real_path, next_index, backup);
+    if (archived) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Promoted %s into %s as table_o_mods entry %d. Backup: %s. Draft archived: %s.",
+                 g_name, real_path, next_index, backup, promoted_path);
+    } else {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Promoted %s into %s as table_o_mods entry %d. Backup: %s. Could not archive draft; it remains at %s.",
+                 g_name, real_path, next_index, backup, draft_path);
+    }
     stage_set_toast("Promoted stage to BGND.ASM");
     return true;
 }

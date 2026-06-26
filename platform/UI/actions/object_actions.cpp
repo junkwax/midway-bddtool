@@ -1,5 +1,6 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
+#include "Core/world_module_utils.h"
 #include "UI/actions/object_position_undo.h"
 #include "undo_manager.h"
 #include "libs/stb_image_write.h"
@@ -637,6 +638,8 @@ int module_select_objects(int module_idx)
 {
     if (module_idx < 0 || module_idx >= g_bdb_num_modules) return 0;
     object_actions_clear_selection();
+    module_selection_select_only(module_idx);
+    g_show_module_bounds = true;
     int count = 0;
     int first = -1;
     for (int i = 0; i < g_no; i++) {

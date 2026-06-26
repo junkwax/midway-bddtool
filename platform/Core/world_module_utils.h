@@ -28,4 +28,18 @@ bool module_is_locked_by_index(int module_idx);
 /* True if obj_index's *current* module (by position, not a cached value) is locked. */
 bool object_in_locked_module(int obj_index);
 
+/* Session-only module selection used by the editor UI. This is separate from
+ * object selection so assets and module rectangles can be highlighted and
+ * moved together without converting one selection type into the other. */
+void module_selection_clear(void);
+void module_selection_set_all(bool selected);
+int module_selection_count(void);
+int module_selection_first(void);
+bool module_selection_get(int module_idx);
+void module_selection_set(int module_idx, bool selected);
+void module_selection_toggle(int module_idx);
+void module_selection_select_only(int module_idx);
+bool module_selection_bounds(int *x1, int *x2, int *y1, int *y2);
+int module_selection_translate(int dx, int dy);
+
 #endif
