@@ -115,6 +115,8 @@ int bdd_stage_plane_count(void);
 int bdd_stage_plane_info(int index, char *name, int name_sz,
                          int *ox, int *oy, float *scroll, int *draw_rank);
 int bdd_stage_plane_scroll_origin(int index, int *scroll_x);
+int bdd_stage_module_baklst(const char *module_name);
+int bdd_stage_baklst_module(int baklst, char *name, int name_sz);
 
 /* 1 when an object belongs to a known background plane (so the block-table
    renderer draws it from *BLKS and the BDB object copy is suppressed). */
@@ -123,6 +125,15 @@ int bdd_object_in_background_plane(int obj_index);
 /* Draw rank of the floor's -1/floor_code dlists slot (INT_MAX if the stage has
    no floor), so block planes can be split far/near around it. */
 int bdd_stage_floor_rank(void);
+
+/* Draw rank of the -2/player-shadow slot (INT_MAX if unavailable). Runtime
+   planes after this slot can cover player shadows even when they are still
+   behind the fighter bodies. */
+int bdd_stage_shadow_rank(void);
+
+/* Draw rank of the first objlst/objlst2 fighter slot (INT_MAX if unavailable).
+   Runtime planes with a larger draw rank render over the fighters. */
+int bdd_stage_object_rank(void);
 
 /* Master toggle for the block-table background renderer (default on). */
 extern int g_block_background_render;

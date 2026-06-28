@@ -28,7 +28,7 @@ void bdd_viewer_enter_edit_layout_after_bdb_load(void)
     bg_editor_autoload_lod_assets();
     g_game_view = 0;
     g_split_view = 0;
-    g_runtime_layout_view = 1;
+    g_runtime_layout_view = 0;
     bdd_reset_game_preview_camera();
 }
 

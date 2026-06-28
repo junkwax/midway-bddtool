@@ -191,6 +191,7 @@ void draw_image_list(void)
     g_hover_img_ii = -1;
 
     int unused_imgs = 0, unused_pals = 0, unused_imported_imgs = 0, unused_imported_pixels = 0;
+    int high_bpp_imgs = 0;
     const int pal_cap = editor_project_palette_capacity();
     std::vector<int> pal_used((size_t)(pal_cap > 0 ? pal_cap : 0), 0);
     for (int oi = 0; oi < g_no; oi++) {
@@ -202,6 +203,8 @@ void draw_image_list(void)
         }
     }
     for (int ii = 0; ii < g_ni; ii++) {
+        if (!runtime_actor_image_is_preview_import(&g_img[ii]) && mk2_bpp_for_image(&g_img[ii]) > 6)
+            high_bpp_imgs++;
         int used = 0;
         for (int oi = 0; oi < g_no; oi++)
             if (g_obj[oi].ii == g_img[ii].idx) { used = 1; break; }
@@ -219,6 +222,8 @@ void draw_image_list(void)
     if (unused_imgs > 0 || unused_pals > 0)
         ImGui::TextColored(ImVec4(1,0.6f,0.2f,1), "%d unused images, %d unused palettes",
                           unused_imgs, unused_pals);
+    if (high_bpp_imgs > 0)
+        ImGui::TextColored(ImVec4(1,0.75f,0.25f,1), "%d image(s) exceed 6bpp", high_bpp_imgs);
 
     /* Bulk maintenance tools live in a collapsible section so the panel leads
        with its filters and asset grid instead of a wall of buttons. */
@@ -271,6 +276,27 @@ void draw_image_list(void)
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Repairs older IMG imports whose transparent index 0 was shifted into visible black.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Cap >6bpp to 6bpp")) {
+        ImageBppCapResult r;
+        int changed = cap_images_to_max_bpp(6, true, true, &r);
+        char msg[192];
+        if (changed > 0) {
+            snprintf(msg, sizeof msg,
+                     "Capped %d image(s), %d palette(s) to 6bpp; remapped %d px%s",
+                     r.changed_images, r.changed_palettes, r.remapped_pixels,
+                     r.skipped_mixed_images > 0 ? " (some mixed-palette images skipped)" : "");
+        } else if (r.high_images > 0) {
+            snprintf(msg, sizeof msg,
+                     "No safe 6bpp cap applied; %d high image(s), %d mixed-palette skip(s)",
+                     r.high_images, r.skipped_mixed_images);
+        } else {
+            snprintf(msg, sizeof msg, "All images already fit 6bpp");
+        }
+        stage_set_toast(msg);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Remaps safe single-palette image groups in place so all pixel indexes fit 0..63. Palettes with more than 63 visible colors are reduced to nearest matches; mixed-palette images are skipped.");
     ImGui::SetNextItemWidth(60);
     ImGui::InputInt("Chop W", &g_chop_tile_w);
     ImGui::SameLine();

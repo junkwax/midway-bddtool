@@ -70,11 +70,12 @@ int bg_editor_object_hit_test_at(int obj_index, int origin_x, int origin_y,
     int ly = y - origin_y;
     if (lx < 0 || ly < 0 || lx >= im->w || ly >= im->h)
         return 0;
-    if (!g_snap_visible_pixels)
-        return 1;
     if (!im->pix)
         return 1;
 
+    /* Picking should always respect transparent pixels. g_snap_visible_pixels
+       controls edge snapping only; tying selection to it makes large transparent
+       sprites block smaller objects behind them. */
     int sx = o->hfl ? (im->w - 1 - lx) : lx;
     int sy = o->vfl ? (im->h - 1 - ly) : ly;
     return im->pix[(size_t)sy * (size_t)im->w + (size_t)sx] != 0;

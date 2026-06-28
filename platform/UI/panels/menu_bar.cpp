@@ -757,17 +757,23 @@ void MenuBarPanel::render()
             ImGui::MenuItem("Preview Mode", "F11", &g_preview_mode);
             ImGui::Separator();
             if (ImGui::MenuItem("Game Preview", NULL, g_game_view != 0, g_have_bdb && g_no > 0)) {
+                bool entering_preview = g_game_view == 0;
                 g_game_view ^= 1;
-                if (g_game_view) {
+                if (entering_preview) {
+                    g_runtime_layout_view = 1;
                     route_to_game_preview_screen(true, true);
                     g_gv_needs_autozoom = true;
                 } else {
+                    g_runtime_layout_view = 0;
                     focus_editor_on_game_preview_screen();
                 }
             }
             if (ImGui::MenuItem("Runtime Layout", NULL, g_runtime_layout_view != 0, g_have_bdb && g_no > 0)) {
+                bool turning_on = g_runtime_layout_view == 0;
                 g_runtime_layout_view ^= 1;
                 g_split_view = 0;
+                if (turning_on && !g_game_view)
+                    g_game_view = 1;
                 route_to_game_preview_screen(true, g_game_view != 0);
                 if (g_game_view)
                     g_gv_needs_autozoom = true;
@@ -792,7 +798,11 @@ void MenuBarPanel::render()
                 ImGui::Separator();
             }
             if (ImGui::MenuItem("Zoom to Fit", "Ctrl+0", false, g_have_bdb && g_no > 0))
+            {
+                g_game_view = 0;
+                g_runtime_layout_view = 0;
                 zoom_to_fit();
+            }
             if (ImGui::MenuItem("Zoom to Selection", "Ctrl+Shift+Z", false, g_have_bdb && g_no > 0))
                 zoom_to_selection();
             ImGui::Separator();

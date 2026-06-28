@@ -4,10 +4,13 @@
 #include "Core/editor_project_globals.h"
 #include "Core/editor_project_storage.h"
 #include "Core/image_lookup.h"
+#include "Core/mk2_analysis.h"
 #include "Core/project_header.h"
 #include "Core/world_module_utils.h"
 #include "undo_manager.h"
 
+#include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -600,6 +603,338 @@ int compress_active_image_palette(int img_i, int target, bool save_undo)
     g_need_rebuild = 1;
     g_dirty = 1;
     return used_count;
+}
+
+struct BppCapColor {
+    int old_idx;
+    Uint32 color;
+    size_t count;
+    int slot;
+};
+
+static int bpp_cap_index_limit(int max_bpp)
+{
+    if (max_bpp >= 8) return 255;
+    if (max_bpp <= 0) return 1;
+    int limit = (1 << max_bpp) - 1;
+    return limit < 1 ? 1 : limit;
+}
+
+static int bpp_cap_add_unique_palette(std::vector<int> &pals, int pal)
+{
+    if (pal < 0 || pal >= g_n_pals) return 0;
+    for (size_t i = 0; i < pals.size(); i++)
+        if (pals[i] == pal) return 1;
+    pals.push_back(pal);
+    return 1;
+}
+
+static int bpp_cap_nearest_color_slot(Uint32 color, const std::vector<BppCapColor> &colors)
+{
+    int best_slot = 0;
+    int best_dist = INT_MAX;
+    for (size_t i = 0; i < colors.size(); i++) {
+        if (colors[i].slot <= 0) continue;
+        int d = argb_distance(color, colors[i].color);
+        if (d < best_dist) {
+            best_dist = d;
+            best_slot = colors[i].slot;
+        }
+    }
+    return best_slot;
+}
+
+static int bpp_cap_select_representatives(std::vector<BppCapColor> &colors,
+                                          int limit)
+{
+    if (limit < 1) limit = 1;
+    if ((int)colors.size() <= limit) return (int)colors.size();
+
+    std::vector<int> chosen;
+    chosen.reserve((size_t)limit);
+
+    int first = 0;
+    for (size_t i = 1; i < colors.size(); i++) {
+        if (colors[i].count > colors[(size_t)first].count)
+            first = (int)i;
+    }
+    chosen.push_back(first);
+
+    while ((int)chosen.size() < limit) {
+        long long best_score = -1;
+        int best_pos = -1;
+        for (size_t i = 0; i < colors.size(); i++) {
+            bool already = false;
+            for (size_t c = 0; c < chosen.size(); c++) {
+                if (chosen[c] == (int)i) {
+                    already = true;
+                    break;
+                }
+            }
+            if (already) continue;
+
+            int nearest = INT_MAX;
+            for (size_t c = 0; c < chosen.size(); c++) {
+                int d = argb_distance(colors[i].color, colors[(size_t)chosen[c]].color);
+                if (d < nearest) nearest = d;
+            }
+            long long score = (long long)nearest * (long long)(colors[i].count + 1u);
+            if (score > best_score) {
+                best_score = score;
+                best_pos = (int)i;
+            }
+        }
+        if (best_pos < 0) break;
+        chosen.push_back(best_pos);
+    }
+
+    for (BppCapColor &color : colors)
+        color.slot = 0;
+    for (int idx : chosen)
+        colors[(size_t)idx].slot = -1;
+    return (int)chosen.size();
+}
+
+static int bpp_cap_assign_slots(std::vector<BppCapColor> &colors,
+                                int limit, bool lossy,
+                                int map[256], Uint32 new_pal[256],
+                                int *out_count)
+{
+    memset(map, 0, sizeof(int) * 256);
+    memset(new_pal, 0, sizeof(Uint32) * 256);
+    bool taken[256];
+    memset(taken, 0, sizeof taken);
+    int next_free = 1;
+
+    if (!lossy) {
+        for (BppCapColor &color : colors) {
+            int slot = color.old_idx <= limit ? color.old_idx : 0;
+            if (slot > 0 && !taken[slot]) {
+                color.slot = slot;
+                taken[slot] = true;
+            }
+        }
+        for (BppCapColor &color : colors) {
+            if (color.slot > 0) continue;
+            while (next_free <= limit && taken[next_free])
+                next_free++;
+            if (next_free > limit) return 0;
+            color.slot = next_free;
+            taken[next_free] = true;
+        }
+    } else {
+        for (BppCapColor &color : colors) {
+            if (color.slot != -1) continue;
+            int slot = color.old_idx <= limit ? color.old_idx : 0;
+            if (slot > 0 && !taken[slot]) {
+                color.slot = slot;
+                taken[slot] = true;
+            }
+        }
+        for (BppCapColor &color : colors) {
+            if (color.slot != -1) continue;
+            while (next_free <= limit && taken[next_free])
+                next_free++;
+            if (next_free > limit) return 0;
+            color.slot = next_free;
+            taken[next_free] = true;
+        }
+    }
+
+    int count = 1;
+    for (const BppCapColor &color : colors) {
+        if (color.slot <= 0) continue;
+        if (color.slot >= 256) return 0;
+        new_pal[color.slot] = color.color;
+        if (color.slot + 1 > count) count = color.slot + 1;
+    }
+
+    for (const BppCapColor &color : colors) {
+        int slot = color.slot;
+        if (lossy && slot <= 0)
+            slot = bpp_cap_nearest_color_slot(color.color, colors);
+        if (slot <= 0 || slot > limit) return 0;
+        map[color.old_idx] = slot;
+    }
+
+    if (out_count) *out_count = count;
+    return 1;
+}
+
+int cap_images_to_max_bpp(int max_bpp, bool allow_lossy, bool save_undo,
+                          ImageBppCapResult *result)
+{
+    ImageBppCapResult local;
+    memset(&local, 0, sizeof local);
+    if (result) *result = local;
+
+    int limit = bpp_cap_index_limit(max_bpp);
+    if (limit >= 255 || g_ni <= 0 || g_n_pals <= 0) return 0;
+
+    std::vector<std::vector<int> > image_palettes((size_t)g_ni);
+    std::vector<unsigned char> runtime_locked((size_t)g_ni, 0);
+    std::vector<int> image_max((size_t)g_ni, 0);
+    std::vector<int> image_use_pal((size_t)g_ni, -1);
+    std::vector<unsigned char> image_mixed((size_t)g_ni, 0);
+
+    for (int i = 0; i < g_ni; i++) {
+        Img *im = &g_img[i];
+        if (!im->pix || im->w <= 0 || im->h <= 0) continue;
+        if (runtime_actor_image_is_preview_import(im)) {
+            runtime_locked[(size_t)i] = 1;
+            continue;
+        }
+        image_max[(size_t)i] = image_max_pixel(im);
+        if (image_max[(size_t)i] > limit) {
+            local.high_images++;
+            local.before_bytes += mk2_estimate_image_bytes(im);
+            local.after_bytes += mk2_estimate_image_bytes_for_bpp(im, max_bpp);
+        }
+    }
+
+    for (int oi = 0; oi < g_no; oi++) {
+        Img *im = img_find(g_obj[oi].ii);
+        if (!im || !im->pix) continue;
+        int img_i = (int)(im - g_img);
+        if (img_i < 0 || img_i >= g_ni || runtime_locked[(size_t)img_i]) continue;
+        int pal = (g_obj[oi].fl >= 0 && g_obj[oi].fl < g_n_pals) ? g_obj[oi].fl : im->pal_idx;
+        bpp_cap_add_unique_palette(image_palettes[(size_t)img_i], pal);
+    }
+    for (int i = 0; i < g_ni; i++) {
+        if (runtime_locked[(size_t)i]) continue;
+        if (image_palettes[(size_t)i].empty())
+            bpp_cap_add_unique_palette(image_palettes[(size_t)i], g_img[i].pal_idx);
+        if (image_palettes[(size_t)i].size() == 1)
+            image_use_pal[(size_t)i] = image_palettes[(size_t)i][0];
+        else if (image_palettes[(size_t)i].size() > 1)
+            image_mixed[(size_t)i] = 1;
+    }
+
+    bool undo_done = false;
+    int changed_total = 0;
+    for (int p = 0; p < g_n_pals; p++) {
+        std::vector<int> group_images;
+        bool palette_has_high = false;
+        bool unsafe_mixed = false;
+        int mixed_for_palette = 0;
+
+        for (int i = 0; i < g_ni; i++) {
+            Img *im = &g_img[i];
+            if (!im->pix || runtime_locked[(size_t)i]) continue;
+            bool uses_palette = false;
+            for (int pal : image_palettes[(size_t)i]) {
+                if (pal == p) {
+                    uses_palette = true;
+                    break;
+                }
+            }
+            if (!uses_palette) continue;
+            if (image_mixed[(size_t)i]) {
+                unsafe_mixed = true;
+                if (image_max[(size_t)i] > limit) mixed_for_palette++;
+                continue;
+            }
+            if (image_use_pal[(size_t)i] != p) continue;
+            group_images.push_back(i);
+            if (image_max[(size_t)i] > limit) palette_has_high = true;
+        }
+
+        if (!palette_has_high) continue;
+        if (unsafe_mixed) {
+            local.skipped_mixed_images += mixed_for_palette;
+            local.skipped_palettes++;
+            continue;
+        }
+        if (group_images.empty()) {
+            local.skipped_palettes++;
+            continue;
+        }
+
+        size_t uses[256];
+        memset(uses, 0, sizeof uses);
+        for (int img_i : group_images) {
+            Img *im = &g_img[img_i];
+            size_t n = (size_t)im->w * (size_t)im->h;
+            for (size_t k = 0; k < n; k++) {
+                int v = im->pix[k];
+                if (v > 0 && v < 256) uses[v]++;
+            }
+        }
+
+        std::vector<BppCapColor> colors;
+        for (int idx = 1; idx < 256; idx++) {
+            if (!uses[idx]) continue;
+            BppCapColor color;
+            color.old_idx = idx;
+            color.color = palette_argb_at(p, idx);
+            color.count = uses[idx];
+            color.slot = 0;
+            colors.push_back(color);
+        }
+        if (colors.empty()) continue;
+
+        bool lossy = (int)colors.size() > limit;
+        if (lossy && !allow_lossy) {
+            local.skipped_palettes++;
+            continue;
+        }
+        if (lossy)
+            bpp_cap_select_representatives(colors, limit);
+
+        int map[256];
+        Uint32 new_pal[256];
+        int new_count = 1;
+        if (!bpp_cap_assign_slots(colors, limit, lossy, map, new_pal, &new_count)) {
+            local.skipped_palettes++;
+            continue;
+        }
+
+        int palette_pixels = 0;
+        int palette_images = 0;
+        for (int img_i : group_images) {
+            Img *im = &g_img[img_i];
+            bool image_changed = false;
+            size_t n = (size_t)im->w * (size_t)im->h;
+            for (size_t k = 0; k < n; k++) {
+                int v = im->pix[k];
+                if (v <= 0) continue;
+                int nv = map[v];
+                if (nv <= 0 || nv > limit) continue;
+                if (nv == v) continue;
+                if (save_undo && !undo_done) {
+                    undo_save_ex("Cap Images to 6bpp");
+                    undo_done = true;
+                }
+                im->pix[k] = (Uint8)nv;
+                image_changed = true;
+                palette_pixels++;
+            }
+            if (image_changed)
+                palette_images++;
+            im->pal_idx = p;
+        }
+
+        if (palette_pixels <= 0 && g_pal_count[p] == new_count) continue;
+        if (save_undo && !undo_done) {
+            undo_save_ex("Cap Images to 6bpp");
+            undo_done = true;
+        }
+        editor_project_set_palette_slot(p, NULL, new_count, new_pal);
+        local.changed_palettes++;
+        if (lossy) local.lossy_palettes++;
+        local.changed_images += palette_images;
+        local.remapped_pixels += palette_pixels;
+        changed_total += palette_pixels + 1;
+    }
+
+    if (changed_total > 0) {
+        sync_bdb_header_counts();
+        g_need_rebuild = 1;
+        g_dirty = 1;
+        g_mk2_palette_sync_dirty = true;
+    }
+    if (result) *result = local;
+    return changed_total;
 }
 
 void assign_selected_layer(int wx_layer)

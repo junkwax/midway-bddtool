@@ -259,6 +259,11 @@ static int begin_module_drag(BddSdlMouseState *state, int module_idx,
     return 1;
 }
 
+static bool module_canvas_drag_allowed(void)
+{
+    return !g_game_view && !g_runtime_layout_view;
+}
+
 /* Move selected module rectangles, their member objects, and any separately
    selected loose objects by the same world delta. The undo snapshot and target
    capture happen lazily on the first real movement so a plain click on a
@@ -583,7 +588,7 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
                 }
             }
 
-            if (g_show_modules && g_show_module_bounds && !alt_down) {
+            if (module_canvas_drag_allowed() && g_show_module_bounds && !alt_down) {
                 int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
                 int mhit = hit_module_at(wx2, wy2, &mx1, &mx2, &my1, &my2);
                 if (mhit >= 0 && ctrl_down) {
@@ -595,7 +600,9 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
                     bdd_tooltip_free();
                     return;
                 }
-                if (mhit >= 0) {
+                bool body_drag_allowed =
+                    mhit >= 0 && (g_show_modules || module_selection_get(mhit));
+                if (body_drag_allowed) {
                     if (!module_selection_get(mhit))
                         module_selection_select_only(mhit);
                     if (begin_module_drag(state, mhit, bx, by, mx1, mx2, my1, my2)) {
@@ -675,26 +682,30 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
 
             if (!found_obj) {
                 int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
-                int mhit = hit_module_at(wx2, wy2, &mx1, &mx2, &my1, &my2);
-                if (mhit >= 0 && ctrl_down) {
-                    module_selection_toggle(mhit);
-                    bdd_tooltip_free();
-                    return;
-                }
-                bool module_mode = g_show_modules && g_show_module_bounds;
-                if (!module_mode)
-                    mhit = hit_module_drag_edge_at(wx2, wy2, *zoom, &mx1, &mx2, &my1, &my2);
-                if (mhit >= 0 && module_is_locked_by_index(mhit)) {
-                    bdd_tooltip_free();
-                    return;
-                }
-                if (mhit >= 0) {
-                    if (!module_selection_get(mhit))
-                        module_selection_select_only(mhit);
-                    if (begin_module_drag(state, mhit, bx, by, mx1, mx2, my1, my2)) {
-                        SDL_CaptureMouse(SDL_TRUE);
+                if (module_canvas_drag_allowed()) {
+                    int mhit = hit_module_at(wx2, wy2, &mx1, &mx2, &my1, &my2);
+                    if (mhit >= 0 && ctrl_down) {
+                        module_selection_toggle(mhit);
                         bdd_tooltip_free();
                         return;
+                    }
+                    bool body_drag_allowed =
+                        mhit >= 0 && g_show_module_bounds &&
+                        (g_show_modules || module_selection_get(mhit));
+                    if (!body_drag_allowed)
+                        mhit = hit_module_drag_edge_at(wx2, wy2, *zoom, &mx1, &mx2, &my1, &my2);
+                    if (mhit >= 0 && module_is_locked_by_index(mhit)) {
+                        bdd_tooltip_free();
+                        return;
+                    }
+                    if (mhit >= 0) {
+                        if (!module_selection_get(mhit))
+                            module_selection_select_only(mhit);
+                        if (begin_module_drag(state, mhit, bx, by, mx1, mx2, my1, my2)) {
+                            SDL_CaptureMouse(SDL_TRUE);
+                            bdd_tooltip_free();
+                            return;
+                        }
                     }
                 }
                 if (!bdd_object_picker_is_open())

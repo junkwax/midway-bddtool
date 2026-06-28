@@ -59,6 +59,8 @@ OUTHVN/
 
 # Design reference images / stray captures
 /png/
+*.png
+!appicon.png
 *.jpg
 *.jpeg
 screenshot.*

@@ -1728,6 +1728,7 @@ struct BgndModLoc {
     int offset_line;
     int block_end;
     std::string scroll_label;
+    std::string dlists_label;
 };
 static bool bgnd_locate_module(const std::vector<std::string> &lines, int block_line,
                                const char *module_name, BgndModLoc *loc)
@@ -1737,6 +1738,7 @@ static bool bgnd_locate_module(const std::vector<std::string> &lines, int block_
     loc->offset_line = -1;
     loc->block_end = (int)lines.size();
     loc->scroll_label.clear();
+    loc->dlists_label.clear();
     if (block_line < 0) return false;
 
     int long_count = 0, baklst_num = 0;
@@ -1748,9 +1750,11 @@ static bool bgnd_locate_module(const std::vector<std::string> &lines, int block_
         if (!longtok.empty()) {
             long_count++;
             if (long_count == 2) loc->scroll_label = longtok;
+            if (long_count == 3) loc->dlists_label = longtok;
             if (long_count <= 4) { want_offset = false; continue; }       /* header longs */
             char c0 = longtok[0];
-            if (c0 == '>' || (c0 >= '0' && c0 <= '9')) break;             /* numeric ends list */
+            if (c0 == '>' || c0 == '-' || (c0 >= '0' && c0 <= '9')) break;/* numeric ends list */
+            if (bgnd_token_ieq(longtok, "center_x")) break;               /* post-list helper */
             baklst_num++;
             want_offset = false;
             if (bgnd_token_ieq(longtok, "skip_bakmod")) continue;
@@ -2014,6 +2018,585 @@ static bool bgnd_commit(const char *bgnd, std::vector<std::string> &lines,
     }
     mk2_palette_sync_remove_stale_outputs(bgnd, NULL);
     bdd_invalidate_stage_module_cache();
+    return true;
+}
+
+struct BgndBmodEntry {
+    int baklst;
+    int bmod_line;
+    int offset_line;
+    bool skip;
+    std::string module;
+};
+
+static bool bgnd_token_is_numeric_end(const std::string &tok)
+{
+    if (tok.empty()) return false;
+    char c = tok[0];
+    return c == '>' || c == '-' || (c >= '0' && c <= '9');
+}
+
+static std::string bgnd_bmod_line_for(const std::string &module, int baklst)
+{
+    char line[160];
+    snprintf(line, sizeof line, "\t.long\t%sBMOD\t\t; baklst%d",
+             module.c_str(), baklst);
+    return std::string(line);
+}
+
+static std::string bgnd_skip_line_for(int baklst)
+{
+    char line[96];
+    snprintf(line, sizeof line, "\t.long\tskip_bakmod\t; baklst%d", baklst);
+    return std::string(line);
+}
+
+static bool bgnd_collect_bmod_entries(const std::vector<std::string> &lines,
+                                      int block_line,
+                                      std::vector<BgndBmodEntry> &entries)
+{
+    entries.clear();
+    if (block_line < 0)
+        return false;
+
+    int long_count = 0;
+    int baklst_num = 0;
+    int pending = -1;
+    for (int i = block_line + 1; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL))
+            break;
+
+        std::string longtok = bgnd_directive_token(lines[(size_t)i], ".long");
+        if (!longtok.empty()) {
+            pending = -1;
+            long_count++;
+            if (long_count <= 4)
+                continue;
+            if (bgnd_token_is_numeric_end(longtok) ||
+                bgnd_token_ieq(longtok, "center_x"))
+                break;
+
+            baklst_num++;
+            BgndBmodEntry entry;
+            entry.baklst = baklst_num;
+            entry.bmod_line = i;
+            entry.offset_line = -1;
+            entry.skip = bgnd_token_ieq(longtok, "skip_bakmod");
+            entry.module.clear();
+
+            if (!entry.skip) {
+                size_t tl = longtok.size();
+                if (tl < 4 || mk2_sync_strcasecmp(longtok.c_str() + tl - 4, "BMOD") != 0)
+                    break;
+                entry.module = longtok.substr(0, tl - 4);
+            }
+
+            entries.push_back(entry);
+            if (!entries.back().skip)
+                pending = (int)entries.size() - 1;
+            continue;
+        }
+
+        if (pending >= 0 && !bgnd_directive_token(lines[(size_t)i], ".word").empty()) {
+            entries[(size_t)pending].offset_line = i;
+            pending = -1;
+        }
+    }
+    return !entries.empty();
+}
+
+static int bgnd_parse_baklst_token(const std::string &tok)
+{
+    if (tok.size() < 6 || mk2_sync_strcasecmp(tok.substr(0, 6).c_str(), "baklst") != 0)
+        return -1;
+    if (tok.size() == 6)
+        return 1;
+    int n = atoi(tok.c_str() + 6);
+    return (n >= 1 && n <= 8) ? n : -1;
+}
+
+struct BgndDlistEntry {
+    int baklst;
+    int line;
+};
+
+static bool bgnd_collect_dlist_baklst_lines(const std::vector<std::string> &lines,
+                                            const std::string &dlists_label,
+                                            std::vector<BgndDlistEntry> &entries,
+                                            char *status, size_t statussz)
+{
+    entries.clear();
+    int label_line = -1;
+    if (dlists_label.empty() ||
+        !bgnd_find_exact_label_line(lines, dlists_label.c_str(), &label_line)) {
+        if (status && statussz)
+            snprintf(status, statussz, "Display list %s was not found.",
+                     dlists_label.empty() ? "(blank)" : dlists_label.c_str());
+        return false;
+    }
+
+    for (int i = label_line + 1; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL))
+            break;
+        std::string tok = bgnd_directive_token(lines[(size_t)i], ".long");
+        if (tok.empty())
+            continue;
+        int baklst = bgnd_parse_baklst_token(tok);
+        if (baklst >= 1) {
+            BgndDlistEntry entry;
+            entry.baklst = baklst;
+            entry.line = i;
+            entries.push_back(entry);
+            continue;
+        }
+        if (bgnd_token_ieq(tok, "-1"))
+            continue;               /* floor_code slot can sit between planes */
+        if (bgnd_token_ieq(tok, "-2") ||
+            bgnd_token_ieq(tok, "objlst") ||
+            bgnd_token_ieq(tok, "objlst2"))
+            continue;               /* actor/shadow slots can sit between planes */
+        break;                       /* 0, a numeric terminator, or any non-plane */
+    }
+
+    if (entries.empty()) {
+        if (status && statussz)
+            snprintf(status, statussz, "Display list %s has no baklst rows.",
+                     dlists_label.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool stage_bgnd_swap_module_baklst(const char *module_name, int target_baklst)
+{
+    if (!module_name || !module_name[0])
+        return false;
+    if (target_baklst < 1 || target_baklst > 8) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Target plane must be baklst1 through baklst8.");
+        return false;
+    }
+
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line, bgnd, sizeof bgnd))
+        return false;
+
+    std::vector<BgndBmodEntry> entries;
+    if (!bgnd_collect_bmod_entries(lines, block_line, entries)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Could not read the baklst module list in %s.", block_label);
+        return false;
+    }
+
+    int src_idx = -1;
+    int dst_idx = -1;
+    for (int i = 0; i < (int)entries.size(); i++) {
+        if (!entries[(size_t)i].skip &&
+            bgnd_token_ieq(entries[(size_t)i].module, module_name))
+            src_idx = i;
+        if (entries[(size_t)i].baklst == target_baklst)
+            dst_idx = i;
+    }
+    if (src_idx < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Module %s is not placed in %s.", module_name, block_label);
+        return false;
+    }
+    BgndBmodEntry src = entries[(size_t)src_idx];
+    if (src.baklst == target_baklst) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s is already on baklst%d.", module_name, target_baklst);
+        return true;
+    }
+    if (dst_idx < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s does not list baklst%d; add or free that plane first.",
+                 block_label, target_baklst);
+        return false;
+    }
+    if (src.offset_line < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s has no offset line to move with its BMOD entry.", module_name);
+        return false;
+    }
+
+    BgndBmodEntry dst = entries[(size_t)dst_idx];
+    if (dst.skip) {
+        std::string src_offset = lines[(size_t)src.offset_line];
+        int src_line = src.bmod_line;
+        int src_offset_line = src.offset_line;
+        int dst_line = dst.bmod_line;
+
+        if (dst_line < src_line) {
+            lines[(size_t)dst_line] = bgnd_bmod_line_for(src.module, dst.baklst);
+            lines.insert(lines.begin() + dst_line + 1, src_offset);
+            src_line++;
+            src_offset_line++;
+            lines[(size_t)src_line] = bgnd_skip_line_for(src.baklst);
+            lines.erase(lines.begin() + src_offset_line);
+        } else {
+            lines[(size_t)src_line] = bgnd_skip_line_for(src.baklst);
+            lines.erase(lines.begin() + src_offset_line);
+            if (dst_line > src_offset_line)
+                dst_line--;
+            lines[(size_t)dst_line] = bgnd_bmod_line_for(src.module, dst.baklst);
+            lines.insert(lines.begin() + dst_line + 1, src_offset);
+        }
+    } else {
+        if (dst.offset_line < 0) {
+            snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                     "%s on baklst%d has no offset line to swap.",
+                     dst.module.c_str(), dst.baklst);
+            return false;
+        }
+        std::string src_offset = lines[(size_t)src.offset_line];
+        std::string dst_offset = lines[(size_t)dst.offset_line];
+        lines[(size_t)src.bmod_line] = bgnd_bmod_line_for(dst.module, src.baklst);
+        lines[(size_t)src.offset_line] = dst_offset;
+        lines[(size_t)dst.bmod_line] = bgnd_bmod_line_for(src.module, dst.baklst);
+        lines[(size_t)dst.offset_line] = src_offset;
+    }
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_baklst_swap", backup, sizeof backup))
+        return false;
+
+    if (dst.skip) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Moved %s from baklst%d to empty baklst%d. Backup: %s.",
+                 module_name, src.baklst, target_baklst, backup);
+        stage_set_toast("Moved runtime plane");
+    } else {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Swapped %s baklst%d with %s baklst%d. Backup: %s.",
+                 module_name, src.baklst, dst.module.c_str(), dst.baklst, backup);
+        stage_set_toast("Swapped runtime planes");
+    }
+    return true;
+}
+
+bool stage_bgnd_move_module_draw_order(const char *module_name, int direction)
+{
+    if (!module_name || !module_name[0])
+        return false;
+    if (direction == 0)
+        return true;
+
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line, bgnd, sizeof bgnd))
+        return false;
+
+    BgndModLoc loc;
+    if (!bgnd_locate_module(lines, block_line, module_name, &loc)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Module %s is not placed in %s.", module_name, block_label);
+        return false;
+    }
+    if (loc.baklst < 1 || loc.baklst > 8 || loc.dlists_label.empty()) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s has no display-list baklst row to move.", module_name);
+        return false;
+    }
+
+    std::vector<BgndDlistEntry> entries;
+    if (!bgnd_collect_dlist_baklst_lines(lines, loc.dlists_label, entries,
+                                         g_stage_start_status,
+                                         sizeof g_stage_start_status))
+        return false;
+
+    int cur = -1;
+    for (int i = 0; i < (int)entries.size(); i++) {
+        if (entries[(size_t)i].baklst == loc.baklst) {
+            cur = i;
+            break;
+        }
+    }
+    if (cur < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s uses baklst%d, but %s does not draw that plane.",
+                 module_name, loc.baklst, loc.dlists_label.c_str());
+        return false;
+    }
+
+    int dst = cur + (direction < 0 ? -1 : 1);
+    if (dst < 0 || dst >= (int)entries.size()) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s is already at the %s of %s.",
+                 module_name, direction < 0 ? "back" : "front",
+                 loc.dlists_label.c_str());
+        return true;
+    }
+
+    std::swap(lines[(size_t)entries[(size_t)cur].line],
+              lines[(size_t)entries[(size_t)dst].line]);
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_dlist_order", backup, sizeof backup))
+        return false;
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Moved %s draw order %s in %s. Backup: %s.",
+             module_name, direction < 0 ? "earlier/back" : "later/front",
+             loc.dlists_label.c_str(), backup);
+    stage_set_toast(direction < 0 ? "Moved plane backward" : "Moved plane forward");
+    return true;
+}
+
+bool stage_bgnd_reset_foreground_to_module(const char *module_name)
+{
+    if (!module_name || !module_name[0])
+        return false;
+
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line, bgnd, sizeof bgnd))
+        return false;
+
+    BgndModLoc loc;
+    if (!bgnd_locate_module(lines, block_line, module_name, &loc)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Module %s is not placed in %s.", module_name, block_label);
+        return false;
+    }
+    if (loc.baklst < 1 || loc.baklst > 8 || loc.dlists_label.empty()) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s has no display-list baklst row to use as foreground.",
+                 module_name);
+        return false;
+    }
+
+    int label_line = -1;
+    if (!bgnd_find_exact_label_line(lines, loc.dlists_label.c_str(), &label_line)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Display list %s was not found.", loc.dlists_label.c_str());
+        return false;
+    }
+
+    std::vector<std::string> back_planes;
+    std::vector<std::string> pre_object_slots;
+    std::vector<std::string> post_object_slots;
+    std::vector<std::string> passthrough;
+    std::string target_row;
+    std::string objlst_row;
+    std::string terminator_row;
+    int body_start = label_line + 1;
+    int body_end = -1;
+    char want[32];
+    snprintf(want, sizeof want, "baklst%d", loc.baklst);
+
+    for (int i = body_start; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL))
+            break;
+        std::string tok = bgnd_directive_token(lines[(size_t)i], ".long");
+        if (tok.empty()) {
+            passthrough.push_back(lines[(size_t)i]);
+            continue;
+        }
+
+        if (bgnd_token_ieq(tok, "0") || bgnd_token_ieq(tok, ">0")) {
+            terminator_row = lines[(size_t)i];
+            body_end = i;
+            break;
+        }
+
+        int baklst = bgnd_parse_baklst_token(tok);
+        if (baklst >= 1) {
+            if (bgnd_token_ieq(tok, want))
+                target_row = lines[(size_t)i];
+            else
+                back_planes.push_back(lines[(size_t)i]);
+            continue;
+        }
+
+        if (bgnd_token_ieq(tok, "objlst")) {
+            if (objlst_row.empty())
+                objlst_row = lines[(size_t)i];
+            else
+                post_object_slots.push_back(lines[(size_t)i]);
+            continue;
+        }
+
+        if (bgnd_token_ieq(tok, "objlst2")) {
+            post_object_slots.push_back(lines[(size_t)i]);
+            continue;
+        }
+
+        if (bgnd_token_ieq(tok, "-1") || bgnd_token_ieq(tok, "-2")) {
+            pre_object_slots.push_back(lines[(size_t)i]);
+            continue;
+        }
+
+        /* Unknown display entries are safer left before objlst than dropped or
+         * moved in front of fighters. */
+        pre_object_slots.push_back(lines[(size_t)i]);
+    }
+
+    if (body_end < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s has no .long 0 terminator.", loc.dlists_label.c_str());
+        return false;
+    }
+    if (target_row.empty()) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s uses baklst%d, but %s does not draw that plane.",
+                 module_name, loc.baklst, loc.dlists_label.c_str());
+        return false;
+    }
+    if (objlst_row.empty()) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s has no objlst fighter slot to place foreground after.",
+                 loc.dlists_label.c_str());
+        return false;
+    }
+
+    std::vector<std::string> rebuilt;
+    rebuilt.reserve((size_t)(body_end - body_start + 1));
+    rebuilt.insert(rebuilt.end(), passthrough.begin(), passthrough.end());
+    rebuilt.insert(rebuilt.end(), back_planes.begin(), back_planes.end());
+    rebuilt.insert(rebuilt.end(), pre_object_slots.begin(), pre_object_slots.end());
+    rebuilt.push_back(objlst_row);
+    rebuilt.push_back(target_row);
+    rebuilt.insert(rebuilt.end(), post_object_slots.begin(), post_object_slots.end());
+    rebuilt.push_back(terminator_row);
+
+    bool changed = false;
+    int original_count = body_end - body_start + 1;
+    if (original_count != (int)rebuilt.size()) {
+        changed = true;
+    } else {
+        for (int i = 0; i < original_count; i++) {
+            if (lines[(size_t)(body_start + i)] != rebuilt[(size_t)i]) {
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    if (!changed) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s is already the only module foreground in %s.",
+                 module_name, loc.dlists_label.c_str());
+        return true;
+    }
+
+    lines.erase(lines.begin() + body_start, lines.begin() + body_end + 1);
+    lines.insert(lines.begin() + body_start, rebuilt.begin(), rebuilt.end());
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_foreground_reset", backup, sizeof backup))
+        return false;
+
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Reset %s so only %s draws after players/shadows. Backup: %s.",
+             loc.dlists_label.c_str(), module_name, backup);
+    stage_set_toast("Reset foreground module order");
+    return true;
+}
+
+bool stage_bgnd_set_module_over_fighters(const char *module_name, bool over_fighters)
+{
+    if (!module_name || !module_name[0])
+        return false;
+
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line, bgnd, sizeof bgnd))
+        return false;
+
+    BgndModLoc loc;
+    if (!bgnd_locate_module(lines, block_line, module_name, &loc)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Module %s is not placed in %s.", module_name, block_label);
+        return false;
+    }
+    if (loc.baklst < 1 || loc.baklst > 8 || loc.dlists_label.empty()) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s has no display-list baklst row to move.", module_name);
+        return false;
+    }
+
+    int label_line = -1;
+    if (!bgnd_find_exact_label_line(lines, loc.dlists_label.c_str(), &label_line)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Display list %s was not found.", loc.dlists_label.c_str());
+        return false;
+    }
+
+    int row_line = -1;
+    int objlst_line = -1;
+    int shadow_line = -1;
+    char want[32];
+    snprintf(want, sizeof want, "baklst%d", loc.baklst);
+    for (int i = label_line + 1; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL))
+            break;
+        std::string tok = bgnd_directive_token(lines[(size_t)i], ".long");
+        if (tok.empty())
+            continue;
+        if (bgnd_token_ieq(tok, want))
+            row_line = i;
+        if (bgnd_token_ieq(tok, "-2") && shadow_line < 0)
+            shadow_line = i;
+        if (bgnd_token_ieq(tok, "objlst") && objlst_line < 0)
+            objlst_line = i;
+        if (bgnd_token_ieq(tok, "0") || bgnd_token_ieq(tok, ">0"))
+            break;
+    }
+
+    if (row_line < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s uses baklst%d, but %s does not draw that plane.",
+                 module_name, loc.baklst, loc.dlists_label.c_str());
+        return false;
+    }
+    if (objlst_line < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s has no objlst fighter slot to move around.",
+                 loc.dlists_label.c_str());
+        return false;
+    }
+
+    int behind_line = shadow_line >= 0 ? shadow_line : objlst_line;
+    bool is_over = row_line > objlst_line;
+    bool is_behind_players = row_line < behind_line;
+    if (is_over == over_fighters) {
+        if (over_fighters || is_behind_players) {
+            snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                     "%s already draws %s fighters%s.",
+                     module_name, over_fighters ? "over" : "behind",
+                     over_fighters ? "" : "/shadows");
+            return true;
+        }
+    }
+
+    std::string row = lines[(size_t)row_line];
+    lines.erase(lines.begin() + row_line);
+    if (row_line < objlst_line)
+        objlst_line--;
+    if (row_line < shadow_line)
+        shadow_line--;
+
+    behind_line = shadow_line >= 0 ? shadow_line : objlst_line;
+    int insert_at = over_fighters ? objlst_line + 1 : behind_line;
+    if (insert_at < 0) insert_at = 0;
+    if (insert_at > (int)lines.size()) insert_at = (int)lines.size();
+    lines.insert(lines.begin() + insert_at, row);
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_objlst_order", backup, sizeof backup))
+        return false;
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Moved %s to draw %s fighters%s in %s. Backup: %s.",
+             module_name, over_fighters ? "over" : "behind",
+             over_fighters ? "" : "/shadows",
+             loc.dlists_label.c_str(), backup);
+    stage_set_toast(over_fighters ? "Plane draws over fighters"
+                                  : "Plane draws behind fighters");
     return true;
 }
 

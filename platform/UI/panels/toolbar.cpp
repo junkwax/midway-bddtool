@@ -165,20 +165,26 @@ void ToolbarPanel::render()
     /* ── View ─────────────────────────────────────── */
     if (tb_button(g_game_view ? "Exit Preview" : "Game Preview",
                   g_game_view, "Toggle game preview mode")) {
+        bool entering_preview = g_game_view == 0;
         g_game_view ^= 1;
-        if (g_game_view) {
+        if (entering_preview) {
+            g_runtime_layout_view = 1;
             route_to_game_preview_screen(true, true);
             g_gv_needs_autozoom = true;
         } else {
+            g_runtime_layout_view = 0;
             focus_editor_on_game_preview_screen();
         }
     }
     ImGui::SameLine(0, 3);
     if (tb_button("Runtime", g_runtime_layout_view != 0,
-                  "Draw each BDB module at its MK2 runtime-local origin so stacked source regions overlap in the editor",
+                  "Show the MK2 runtime-local layout in Game Preview",
                   !g_have_bdb || g_no == 0)) {
+        bool turning_on = g_runtime_layout_view == 0;
         g_runtime_layout_view ^= 1;
         g_split_view = 0;
+        if (turning_on && !g_game_view)
+            g_game_view = 1;
         route_to_game_preview_screen(true, g_game_view != 0);
         if (g_game_view)
             g_gv_needs_autozoom = true;
@@ -186,6 +192,7 @@ void ToolbarPanel::render()
     ImGui::SameLine(0, 3);
     if (tb_button("Fit All", false, "Fit entire stage in world view - shows all objects including floor", !g_have_bdb || g_no == 0)) {
         g_game_view = 0;
+        g_runtime_layout_view = 0;
         zoom_to_fit();
     }
     ImGui::SameLine(0, 3);

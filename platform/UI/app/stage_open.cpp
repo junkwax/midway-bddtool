@@ -13,7 +13,7 @@ static void enter_edit_layout_after_stage_load(void)
     runtime_guides_clear_session();
     g_game_view = 0;
     g_split_view = 0;
-    g_runtime_layout_view = 1;
+    g_runtime_layout_view = 0;
     g_show_images = true;
     g_show_obj_properties = true;
     g_show_modules = false;

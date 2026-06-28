@@ -279,15 +279,20 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
             SDL_RenderFillRect(rend, &clip_rect);
         }
 
-        /* Block-table background: draw the far planes (rank below the floor's
-           dlists slot) before the floor/objects, exactly as BGND orders them.
-           Active in both the game preview and the runtime layout review view. */
+        /* Block-table background: draw planes around the earliest player-art
+           split. -2 draws shadows before objlst draws fighter bodies, so a
+           plane after -2 can still cover player shadows even if it is behind
+           the bodies. Fall back to objlst/floor for older stages. */
         int block_bg = (g_game_view || g_runtime_layout_view) &&
                        g_block_background_render && bdd_stage_plane_count() > 0;
+        int object_rank = block_bg ? bdd_stage_object_rank() : 0;
+        int shadow_rank = block_bg ? bdd_stage_shadow_rank() : 0;
         int floor_rank = block_bg ? bdd_stage_floor_rank() : 0;
+        int split_rank = shadow_rank != INT_MAX ? shadow_rank :
+                         (object_rank != INT_MAX ? object_rank : floor_rank);
         if (block_bg)
             bdd_block_background_draw(rend, view_x, view_y, cx, cy, zoom, g_scroll_pos,
-                                      INT_MIN, floor_rank);
+                                      INT_MIN, split_rank);
 
         for (size_t oi = 0; oi < draw_order.size(); oi++) {
             int i = draw_order[oi];
@@ -338,11 +343,11 @@ void bdd_world_objects_draw(SDL_Renderer *rend,
             }
         }
 
-        /* Foreground planes (rank at/after the floor slot, e.g. the big wood1
-           trees) draw over the floor, beneath the runtime actors. */
+        /* Foreground/player-overlap planes draw at or after the same split, so
+           the preview exposes modules that can cover shadows or fighters. */
         if (block_bg)
             bdd_block_background_draw(rend, view_x, view_y, cx, cy, zoom, g_scroll_pos,
-                                      floor_rank, INT_MAX);
+                                      split_rank, INT_MAX);
 
         if (g_game_view) {
             SDL_RenderSetClipRect(rend, NULL);

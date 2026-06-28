@@ -14,6 +14,18 @@ struct ImageModuleInfo {
     bool outside;
 };
 
+struct ImageBppCapResult {
+    int high_images;
+    int changed_images;
+    int changed_palettes;
+    int lossy_palettes;
+    int skipped_mixed_images;
+    int skipped_palettes;
+    int remapped_pixels;
+    size_t before_bytes;
+    size_t after_bytes;
+};
+
 Uint32 palette_argb_at(int pal_idx, int color_idx);
 int block_match_candidate_count(int ref_obj, bool used_only);
 int block_match_image_to_object_style(int img_i, int ref_obj, bool used_only,
@@ -34,6 +46,8 @@ int optimize_image_range_for_space(int start_img, int end_img, bool save_undo,
                                    int *trimmed_images, int *trimmed_pixels,
                                    int *compacted_palettes);
 int compress_active_image_palette(int img_i, int target, bool save_undo);
+int cap_images_to_max_bpp(int max_bpp, bool allow_lossy, bool save_undo,
+                          ImageBppCapResult *result);
 void assign_selected_layer(int wx_layer);
 
 #endif

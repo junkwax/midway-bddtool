@@ -233,6 +233,7 @@ struct GameViewModuleRect {
     int module_idx;
     char name[64];
     int x1, x2, y1, y2;
+    int runtime_ox, runtime_oy;
     float sx1, sy1, sx2, sy2;
     bool runtime;
     bool locked;
@@ -346,9 +347,13 @@ static bool game_view_project_module_rect(int module_idx,
     int local_h = out->y2 - out->y1 + 1;
     float z = (float)(zoom > 0 ? zoom : 1);
     out->locked = module_is_locked(out->name);
+    out->runtime_ox = 0;
+    out->runtime_oy = 0;
 
     out->runtime = game_view_find_stage_plane(out->name, &ox, &oy,
                                               &scroll, &plane_idx) != 0;
+    out->runtime_ox = ox;
+    out->runtime_oy = oy;
     if (out->runtime) {
         int bx1 = 0, bx2 = local_w, by1 = 0, by2 = local_h;
         int start_x = 0, start_y = 0;
@@ -429,6 +434,18 @@ static int game_view_module_handle_at(const GameViewModuleRect *r, ImVec2 mouse,
     return h;
 }
 
+static bool game_view_module_body_contains(const GameViewModuleRect *r,
+                                           ImVec2 mouse,
+                                           float edge_tol)
+{
+    if (!r)
+        return false;
+    if (mouse.x < r->sx1 || mouse.x > r->sx2 ||
+        mouse.y < r->sy1 || mouse.y > r->sy2)
+        return false;
+    return game_view_module_handle_at(r, mouse, edge_tol) == GV_MOD_HANDLE_NONE;
+}
+
 static void game_view_set_resize_cursor(int handle)
 {
     bool x = (handle & (GV_MOD_HANDLE_LEFT | GV_MOD_HANDLE_RIGHT)) != 0;
@@ -485,6 +502,16 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
     static int s_resize_y1 = 0, s_resize_y2 = 0;
     static char s_resize_name[64] = "";
     static bool s_resize_undo_saved = false;
+    static bool s_move = false;
+    static int  s_move_mod = -1;
+    static float s_move_mouse_x = 0.0f;
+    static float s_move_mouse_y = 0.0f;
+    static int s_move_x1 = 0, s_move_x2 = 0;
+    static int s_move_y1 = 0, s_move_y2 = 0;
+    static int s_move_runtime_ox = 0, s_move_runtime_oy = 0;
+    static bool s_move_runtime = false;
+    static char s_move_name[64] = "";
+    static bool s_move_started = false;
 
     if (!g_show_module_bounds || g_bdb_num_modules <= 0 || !dl) {
         if (!ImGui::IsMouseDown(0)) {
@@ -492,6 +519,9 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
             s_resize_mod = -1;
             s_resize_handle = GV_MOD_HANDLE_NONE;
             s_resize_undo_saved = false;
+            s_move = false;
+            s_move_mod = -1;
+            s_move_started = false;
         }
         return false;
     }
@@ -500,8 +530,11 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
     rects.reserve((size_t)g_bdb_num_modules);
     int hot_mod = -1;
     int hot_handle = GV_MOD_HANDLE_NONE;
+    int hot_body_mod = -1;
     long hot_area = 0;
+    long hot_body_area = 0;
     float tol = 7.0f;
+    bool allow_module_body_move = false;
     if (zoom > 2) tol = 8.0f;
 
     for (int m = 0; m < g_bdb_num_modules; m++) {
@@ -522,6 +555,16 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
                 hot_mod = m;
                 hot_handle = handle;
                 hot_area = area;
+            }
+        }
+        if (allow_module_body_move &&
+            !s_resize && !s_move && !blocked && hov && g_cur_tool == 0 &&
+            module_selection_get(m) &&
+            game_view_module_body_contains(&r, mouse, tol)) {
+            long area = (long)(r.x2 - r.x1 + 1) * (long)(r.y2 - r.y1 + 1);
+            if (hot_body_mod < 0 || area < hot_body_area) {
+                hot_body_mod = m;
+                hot_body_area = area;
             }
         }
         rects.push_back(r);
@@ -549,6 +592,35 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
             s_resize_y2 = hot_rect->y2;
             snprintf(s_resize_name, sizeof s_resize_name, "%s", hot_rect->name);
             s_resize_undo_saved = false;
+        } else if (hot_rect && hot_rect->locked) {
+            stage_set_toast("Module is locked");
+        }
+    }
+
+    if (allow_module_body_move &&
+        !s_resize && !s_move && hot_body_mod >= 0 && !blocked && hov &&
+        g_cur_tool == 0 && ImGui::IsMouseClicked(0)) {
+        GameViewModuleRect *hot_rect = NULL;
+        for (size_t i = 0; i < rects.size(); i++) {
+            if (rects[i].module_idx == hot_body_mod) {
+                hot_rect = &rects[i];
+                break;
+            }
+        }
+        if (hot_rect && !hot_rect->locked) {
+            s_move = true;
+            s_move_mod = hot_body_mod;
+            s_move_mouse_x = mouse.x;
+            s_move_mouse_y = mouse.y;
+            s_move_x1 = hot_rect->x1;
+            s_move_x2 = hot_rect->x2;
+            s_move_y1 = hot_rect->y1;
+            s_move_y2 = hot_rect->y2;
+            s_move_runtime_ox = hot_rect->runtime_ox;
+            s_move_runtime_oy = hot_rect->runtime_oy;
+            s_move_runtime = hot_rect->runtime;
+            snprintf(s_move_name, sizeof s_move_name, "%s", hot_rect->name);
+            s_move_started = false;
         } else if (hot_rect && hot_rect->locked) {
             stage_set_toast("Module is locked");
         }
@@ -592,6 +664,19 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
         }
     }
 
+    if (s_move && ImGui::IsMouseDown(0)) {
+        int dx = (int)((mouse.x - s_move_mouse_x) / (float)(zoom > 0 ? zoom : 1));
+        int dy = (int)((mouse.y - s_move_mouse_y) / (float)(zoom > 0 ? zoom : 1));
+        if (g_grid_snap) {
+            if (g_grid_sx > 1)
+                dx = rounded_div_nearest(dx, g_grid_sx) * g_grid_sx;
+            if (g_grid_sy > 1)
+                dy = rounded_div_nearest(dy, g_grid_sy) * g_grid_sy;
+        }
+        if (dx != 0 || dy != 0)
+            s_move_started = true;
+    }
+
     if (s_resize && !ImGui::IsMouseDown(0)) {
         if (s_resize_undo_saved) {
             char msg[128];
@@ -609,34 +694,85 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
         s_resize_undo_saved = false;
     }
 
+    if (s_move && !ImGui::IsMouseDown(0)) {
+        int dx = (int)((mouse.x - s_move_mouse_x) / (float)(zoom > 0 ? zoom : 1));
+        int dy = (int)((mouse.y - s_move_mouse_y) / (float)(zoom > 0 ? zoom : 1));
+        if (g_grid_snap) {
+            if (g_grid_sx > 1)
+                dx = rounded_div_nearest(dx, g_grid_sx) * g_grid_sx;
+            if (g_grid_sy > 1)
+                dy = rounded_div_nearest(dy, g_grid_sy) * g_grid_sy;
+        }
+        if (s_move_started && (dx != 0 || dy != 0)) {
+            if (s_move_runtime) {
+                stage_bgnd_set_module_offset(s_move_name,
+                                             s_move_runtime_ox + dx,
+                                             s_move_runtime_oy + dy);
+            } else {
+                undo_save_ex("Move Module Frame");
+                game_view_rewrite_module_bounds(s_move_mod, s_move_name,
+                                                s_move_x1 + dx, s_move_x2 + dx,
+                                                s_move_y1 + dy, s_move_y2 + dy);
+                stage_set_toast("Moved module frame");
+            }
+        }
+        s_move = false;
+        s_move_mod = -1;
+        s_move_started = false;
+    }
+
     for (size_t i = 0; i < rects.size(); i++) {
         const GameViewModuleRect &r = rects[i];
         bool selected = module_selection_get(r.module_idx);
-        bool hot = (r.module_idx == hot_mod);
+        bool hot = (r.module_idx == hot_mod) || (r.module_idx == hot_body_mod);
         bool active = s_resize && r.module_idx == s_resize_mod;
+        bool moving = s_move && r.module_idx == s_move_mod;
+        float move_dx = 0.0f;
+        float move_dy = 0.0f;
+        if (moving) {
+            int mdx = (int)((mouse.x - s_move_mouse_x) / (float)(zoom > 0 ? zoom : 1));
+            int mdy = (int)((mouse.y - s_move_mouse_y) / (float)(zoom > 0 ? zoom : 1));
+            if (g_grid_snap) {
+                if (g_grid_sx > 1)
+                    mdx = rounded_div_nearest(mdx, g_grid_sx) * g_grid_sx;
+                if (g_grid_sy > 1)
+                    mdy = rounded_div_nearest(mdy, g_grid_sy) * g_grid_sy;
+            }
+            move_dx = (float)mdx * (float)(zoom > 0 ? zoom : 1);
+            move_dy = (float)mdy * (float)(zoom > 0 ? zoom : 1);
+        }
         ImU32 fill = r.locked ? IM_COL32(255, 150, 30, 18) :
                     selected ? IM_COL32(255, 220, 60, 24) :
                                IM_COL32(80, 130, 255, 13);
         ImU32 line = r.locked ? IM_COL32(255, 165, 40, 225) :
-                    (hot || active) ? IM_COL32(110, 240, 255, 245) :
+                    (hot || active || moving) ? IM_COL32(110, 240, 255, 245) :
                     selected ? IM_COL32(255, 230, 90, 235) :
                                IM_COL32(130, 170, 255, 160);
-        float thick = (hot || active || selected) ? 2.2f : 1.3f;
-        dl->AddRectFilled(ImVec2(r.sx1, r.sy1), ImVec2(r.sx2, r.sy2), fill);
-        dl->AddRect(ImVec2(r.sx1, r.sy1), ImVec2(r.sx2, r.sy2), line, 0.0f, 0, thick);
+        float thick = (hot || active || moving || selected) ? 2.2f : 1.3f;
+        float sx1 = r.sx1 + move_dx;
+        float sy1 = r.sy1 + move_dy;
+        float sx2 = r.sx2 + move_dx;
+        float sy2 = r.sy2 + move_dy;
+        dl->AddRectFilled(ImVec2(sx1, sy1), ImVec2(sx2, sy2), fill);
+        dl->AddRect(ImVec2(sx1, sy1), ImVec2(sx2, sy2), line, 0.0f, 0, thick);
 
-        if (selected || hot || active)
-            game_view_draw_module_handles(dl, &r, line);
+        GameViewModuleRect draw_r = r;
+        draw_r.sx1 = sx1;
+        draw_r.sy1 = sy1;
+        draw_r.sx2 = sx2;
+        draw_r.sy2 = sy2;
+        if (selected || hot || active || moving)
+            game_view_draw_module_handles(dl, &draw_r, line);
 
-        if (selected || hot || active) {
+        if (selected || hot || active || moving) {
             char label[128];
             snprintf(label, sizeof label, "%s%d %s  %dx%d%s",
                      r.locked ? "[LOCKED] " : "", r.module_idx, r.name,
                      r.x2 - r.x1 + 1, r.y2 - r.y1 + 1,
                      r.runtime ? "" : " src");
             ImVec2 ts = ImGui::CalcTextSize(label);
-            float lx = r.sx1 + 5.0f;
-            float ly = r.sy1 + 4.0f;
+            float lx = sx1 + 5.0f;
+            float ly = sy1 + 4.0f;
             if (lx + ts.x + 8.0f > gx + gw)
                 lx = gx + gw - ts.x - 8.0f;
             if (lx < gx + 3.0f) lx = gx + 3.0f;
@@ -656,11 +792,23 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
         game_view_set_resize_cursor(s_resize_handle);
         return true;
     }
+    if (s_move) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        return true;
+    }
     if (hot_mod >= 0 && !blocked && hov && g_cur_tool == 0) {
         game_view_set_resize_cursor(hot_handle);
         if (ImGui::IsMouseDown(0))
             return true;
         ImGui::SetTooltip("Drag module edge to resize; drag a corner to resize width and height.");
+        return true;
+    }
+    if (allow_module_body_move &&
+        hot_body_mod >= 0 && !blocked && hov && g_cur_tool == 0) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        if (ImGui::IsMouseDown(0))
+            return true;
+        ImGui::SetTooltip("Drag inside the selected module to move its runtime placement.");
         return true;
     }
     return false;

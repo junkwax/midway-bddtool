@@ -823,6 +823,8 @@ typedef struct {
     BddStagePlane planes[BDD_STAGE_PLANE_MAX];
     int plane_count;
     int floor_rank;          /* draw rank of the -1/floor_code dlists slot, -1 if none */
+    int shadow_rank;         /* draw rank of the -2/player-shadow slot, -1 if none */
+    int object_rank;         /* draw rank of the first objlst fighter slot, -1 if none */
     char floor_label[32];    /* floor SAG label from <stage>_floor_info, "" if none */
     char floor_palette[32];  /* floor palette label from <stage>_floor_info, "" if none */
     int floor_info_valid;    /* floor_y/floor_height were parsed from floor_info */
@@ -1150,8 +1152,11 @@ static void bdd_parse_stage_dlists(const char *path, const char *dlists_label,
     int in_block = 0;
     int rank = 10;
 
+    if (!table) return;
     table->floor_rank = -1;
-    if (!path || !dlists_label || !dlists_label[0] || !table) return;
+    table->shadow_rank = -1;
+    table->object_rank = -1;
+    if (!path || !dlists_label || !dlists_label[0]) return;
     f = fopen(path, "r");
     if (!f) return;
     while (fgets(line, sizeof line, f)) {
@@ -1187,7 +1192,19 @@ static void bdd_parse_stage_dlists(const char *path, const char *dlists_label,
                 rank += 10;
             continue;
         }
-        /* -2 (shadows), objlst, 0, or any non-plane entry ends the background. */
+        if (strcasecmp(token, "-2") == 0 ||
+            strcasecmp(token, "objlst") == 0 ||
+            strcasecmp(token, "objlst2") == 0) {
+            if (strcasecmp(token, "-2") == 0 && table->shadow_rank < 0)
+                table->shadow_rank = rank;
+            if ((strcasecmp(token, "objlst") == 0 ||
+                 strcasecmp(token, "objlst2") == 0) &&
+                table->object_rank < 0)
+                table->object_rank = rank;
+            rank += 10;
+            continue;
+        }
+        /* 0 or any non-display-list entry ends the background. */
         break;
     }
     fclose(f);
@@ -1460,6 +1477,8 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
     table->valid = 0;
     table->plane_count = 0;
     table->floor_rank = -1;
+    table->shadow_rank = -1;
+    table->object_rank = -1;
     table->floor_label[0] = '\0';
     table->floor_palette[0] = '\0';
     table->floor_info_valid = 0;
@@ -1604,11 +1623,59 @@ int bdd_stage_plane_scroll_origin(int index, int *scroll_x)
     return 1;
 }
 
+int bdd_stage_module_baklst(const char *module_name)
+{
+    const BddStageModuleTable *table;
+    char want[32];
+
+    if (!module_name || !module_name[0])
+        return -1;
+    table = bdd_get_stage_module_table();
+    if (!table)
+        return -1;
+
+    bdd_strip_bmod_suffix(module_name, want, sizeof want);
+    for (int i = 0; i < table->plane_count; i++) {
+        if (strcasecmp(table->planes[i].name, want) == 0)
+            return table->planes[i].baklst;
+    }
+    return -1;
+}
+
+int bdd_stage_baklst_module(int baklst, char *name, int name_sz)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    if (!table || baklst < 1 || baklst > 8)
+        return 0;
+    for (int i = 0; i < table->plane_count; i++) {
+        if (table->planes[i].baklst != baklst)
+            continue;
+        if (name && name_sz > 0)
+            snprintf(name, (size_t)name_sz, "%s", table->planes[i].name);
+        return 1;
+    }
+    return 0;
+}
+
 /* Public: draw rank of the floor's -1/floor_code dlists slot, INT_MAX if none. */
 int bdd_stage_floor_rank(void)
 {
     const BddStageModuleTable *table = bdd_get_stage_module_table();
     return (table && table->floor_rank >= 0) ? table->floor_rank : INT_MAX;
+}
+
+/* Public: draw rank of the -2/player-shadow dlists slot, INT_MAX if none. */
+int bdd_stage_shadow_rank(void)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    return (table && table->shadow_rank >= 0) ? table->shadow_rank : INT_MAX;
+}
+
+/* Public: draw rank of the first objlst/objlst2 fighter slot, INT_MAX if none. */
+int bdd_stage_object_rank(void)
+{
+    const BddStageModuleTable *table = bdd_get_stage_module_table();
+    return (table && table->object_rank >= 0) ? table->object_rank : INT_MAX;
 }
 
 /* Public: 1 when the object belongs to a known background plane module (and so

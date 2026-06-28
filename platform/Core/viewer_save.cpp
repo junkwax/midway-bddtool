@@ -141,16 +141,33 @@ static int replace_saved_file_with_backup(const char *path, const char *tmp)
     }
 
 #ifdef _WIN32
-    if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
-        DWORD err = GetLastError();
+    {
+        DWORD err = 0;
+        int attempt = 0;
+        BOOL moved = FALSE;
+        for (attempt = 1; attempt <= 8; attempt++) {
+            moved = MoveFileExA(tmp, path,
+                                MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED);
+            if (moved)
+                break;
+            err = GetLastError();
+            if (err != ERROR_ACCESS_DENIED &&
+                err != ERROR_SHARING_VIOLATION &&
+                err != ERROR_LOCK_VIOLATION)
+                break;
+            Sleep(40 * (DWORD)attempt);
+        }
+        if (!moved) {
+        int attempts_used = attempt > 8 ? 8 : attempt;
         fprintf(stderr, "save: replace failed for %s (winerr=%lu)\n", path, (unsigned long)err);
-        bdd_save_logf("save replace failed: target=\"%s\" temp=\"%s\" backup=\"%s\" winerr=%lu",
+        bdd_save_logf("save replace failed: target=\"%s\" temp=\"%s\" backup=\"%s\" winerr=%lu attempts=%d",
                       path ? path : "", tmp ? tmp : "", had_original ? bak : "",
-                      (unsigned long)err);
+                      (unsigned long)err, attempts_used);
         if (had_original && !file_copy(bak, path))
             bdd_save_logf("save rollback failed: backup=\"%s\" target=\"%s\"", bak, path ? path : "");
         DeleteFileA(tmp);
         return 0;
+        }
     }
 #else
     if (rename(tmp, path) != 0) {
