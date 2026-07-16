@@ -554,6 +554,9 @@ bool stage_bgnd_move_module_draw_order(const char *module_name, int direction);
 bool stage_bgnd_set_module_over_fighters(const char *module_name, bool over_fighters);
 bool stage_bgnd_reset_foreground_to_module(const char *module_name);
 bool stage_bgnd_set_bg_color(int r5, int g5, int b5);
+/* Install the optional TOWER2 CLOUD2/CLOUD3 runtime process.  This edits the
+ * selected BGND.ASM with a dated backup, never the BDB/BDD payload. */
+bool stage_bgnd_install_tower_high_clouds(void);
 bool stage_draft_bgnd_path(char *out, size_t outsz);
 bool stage_create_draft_bgnd(void);
 bool stage_promote_draft_to_bgnd(void);

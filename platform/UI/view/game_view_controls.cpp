@@ -2825,13 +2825,19 @@ void draw_game_view_controls(void)
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f,0.50f,0.28f,0.95f));
                     if (ImGui::Button("Play##gv_play", ImVec2(64.0f, 0.0f))) {
                         s_gv_play = true;
-                        s_gv_dir = 1;
                         s_gv_accum = 0;
                     }
                     ImGui::PopStyleColor();
                 }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Auto-scrolls the camera left and right.");
+                ImGui::SameLine(0, 6);
+                if (ImGui::SmallButton(s_gv_dir >= 0 ? "Direction >" : "Direction <")) {
+                    s_gv_dir = -s_gv_dir;
+                    s_gv_accum = 0.0f;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Reverse preview parallax direction. This only changes the camera playback direction.");
                 ImGui::SameLine(0, 6);
                 if (ImGui::SmallButton("Match Start")) {
                     route_to_game_preview_screen(true, false);

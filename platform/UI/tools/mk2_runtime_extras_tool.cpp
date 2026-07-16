@@ -81,14 +81,10 @@ bool mk2_current_stage_has_known_runtime_extras(void)
 }
 
 const RuntimeExtraGuide g_tower_runtime_guide_defaults[] = {
-    { "STATUE2", "STATUE2 rear L", "CASTLEP.LOD", 316, -4, 68, 195, 0.6875f, 0x43, 0, IM_COL32(210, 125, 70, 130) },
-    { "STATUE1", "STATUE1 front L", "CASTLEP.LOD", 284, -12, 76, 218, 0.75f, 0x46, 0, IM_COL32(235, 145, 80, 145) },
-    { "STATUE2", "STATUE2 rear R", "CASTLEP.LOD", 768, -4, 68, 195, 0.6875f, 0x43, 1, IM_COL32(210, 125, 70, 130) },
-    { "STATUE1", "STATUE1 front R", "CASTLEP.LOD", 804, -12, 76, 218, 0.75f, 0x46, 1, IM_COL32(235, 145, 80, 145) },
-    { "FlameA1", "Flame L", "MK6MIL.LOD", 272, -5, 36, 48, 0.75f, 0x46, 0, IM_COL32(255, 90, 40, 135) },
-    { "FlameA1", "Flame R", "MK6MIL.LOD", 822, -5, 36, 48, 0.75f, 0x46, 1, IM_COL32(255, 90, 40, 135) },
-    { "cloud1a", "Cloud row 7", "MK6MIL.LOD", 410, 42, 370, 145, 0.625f, 0x32, 0, IM_COL32(140, 175, 220, 90) },
-    { "cloud1a", "Cloud row 8", "MK6MIL.LOD", 458, 0, 370, 145, 0.625f, 0x32, 0, IM_COL32(150, 185, 235, 90) },
+    { "cloud1a", "Cloud row 7", "BOONPICS.IMG", 410, 42, 370, 145, 0.625f, 0x32, 0, IM_COL32(140, 175, 220, 90) },
+    { "cloud1a", "Cloud row 8", "BOONPICS.IMG", 458, 0, 370, 145, 0.625f, 0x32, 0, IM_COL32(150, 185, 235, 90) },
+    { "CLOUD2", "High cloud 2", "CASTLE.IMG", 376, 12, 209, 38, 0.5f, 0x20, 0, IM_COL32(135, 180, 230, 90) },
+    { "CLOUD3", "High cloud 3", "CASTLE.IMG", 650, 31, 96, 15, 0.5f, 0x20, 0, IM_COL32(145, 190, 240, 90) },
     { "FL_TOW", "FL_TOW floor", "MK7MIL.LOD", 0, 181, 1200, 75, 1.0f, 0x40, 0, IM_COL32(110, 210, 125, 95) },
     { "monktorso", "Big monk", "MK6MIL.LOD", 536, 72, 130, 160, 0.625f, 0x3C, 0, IM_COL32(185, 135, 230, 95) },
 };
@@ -310,9 +306,8 @@ static void mk2_tower2_runtime_report(char *out, size_t outsz)
     stage_append(out, outsz, "PLANE5BMOD: baklst6 offset 0x0000,-0x021, wall BDB module.\n");
     stage_append(out, outsz, "Runtime floor: FL_TOW from MK7MIL.LOD, tower_floor_info, y=0x0B5, height 75, skewed by tower_skew_calla.\n");
     stage_append(out, outsz, "Runtime monk: monktorso/monk1..monk7 from MK6MIL assets, spawned by make_big_monk on baklst5.\n");
-    stage_append(out, outsz, "Runtime statues: STATUE1/STATUE2 from CASTLE.IMG via CASTLEP.LOD, spawned by spawn_tower_castle_props.\n");
-    stage_append(out, outsz, "Runtime flames: FlameA1..FlameD4 from MK6MIL.LOD, animated by tower_flame_proc_l/r on baklst3.\n");
-    stage_append(out, outsz, "Runtime clouds: cloud1a..cloud1d from MK6MIL.LOD, animated by cloud_proc on baklst7/baklst8.\n\n");
+    stage_append(out, outsz, "Runtime clouds: cloud1a..cloud1d from BOONPICS.IMG, animated by cloud_proc on baklst7/baklst8.\n");
+    stage_append(out, outsz, "Optional high clouds: CLOUD2/CLOUD3 from CASTLE.IMG can be installed as their own moving process on reserved baklst2.\n\n");
     mk2_append_runtime_tradeoff_notes(out, outsz);
 }
 
@@ -570,6 +565,15 @@ void draw_mk2_runtime_extras_tool(void)
 
     if (ImGui::Button("Copy Selected As Runtime Recipe", ImVec2(-1, 0))) {
         mk2_copy_selected_runtime_recipe();
+    }
+
+    if (mk2_current_stage_is_tower2()) {
+        ImGui::SeparatorText("Tower2 High Clouds");
+        ImGui::TextDisabled("Installs a separate CLOUD2/CLOUD3 moving process on baklst2. baklst7 and baklst8 remain owned by the stock cloud animation.");
+        if (ImGui::Button("Install Tower High-Cloud Runtime", ImVec2(-1, 0))) {
+            if (stage_bgnd_install_tower_high_clouds())
+                stage_set_toast("Installed Tower high-cloud runtime; rebuild MK2 to test");
+        }
     }
 
     if (ImGui::Button("Import Runtime IMG Source...", ImVec2(-1, 0))) {

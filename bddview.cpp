@@ -366,7 +366,7 @@ void BddViewApp::process_events()
 
         case SDL_MOUSEBUTTONDOWN:
             if (bg_editor_wants_input()) break;
-            bdd_sdl_mouse_button_down(&mouse_state, &ev.button, ww,
+            bdd_sdl_mouse_button_down(&mouse_state, &ev.button, ww, wh,
                                       &view_x, &view_y, &zoom,
                                       &g_last_obj);
             break;

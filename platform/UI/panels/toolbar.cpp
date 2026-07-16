@@ -178,16 +178,14 @@ void ToolbarPanel::render()
     }
     ImGui::SameLine(0, 3);
     if (tb_button("Runtime", g_runtime_layout_view != 0,
-                  "Show the MK2 runtime-local layout in Game Preview",
+                  "Show the MK2 runtime-local layout in the world editor",
                   !g_have_bdb || g_no == 0)) {
-        bool turning_on = g_runtime_layout_view == 0;
         g_runtime_layout_view ^= 1;
         g_split_view = 0;
-        if (turning_on && !g_game_view)
-            g_game_view = 1;
-        route_to_game_preview_screen(true, g_game_view != 0);
         if (g_game_view)
-            g_gv_needs_autozoom = true;
+            route_to_game_preview_screen(true, true);
+        else
+            g_view_changed = 1;
     }
     ImGui::SameLine(0, 3);
     if (tb_button("Fit All", false, "Fit entire stage in world view - shows all objects including floor", !g_have_bdb || g_no == 0)) {

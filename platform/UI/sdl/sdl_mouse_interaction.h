@@ -50,7 +50,7 @@ void bdd_sdl_mouse_state_shutdown(BddSdlMouseState *state);
 
 void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
                                const SDL_MouseButtonEvent *button,
-                               int window_w,
+                               int window_w, int window_h,
                                int *view_x, int *view_y, int *zoom,
                                int *last_obj);
 void bdd_sdl_mouse_button_up(BddSdlMouseState *state,

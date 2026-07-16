@@ -415,7 +415,7 @@ void bdd_sdl_mouse_state_shutdown(BddSdlMouseState *state)
 
 void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
                                const SDL_MouseButtonEvent *button,
-                               int window_w,
+                               int window_w, int window_h,
                                int *view_x, int *view_y, int *zoom,
                                int *last_obj)
 {
@@ -423,6 +423,16 @@ void bdd_sdl_mouse_button_down(BddSdlMouseState *state,
 
     if (!state || !button || !view_x || !view_y || !zoom || !last_obj)
         return;
+
+    /* Game Preview owns pointer interaction through its ImGui overlay.  Do
+       not let the SDL world-builder picker see the same click: even a click
+       inside the 400x254 viewport can otherwise select a source/runtime
+       object underneath the preview's parallax projection. */
+    if (g_game_view) {
+        (void)window_w;
+        (void)window_h;
+        return;
+    }
 
     if (button->button == SDL_BUTTON_MIDDLE) {
         state->mmb_drag = 1;

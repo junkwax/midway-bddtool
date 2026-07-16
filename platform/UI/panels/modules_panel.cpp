@@ -94,7 +94,10 @@ static void module_rewrite_bounds(int module_idx, const char *name,
     char line[256];
     snprintf(line, sizeof line, "%s %d %d %d %d",
              (name && name[0]) ? name : "MOD", x1, x2, y1, y2);
-    if (!editor_project_set_module_line(module_idx, line)) return;
+    if (!editor_project_set_module_line(module_idx, line)) {
+        stage_set_toast("Module bounds overlap another module; objects stay with their current module");
+        return;
+    }
     sync_bdb_header_counts();
     g_dirty = 1;
     g_view_changed = 1;
@@ -197,6 +200,126 @@ static int module_create_with_bounds(const char *name, int x1, int x2, int y1, i
              mod_name, x2 - x1 + 1, y2 - y1 + 1);
     stage_set_toast(msg);
     return created;
+}
+
+static void module_duplicate_iteration_name(const char *source, char *out, size_t outsz)
+{
+    char base[64] = "";
+    snprintf(base, sizeof base, "%s", (source && source[0]) ? source : "MOD");
+    char *digits = base + strlen(base);
+    while (digits > base && digits[-1] >= '0' && digits[-1] <= '9') digits--;
+    int first_number = 1;
+    bool numbered_stem = digits < base + strlen(base) && digits > base;
+    if (numbered_stem) {
+        first_number = atoi(digits) + 1;
+        *digits = '\0';
+    } else {
+        char *underscore = strrchr(base, '_');
+        if (underscore && underscore[1]) {
+            bool numeric = true;
+            for (const char *p = underscore + 1; *p; p++) {
+                if (*p < '0' || *p > '9') { numeric = false; break; }
+            }
+            if (numeric) *underscore = '\0';
+        }
+    }
+    if (!base[0]) snprintf(base, sizeof base, "MOD");
+    for (int n = first_number; n < 10000; n++) {
+        char candidate[64];
+        snprintf(candidate, sizeof candidate, numbered_stem ? "%.59s%d" : "%.56s_%d", base, n);
+        if (!module_name_in_use(candidate, -1)) {
+            snprintf(out, outsz, "%s", candidate);
+            return;
+        }
+    }
+    snprintf(out, outsz, numbered_stem ? "%.59s9999" : "%.56s_9999", base);
+}
+
+/* BDB has no module ID on an object; an object belongs to the smallest module
+ * rectangle that fully contains it.  Duplicate a module by placing a disjoint
+ * copy at the next free X position, then cloning only the objects owned by the
+ * source rectangle.  This keeps both modules independently editable. */
+static int module_duplicate_to_next_slot(int source_module)
+{
+    char source_name[64] = "";
+    int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    if (!parse_module_bounds(source_module, source_name, &x1, &x2, &y1, &y2)) {
+        stage_set_toast("Could not read the source module");
+        return -1;
+    }
+    if (g_bdb_num_modules >= 8) {
+        stage_set_toast("All 8 MK2 module slots are in use");
+        return -1;
+    }
+
+    std::vector<Obj> copies;
+    for (int i = 0; i < g_no; i++) {
+        Img *im = img_find(g_obj[i].ii);
+        int w = im ? im->w : 1;
+        int h = im ? im->h : 1;
+        if (module_smallest_containing(g_obj[i].depth, g_obj[i].sy, w, h) == source_module)
+            copies.push_back(g_obj[i]);
+    }
+    if (copies.empty()) {
+        stage_set_toast("The selected module has no independently owned assets to duplicate");
+        return -1;
+    }
+    if (!editor_project_reserve_modules(g_bdb_num_modules + 1) ||
+        !editor_project_reserve_objects(g_no + (int)copies.size())) {
+        stage_set_toast("Not enough project capacity to duplicate this module");
+        return -1;
+    }
+
+    /* Put the new module to the right of every existing module.  Besides being
+       predictable, this guarantees no ownership overlap with the source or
+       another module. */
+    int rightmost = x2;
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        int mx2 = 0;
+        if (parse_module_bounds(m, NULL, NULL, &mx2, NULL, NULL) && mx2 > rightmost)
+            rightmost = mx2;
+    }
+    const int new_x1 = rightmost + 32;
+    const int dx = new_x1 - x1;
+    const int new_x2 = x2 + dx;
+
+    char new_name[64];
+    module_duplicate_iteration_name(source_name, new_name, sizeof new_name);
+    char line[256];
+    snprintf(line, sizeof line, "%s %d %d %d %d", new_name, new_x1, new_x2, y1, y2);
+
+    undo_save_ex("Duplicate Module");
+    int duplicate_module = editor_project_insert_module_line_before_enclosing(
+        line, new_x1, new_x2, y1, y2);
+    if (duplicate_module < 0) {
+        stage_set_toast("Could not allocate a non-overlapping module slot");
+        return -1;
+    }
+    for (const Obj &source : copies) {
+        Obj *copy = editor_project_append_object_slot();
+        if (!copy) {
+            /* Capacity was reserved before mutation, so this is only a
+               defensive guard against a corrupt project limit. */
+            stage_set_toast("Module created, but object duplication stopped at project limit");
+            break;
+        }
+        *copy = source;
+        copy->depth += dx;
+        copy->order = g_no - 1;
+    }
+    sync_bdb_header_counts();
+    module_selection_select_only(duplicate_module);
+    editor_project_clear_selection();
+    for (int i = g_no - (int)copies.size(); i < g_no; i++)
+        if (i >= 0) g_sel_flags[i] = 1;
+    g_dirty = 1;
+    g_view_changed = 1;
+    g_show_module_bounds = true;
+    char msg[160];
+    snprintf(msg, sizeof msg, "Duplicated %s into slot %d as %s (%d assets)",
+             source_name, duplicate_module, new_name, (int)copies.size());
+    stage_set_toast(msg);
+    return duplicate_module;
 }
 
 static void draw_module_bounds_size_editor(int module_idx, bool show_bounds)
@@ -1076,7 +1199,7 @@ void draw_modules(void)
             ImGui::TableSetupColumn("size", ImGuiTableColumnFlags_WidthFixed, 74.0f);
             ImGui::TableSetupColumn("obj", ImGuiTableColumnFlags_WidthFixed, 46.0f);
             ImGui::TableSetupColumn("pal", ImGuiTableColumnFlags_WidthFixed, 46.0f);
-            ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+            ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthFixed, 168.0f);
             ImGui::TableHeadersRow();
             for (int m = 0; m < g_bdb_num_modules; m++) {
                 char name[64] = "";
@@ -1137,6 +1260,11 @@ void draw_modules(void)
                 ImGui::SameLine();
                 if (ImGui::SmallButton("View"))
                     module_center_view(m);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Duplicate"))
+                    module_duplicate_to_next_slot(m);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Clones this module and its owned assets into the next free MK2 module slot, placed to the right so ownership cannot overlap.");
                 if (first >= 0 && ImGui::IsItemHovered())
                     ImGui::SetTooltip("First assigned object: %d", first);
                 ImGui::PopID();

@@ -2105,6 +2105,39 @@ static bool bgnd_collect_bmod_entries(const std::vector<std::string> &lines,
     return !entries.empty();
 }
 
+/* Runtime processes own their display lists.  A BMOD must never be inserted
+   into one: the loader and the process both write the same baklst head, which
+   makes clouds, flames, and other actors disappear or animate garbage.  This
+   deliberately detects only executable list use (movi/indirect list-head
+   writes), not the normal dlist draw rows. */
+static bool bgnd_baklst_reserved_by_runtime_animation(const std::vector<std::string> &lines,
+                                                       const char *stage_block_label,
+                                                       int baklst)
+{
+    if (baklst < 1 || baklst > 8) return false;
+    char needle[16];
+    snprintf(needle, sizeof needle, "baklst%d", baklst);
+    bool in_stage_block = false;
+    for (const std::string &raw : lines) {
+        std::string label;
+        if (stage_start_asm_label_line(raw, &label))
+            in_stage_block = stage_block_label &&
+                             mk2_sync_strcasecmp(label.c_str(), stage_block_label) == 0;
+        if (in_stage_block)
+            continue;
+
+        std::string line = raw;
+        for (char &ch : line)
+            if (ch >= 'A' && ch <= 'Z') ch = (char)(ch + ('a' - 'A'));
+        if (line.find(needle) == std::string::npos)
+            continue;
+        if (line.find("movi") != std::string::npos ||
+            line.find("@baklst") != std::string::npos)
+            return true;
+    }
+    return false;
+}
+
 static int bgnd_parse_baklst_token(const std::string &tok)
 {
     if (tok.size() < 6 || mk2_sync_strcasecmp(tok.substr(0, 6).c_str(), "baklst") != 0)
@@ -2167,6 +2200,23 @@ static bool bgnd_collect_dlist_baklst_lines(const std::vector<std::string> &line
     return true;
 }
 
+static bool bgnd_stage_dlists_label(const std::vector<std::string> &lines,
+                                    int block_line, std::string *out)
+{
+    if (out) out->clear();
+    int long_count = 0;
+    for (int i = block_line + 1; i < (int)lines.size(); i++) {
+        if (stage_start_asm_label_line(lines[(size_t)i], NULL)) break;
+        std::string tok = bgnd_directive_token(lines[(size_t)i], ".long");
+        if (tok.empty()) continue;
+        if (++long_count == 3) {
+            if (out) *out = tok;
+            return !tok.empty();
+        }
+    }
+    return false;
+}
+
 bool stage_bgnd_swap_module_baklst(const char *module_name, int target_baklst)
 {
     if (!module_name || !module_name[0])
@@ -2209,6 +2259,12 @@ bool stage_bgnd_swap_module_baklst(const char *module_name, int target_baklst)
         snprintf(g_stage_start_status, sizeof g_stage_start_status,
                  "%s is already on baklst%d.", module_name, target_baklst);
         return true;
+    }
+    if (bgnd_baklst_reserved_by_runtime_animation(lines, block_label, target_baklst)) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "baklst%d is owned by a runtime animation in %s and cannot hold a BMOD.",
+                 target_baklst, block_label);
+        return false;
     }
     if (dst_idx < 0) {
         snprintf(g_stage_start_status, sizeof g_stage_start_status,
@@ -2644,35 +2700,49 @@ bool stage_bgnd_create_module_placement(const char *module_name, int ox, int oy)
         return false;
     }
 
-    int long_count = 0, baklst_num = 0, insert_at = -1;
-    int i = block_line + 1;
-    for (; i < (int)lines.size(); i++) {
-        if (stage_start_asm_label_line(lines[(size_t)i], NULL)) break;
-        std::string longtok = bgnd_directive_token(lines[(size_t)i], ".long");
-        if (longtok.empty()) continue;
-        long_count++;
-        if (long_count <= 4) continue;
-        char c0 = longtok[0];
-        if (c0 == '>' || (c0 >= '0' && c0 <= '9')) { insert_at = i; break; }
-        baklst_num++;
-    }
-    if (insert_at < 0) {
+    std::vector<BgndBmodEntry> entries;
+    if (!bgnd_collect_bmod_entries(lines, block_line, entries)) {
         snprintf(g_stage_start_status, sizeof g_stage_start_status,
-                 "Could not find the end of the BMOD list in %s.", block_label);
+                 "Could not read the BMOD list in %s.", block_label);
         return false;
     }
-    if (baklst_num >= 8) {
+    std::string dlists_label;
+    std::vector<BgndDlistEntry> dlist_entries;
+    char dlist_status[160] = "";
+    if (!bgnd_stage_dlists_label(lines, block_line, &dlists_label) ||
+        !bgnd_collect_dlist_baklst_lines(lines, dlists_label, dlist_entries,
+                                         dlist_status, sizeof dlist_status)) {
         snprintf(g_stage_start_status, sizeof g_stage_start_status,
-                 "%s already uses all 8 background planes; cannot add %s.",
-                 block_label, module_name);
+                 "Could not find drawable baklst rows for %s: %s",
+                 block_label, dlist_status[0] ? dlist_status : "missing display list");
+        return false;
+    }
+    int free_idx = -1;
+    for (int e = 0; e < (int)entries.size(); e++) {
+        const BgndBmodEntry &entry = entries[(size_t)e];
+        if (!entry.skip) continue;
+        bool drawn = false;
+        for (const BgndDlistEntry &dlist : dlist_entries)
+            if (dlist.baklst == entry.baklst) { drawn = true; break; }
+        if (!drawn) continue;
+        if (bgnd_baklst_reserved_by_runtime_animation(lines, block_label, entry.baklst))
+            continue;
+        free_idx = e;
+        break;
+    }
+    if (free_idx < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s has no free baklst: every unused plane is reserved by a runtime animation.",
+                 block_label);
         return false;
     }
 
-    char bmod_line[96], word_line[96];
-    snprintf(bmod_line, sizeof bmod_line, "\t.long\t%sBMOD", module_name);
+    const int baklst = entries[(size_t)free_idx].baklst;
+    char bmod_line[128], word_line[96];
+    snprintf(bmod_line, sizeof bmod_line, "\t.long\t%sBMOD\t\t; baklst%d", module_name, baklst);
     snprintf(word_line, sizeof word_line, "\t.word\t%d,%d", ox, oy);
-    lines.insert(lines.begin() + insert_at, word_line);
-    lines.insert(lines.begin() + insert_at, bmod_line);
+    lines[(size_t)entries[(size_t)free_idx].bmod_line] = bmod_line;
+    lines.insert(lines.begin() + entries[(size_t)free_idx].bmod_line + 1, word_line);
 
     char backup[640] = "";
     if (!bgnd_commit(bgnd, lines, ".pre_bmod_create", backup, sizeof backup))
@@ -2680,7 +2750,7 @@ bool stage_bgnd_create_module_placement(const char *module_name, int ox, int oy)
     snprintf(g_stage_start_status, sizeof g_stage_start_status,
              "Placed %s on new plane %d (offset %d,%d) in %s. Backup: %s. "
              "Set its parallax from Game Preview -- it starts at whatever that plane's scroll row already holds.",
-             module_name, baklst_num + 1, ox, oy, block_label, backup);
+             module_name, baklst, ox, oy, block_label, backup);
     stage_set_toast("Created runtime placement");
     return true;
 }
@@ -2952,6 +3022,175 @@ bool stage_bgnd_reset_all_module_parallax(float factor)
              "Set all module parallax rows in %s to %.2fx. Backup: %s.",
              scroll_label.c_str(), factor, backup);
     stage_set_toast("Reset all module parallax");
+    return true;
+}
+
+bool stage_bgnd_install_tower_high_clouds(void)
+{
+    char bgnd[640], block_label[96] = "";
+    int block_line = -1;
+    std::vector<std::string> lines;
+    if (!bgnd_load_block(lines, block_label, sizeof block_label, &block_line,
+                         bgnd, sizeof bgnd))
+        return false;
+
+    if (mk2_sync_strcasecmp(block_label, "tower_mod") != 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Tower high clouds can only be installed in TOWER2 (found %s).",
+                 block_label[0] ? block_label : "an unknown stage block");
+        return false;
+    }
+
+    auto find_label = [&lines](const char *wanted) -> int {
+        for (int i = 0; i < (int)lines.size(); i++) {
+            std::string label;
+            if (stage_start_asm_label_line(lines[(size_t)i], &label) &&
+                mk2_sync_strcasecmp(label.c_str(), wanted) == 0)
+                return i;
+        }
+        return -1;
+    };
+    auto section_end = [&lines](int start) -> int {
+        for (int i = start + 1; i < (int)lines.size(); i++)
+            if (stage_start_asm_label_line(lines[(size_t)i], NULL)) return i;
+        return (int)lines.size();
+    };
+
+    if (find_label("tower_high_cloud_proc") >= 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "Tower high-cloud runtime is already installed in %s.", bgnd);
+        return true;
+    }
+
+    int calla = find_label("calla_tower");
+    int scroll = find_label("tower_scroll");
+    int dlists = find_label("dlists_tower");
+    int cloud_proc = find_label("cloud_proc");
+    if (calla < 0 || scroll < 0 || dlists < 0 || cloud_proc < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "TOWER2 runtime labels are incomplete in %s; no change was made.", bgnd);
+        return false;
+    }
+
+    /* Verify the exact resources before changing anything.  baklst2 is an
+       empty-but-drawn Tower list; baklst7 and baklst8 are the stock cloud
+       process and deliberately never appear in this installer. */
+    int list2_line = -1, list8_line = -1;
+    int de = section_end(dlists);
+    for (int i = dlists + 1; i < de; i++) {
+        if (lines[(size_t)i].find("baklst2") != std::string::npos) list2_line = i;
+        if (lines[(size_t)i].find("baklst8") != std::string::npos) list8_line = i;
+    }
+    if (list2_line < 0 || list8_line < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "TOWER2 dlist does not expose both baklst2 and baklst8; no change was made.");
+        return false;
+    }
+
+    int scroll2_line = -1, row = 0;
+    int se = section_end(scroll);
+    for (int i = scroll + 1; i < se; i++) {
+        if (bgnd_directive_token(lines[(size_t)i], ".long").empty()) continue;
+        if (row == 6) { scroll2_line = i; break; } /* rows: baklst8 .. baklst2 */
+        row++;
+    }
+    if (scroll2_line < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "tower_scroll has no baklst2 row; no change was made.");
+        return false;
+    }
+
+    int ce = section_end(calla);
+    int create_line = -1;
+    for (int i = calla + 1; i < ce; i++) {
+        if (lines[(size_t)i].find("create") != std::string::npos &&
+            lines[(size_t)i].find("cloud_proc") != std::string::npos) {
+            create_line = i;
+            break;
+        }
+    }
+    if (create_line < 0) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "calla_tower has no stock cloud_proc launch; no change was made.");
+        return false;
+    }
+
+    /* Add the new process beside the stock launcher. */
+    lines.insert(lines.begin() + create_line + 1,
+                 "\tcreate\tpid_bani,tower_high_cloud_proc\t; CLOUD2/CLOUD3 on baklst2");
+    if (scroll2_line > create_line) scroll2_line++;
+    if (list2_line > create_line) list2_line++;
+    if (list8_line > create_line) list8_line++;
+    if (cloud_proc > create_line) cloud_proc++;
+
+    /* baklst2 was already in the display list, but low in the order.  Put it
+       before the two stock cloud rows so the high clouds stay in the sky. */
+    std::string list2 = lines[(size_t)list2_line];
+    lines.erase(lines.begin() + list2_line);
+    if (list8_line > list2_line) list8_line--;
+    lines.insert(lines.begin() + list8_line, list2);
+
+    lines[(size_t)scroll2_line] = "\t.long\t>10000\t\t; 2 - optional high CLOUD2/CLOUD3";
+
+    const char *const runtime[] = {
+        "; Optional Tower high clouds.  CLOUD2 and CLOUD3 are supplied by CASTLE.IMG.",
+        "; Kept separate from cloud_proc: stock cloud lists baklst7/baklst8 remain untouched.",
+        "tower_high_cloud_proc",
+        "\tmovi\tcloud2,a5",
+        "\tmovi\t>000c0000+window_left->80,b2\t; y=12, start left",
+        "\tmovi\t>12000,a14",
+        "\tcallr\ttower_make_high_cloud",
+        "\tmove\ta8,b0",
+        "\tmovi\tcloud3,a5",
+        "\tmovi\t>001f0000+window_left+>70,b2\t; y=31, start right",
+        "\tmovi\t>08000,a14",
+        "\tcallr\ttower_make_high_cloud",
+        "\tmove\ta8,b1",
+        "\tmove\tb1,*b0(olink),l",
+        "\tclr\ta0",
+        "\tmove\ta0,*b1(olink),l",
+        "\tmove\tb0,@baklst2,l",
+        "tower_high_cloud_loop",
+        "\tmove\tb0,a8",
+        "\tcallr\ttower_high_cloud_wrap",
+        "\tmove\tb1,a8",
+        "\tcallr\ttower_high_cloud_wrap",
+        "\tsleep\t2",
+        "\tjruc\ttower_high_cloud_loop",
+        "",
+        "tower_make_high_cloud",
+        "\tpush\ta14",
+        "\tcalla\tgso_dmawnz\t\t; a5 = CLOUD2 or CLOUD3",
+        "\tmove\t*a8(oflags),a4,w",
+        "\tori\tdmaclp,a4",
+        "\tmove\ta4,*a8(oflags),w",
+        "\tmove\tb2,a4",
+        "\tcalla\tset_xy_coordinates",
+        "\tpull\ta14",
+        "\tmove\ta14,*a8(oxvel),l",
+        "\trets",
+        "",
+        "tower_high_cloud_wrap",
+        "\tmove\t*a8(oxpos),a0,w",
+        "\tcmpi\twindow_right,a0",
+        "\tjrls\ttower_high_cloud_wrap_done",
+        "\tmovi\twindow_left->e0,a0",
+        "\tmove\ta0,*a8(oxpos),w",
+        "\tclr\ta0",
+        "\tmove\ta0,*a8(ofset),w",
+        "tower_high_cloud_wrap_done",
+        "\trets",
+        ""
+    };
+    lines.insert(lines.begin() + cloud_proc, runtime, runtime + (sizeof runtime / sizeof runtime[0]));
+
+    char backup[640] = "";
+    if (!bgnd_commit(bgnd, lines, ".pre_tower_high_clouds", backup, sizeof backup))
+        return false;
+    snprintf(g_stage_start_status, sizeof g_stage_start_status,
+             "Installed CLOUD2/CLOUD3 Tower runtime on baklst2. Backup: %s. Rebuild MK2 to test.",
+             backup);
+    stage_set_toast("Installed Tower high-cloud runtime");
     return true;
 }
 

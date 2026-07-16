@@ -68,6 +68,36 @@ static int editor_project_next_capacity(int current, int minimum)
     return next;
 }
 
+/* BDB has no per-object module ID: LOAD2 ownership is determined solely by
+   which module rectangle contains an object.  Allowing module rectangles to
+   overlap therefore silently reassigns art based on file order.  Keep authored
+   modules disjoint so ownership changes only when an object is explicitly
+   dragged out of its current bounds (or otherwise moved individually). */
+static int editor_project_module_line_overlaps_existing(const char *line,
+                                                        int except_module)
+{
+    char name[64] = "";
+    int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    if (!line || !g_bdb_modules ||
+        sscanf(line, "%63s %d %d %d %d", name, &x1, &x2, &y1, &y2) < 5)
+        return 0;   /* Preserve malformed lines for the diagnostics to report. */
+    if (x2 < x1 || y2 < y1)
+        return 0;
+
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        char other_name[64] = "";
+        int ox1 = 0, ox2 = 0, oy1 = 0, oy2 = 0;
+        if (m == except_module ||
+            sscanf(g_bdb_modules[m], "%63s %d %d %d %d", other_name,
+                   &ox1, &ox2, &oy1, &oy2) < 5 ||
+            ox2 < ox1 || oy2 < oy1)
+            continue;
+        if (x1 <= ox2 && x2 >= ox1 && y1 <= oy2 && y2 >= oy1)
+            return 1;
+    }
+    return 0;
+}
+
 int editor_project_storage_init(void)
 {
     EditorProjectStorage *s;
@@ -577,32 +607,12 @@ int editor_project_append_module_line(const char *line)
 int editor_project_insert_module_line_before_enclosing(const char *line,
                                                         int x1, int x2, int y1, int y2)
 {
-    /* Module assignment is first-fit by file order (matches LOAD2's real ROM-build
-       behaviour, so that algorithm itself can't change) -- a module listed earlier
-       always wins for any object it contains, even if a later, tighter module also
-       contains it. If an existing module already encloses these bounds (most often
-       a world-spanning catch-all, e.g. Simple Mode's auto-created MOD0, or a
-       "cover stage" module), the new module has to land BEFORE it in the list, or
-       it would never actually receive any of these objects. */
-    int enclosing_idx = -1;
-    for (int m = 0; m < g_bdb_num_modules; m++) {
-        char mn[64] = ""; int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
-        if (sscanf(g_bdb_modules[m], "%63s %d %d %d %d", mn, &mx1, &mx2, &my1, &my2) < 5)
-            continue;
-        if (mx1 <= x1 && mx2 >= x2 && my1 <= y1 && my2 >= y2) { enclosing_idx = m; break; }
-    }
-
+    if (editor_project_module_line_overlaps_existing(line, -1))
+        return -1;
     if (!editor_project_append_module_line(line))
         return -1;
-    if (enclosing_idx < 0)
-        return g_bdb_num_modules - 1;
-
-    char new_line[256];
-    snprintf(new_line, sizeof new_line, "%s", g_bdb_modules[g_bdb_num_modules - 1]);
-    for (int m = g_bdb_num_modules - 1; m > enclosing_idx; m--)
-        snprintf(g_bdb_modules[m], sizeof g_bdb_modules[m], "%s", g_bdb_modules[m - 1]);
-    snprintf(g_bdb_modules[enclosing_idx], sizeof g_bdb_modules[enclosing_idx], "%s", new_line);
-    return enclosing_idx;
+    (void)x1; (void)x2; (void)y1; (void)y2;
+    return g_bdb_num_modules - 1;
 }
 
 int editor_project_delete_module_line(int module_i)
@@ -623,6 +633,8 @@ int editor_project_set_module_line(int module_i, const char *line)
 {
     if (!line || !editor_project_storage_init() || !g_bdb_modules) return 0;
     if (module_i < 0 || module_i >= g_bdb_num_modules) return 0;
+    if (editor_project_module_line_overlaps_existing(line, module_i))
+        return 0;
     snprintf(g_bdb_modules[module_i], sizeof g_bdb_modules[module_i], "%s", line);
     return 1;
 }

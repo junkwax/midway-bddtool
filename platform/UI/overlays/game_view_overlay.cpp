@@ -1374,6 +1374,12 @@ void draw_game_view_overlay(void)
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Play / Pause  (Space)");
         ImGui::SameLine(0, 4);
 
+        if (ImGui::SmallButton(g_anim_dir >= 0 ? "Dir >" : "Dir <"))
+            g_anim_dir = -g_anim_dir;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Reverse preview parallax direction without changing authored layer scroll values");
+        ImGui::SameLine(0, 4);
+
         /* >| forward to end */
         if (ImGui::SmallButton(">|")) {
             g_anim_fpos = (float)scroll_max; g_scroll_pos = scroll_max; g_anim_dir = -1;

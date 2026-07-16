@@ -238,8 +238,10 @@ static void module_bounds_rewrite(int module_idx, const char *name,
     char line[256];
     snprintf(line, sizeof line, "%s %d %d %d %d",
              (name && name[0]) ? name : "MOD", x1, x2, y1, y2);
-    if (!editor_project_set_module_line(module_idx, line))
+    if (!editor_project_set_module_line(module_idx, line)) {
+        stage_set_toast("Module bounds overlap another module; objects stay with their current module");
         return;
+    }
     sync_bdb_header_counts();
     g_dirty = 1;
     g_view_changed = 1;
