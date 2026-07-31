@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.29] - 2026-07-30
+
 ### Added
 - Palette window: global color-wheel palette shifting, selected-object palette
   variants that follow matching duplicate placements, live current-view
