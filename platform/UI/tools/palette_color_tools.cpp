@@ -90,14 +90,40 @@ static void draw_tinted_palette_preview(int pal_i, const float tint[3], float st
     }
 }
 
-static int find_identical_palette(const Uint32 colors[256], int count)
+static bool palette_name_exists(const char *name)
 {
     for (int pi = 0; pi < g_n_pals; pi++) {
-        if (g_pal_count[pi] != count) continue;
-        if (memcmp(g_pals[pi], colors, 256 * sizeof(Uint32)) == 0)
-            return pi;
+        if (strcmp(g_pal_name[pi], name) == 0)
+            return true;
     }
-    return -1;
+    return false;
+}
+
+static void palette_sequence_root(const char *source, char out[64])
+{
+    snprintf(out, 64, "%s", source && source[0] ? source : "PAL");
+    char *underscore = strrchr(out, '_');
+    if (!underscore || !underscore[1]) return;
+    for (const char *p = underscore + 1; *p; p++)
+        if (*p < '0' || *p > '9') return;
+    char numbered_name[64];
+    snprintf(numbered_name, sizeof numbered_name, "%s", out);
+    *underscore = '\0';
+    if (!out[0] || !palette_name_exists(out))
+        snprintf(out, 64, "%s", numbered_name);
+}
+
+static void make_numbered_palette_name(const char *source, char out[64])
+{
+    char root[64];
+    palette_sequence_root(source, root);
+    root[48] = '\0';
+    int sequence = 1;
+    for (;;) {
+        snprintf(out, 64, "%s_%d", root, sequence);
+        if (!palette_name_exists(out)) return;
+        sequence++;
+    }
 }
 
 struct WandState {
@@ -132,6 +158,7 @@ struct ColorShiftPreviewState {
     std::vector<Uint32> palettes;
     std::vector<int> palette_counts;
     std::vector<char> palette_names;
+    std::vector<int> image_palettes;
     std::vector<int> object_palettes;
 };
 
@@ -150,6 +177,7 @@ static void color_preview_release(void)
     s_color_preview.palettes.clear();
     s_color_preview.palette_counts.clear();
     s_color_preview.palette_names.clear();
+    s_color_preview.image_palettes.clear();
     s_color_preview.object_palettes.clear();
 }
 
@@ -184,6 +212,9 @@ static bool color_preview_capture(int scope)
            (size_t)g_n_pals * sizeof(int));
     memcpy(s_color_preview.palette_names.data(), g_pal_name,
            (size_t)g_n_pals * 64u);
+    s_color_preview.image_palettes.resize((size_t)g_ni);
+    for (int ii = 0; ii < g_ni; ii++)
+        s_color_preview.image_palettes[(size_t)ii] = g_img[ii].pal_idx;
     s_color_preview.object_palettes.resize((size_t)g_no);
     for (int oi = 0; oi < g_no; oi++)
         s_color_preview.object_palettes[(size_t)oi] = g_obj[oi].fl;
@@ -208,6 +239,10 @@ static void color_preview_restore_original(void)
                                     s_color_preview.palette_counts.data(), names,
                                     s_color_preview.original_palette_count,
                                     s_color_preview.original_palette_count);
+    int image_count = (int)s_color_preview.image_palettes.size();
+    if (image_count > g_ni) image_count = g_ni;
+    for (int ii = 0; ii < image_count; ii++)
+        g_img[ii].pal_idx = s_color_preview.image_palettes[(size_t)ii];
     int object_count = (int)s_color_preview.object_palettes.size();
     if (object_count > g_no) object_count = g_no;
     for (int oi = 0; oi < object_count; oi++)
@@ -228,13 +263,11 @@ static int apply_object_color_shift(int selected_obj, int selected_image,
         return -1;
     Uint32 next[256];
     build_tinted_palette(source_pal, tint, strength, preserve_luminance, next);
-    int target_pal = find_identical_palette(next, g_pal_count[source_pal]);
-    if (target_pal < 0) {
-        char name[64];
-        snprintf(name, sizeof name, "%.48s_TINT", g_pal_name[source_pal]);
-        target_pal = editor_project_append_palette_slot(name,
+    if (!editor_project_reserve_palettes(g_n_pals + 1)) return -1;
+    char name[64];
+    make_numbered_palette_name(g_pal_name[source_pal], name);
+    int target_pal = editor_project_append_palette_slot(name,
                                                          g_pal_count[source_pal], next);
-    }
     if (target_pal < 0) return -1;
 
     int changed = 0;
@@ -250,17 +283,58 @@ static int apply_object_color_shift(int selected_obj, int selected_image,
     return changed;
 }
 
+static int apply_global_color_shift(const float tint[3], float strength,
+                                    bool preserve_luminance,
+                                    int original_selected_palette,
+                                    int *out_selected_palette)
+{
+    int source_count = g_n_pals;
+    if (source_count <= 0 ||
+        !editor_project_reserve_palettes(source_count + source_count))
+        return -1;
+
+    std::vector<int> remap((size_t)source_count, -1);
+    for (int pi = 0; pi < source_count; pi++) {
+        Uint32 next[256];
+        build_tinted_palette(pi, tint, strength, preserve_luminance, next);
+        char name[64];
+        make_numbered_palette_name(g_pal_name[pi], name);
+        int target = editor_project_append_palette_slot(name, g_pal_count[pi], next);
+        if (target < 0) return -1;
+        remap[(size_t)pi] = target;
+    }
+
+    for (int ii = 0; ii < g_ni; ii++) {
+        int pal = g_img[ii].pal_idx;
+        if (pal >= 0 && pal < source_count)
+            g_img[ii].pal_idx = remap[(size_t)pal];
+    }
+    for (int oi = 0; oi < g_no; oi++) {
+        int pal = g_obj[oi].fl;
+        if (pal >= 0 && pal < source_count)
+            g_obj[oi].fl = remap[(size_t)pal];
+    }
+    if (out_selected_palette) {
+        *out_selected_palette =
+            original_selected_palette >= 0 && original_selected_palette < source_count
+            ? remap[(size_t)original_selected_palette]
+            : original_selected_palette;
+    }
+    return source_count;
+}
+
 static bool color_preview_apply(const float tint[3], float strength,
                                 bool preserve_luminance)
 {
     if (!color_preview_same_document()) return false;
     color_preview_restore_original();
     if (s_color_preview.scope == 0) {
-        for (int pi = 0; pi < g_n_pals; pi++) {
-            Uint32 next[256];
-            build_tinted_palette(pi, tint, strength, preserve_luminance, next);
-            editor_project_set_palette_slot(pi, NULL, g_pal_count[pi], next);
-        }
+        int selected_palette = s_color_preview.original_selected_palette;
+        if (apply_global_color_shift(tint, strength, preserve_luminance,
+                                     s_color_preview.original_selected_palette,
+                                     &selected_palette) < 0)
+            return false;
+        g_sel_pal = selected_palette;
     } else {
         if (apply_object_color_shift(s_color_preview.selected_obj,
                                      s_color_preview.selected_image,
@@ -484,10 +558,11 @@ static bool path_has_extension(const char *path)
     return dot && (!base || dot > base);
 }
 
-static bool wand_export_swatch_png(const char *path)
+static bool write_palette_swatch_png(const char *path, const Uint32 *colors, int count)
 {
-    int count = (int)s_wand.colors.size();
-    if (count <= 1) return false;
+    if (!path || !path[0] || !colors) return false;
+    if (count < 1) count = 1;
+    if (count > 256) count = 256;
     const int cols = 16;
     const int cell = 20;
     int rows = (count + cols - 1) / cols;
@@ -497,7 +572,7 @@ static bool wand_export_swatch_png(const char *path)
        swatch later introduces only the colors that were actually extracted. */
     std::vector<Uint8> pixels((size_t)w * (size_t)h * 4u, 0);
     for (int i = 0; i < count; i++) {
-        Uint32 color = s_wand.colors[(size_t)i];
+        Uint32 color = colors[i];
         int cx = (i % cols) * cell;
         int cy = (i / cols) * cell;
         for (int y = 0; y < cell; y++) {
@@ -512,6 +587,23 @@ static bool wand_export_swatch_png(const char *path)
         }
     }
     return stbi_write_png(path, w, h, 4, pixels.data(), w * 4) != 0;
+}
+
+static bool wand_export_swatch_png(const char *path)
+{
+    return write_palette_swatch_png(path, s_wand.colors.data(),
+                                    (int)s_wand.colors.size());
+}
+
+static void sanitize_palette_filename(const char *name, char out[64])
+{
+    snprintf(out, 64, "%s", name && name[0] ? name : "PAL");
+    for (char *p = out; *p; p++) {
+        char c = *p;
+        bool valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                     (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!valid) *p = '_';
+    }
 }
 
 } // namespace
@@ -531,7 +623,7 @@ void draw_palette_color_shift_tool(void)
         stage_set_toast("Palette preview canceled because the selected object changed");
     }
 
-    ImGui::TextWrapped("Recolor palette hues while retaining indexed image data. Changes appear live in the current stage view.");
+    ImGui::TextWrapped("Recolor palette hues while retaining indexed image data. Changes appear live in the current stage view, then save as numbered copies so the originals remain untouched.");
     bool controls_changed = ImGui::RadioButton("Global", &scope, 0);
     ImGui::SameLine();
     controls_changed |= ImGui::RadioButton("Selected object + duplicates", &scope, 1);
@@ -585,19 +677,25 @@ void draw_palette_color_shift_tool(void)
             int selected_obj = s_color_preview.selected_obj;
             int selected_image = s_color_preview.selected_image;
             int source_pal = s_color_preview.source_palette;
+            int original_selected_palette = s_color_preview.original_selected_palette;
             color_preview_restore_original();
             color_preview_release();
-            undo_save_ex(accepted_scope == 0 ? "Global Palette Color Shift" :
-                                               "Object Palette Color Shift");
+            int required_palettes = g_n_pals + (accepted_scope == 0 ? g_n_pals : 1);
+            if (!editor_project_reserve_palettes(required_palettes)) {
+                stage_set_toast("Not enough palette slots to preserve the originals");
+                return;
+            }
+            undo_save_ex(accepted_scope == 0 ? "Global Palette Copy Shift" :
+                                               "Object Palette Copy Shift");
             int target_pal = -1;
             int changed = 0;
             if (accepted_scope == 0) {
-                for (int pi = 0; pi < g_n_pals; pi++) {
-                    Uint32 next[256];
-                    build_tinted_palette(pi, tint, strength_percent / 100.0f,
-                                         preserve_luminance, next);
-                    editor_project_set_palette_slot(pi, NULL, g_pal_count[pi], next);
-                }
+                changed = apply_global_color_shift(tint,
+                                                   strength_percent / 100.0f,
+                                                   preserve_luminance,
+                                                   original_selected_palette,
+                                                   &target_pal);
+                if (target_pal >= 0) g_sel_pal = target_pal;
             } else {
                 changed = apply_object_color_shift(selected_obj, selected_image,
                                                    source_pal, tint,
@@ -609,7 +707,11 @@ void draw_palette_color_shift_tool(void)
             g_need_rebuild = 1;
             g_mk2_palette_sync_dirty = true;
             if (accepted_scope == 0) {
-                stage_set_toast("Accepted color shift for every palette");
+                char message[128];
+                snprintf(message, sizeof message,
+                         "Created %d numbered palette copy/copies; originals preserved",
+                         changed > 0 ? changed : 0);
+                stage_set_toast(message);
             } else {
                 char message[128];
                 snprintf(message, sizeof message,
@@ -737,6 +839,38 @@ void palette_color_tools_shutdown(void)
     s_wand.rgba.clear();
     s_wand.mask.clear();
     s_wand.colors.clear();
+}
+
+void export_all_palettes_to_folder_dialog(void)
+{
+    if (g_n_pals <= 0) {
+        stage_set_toast("No palettes to export");
+        return;
+    }
+    char folder[1024];
+    if (!folder_dialog_open("Export All Palettes", folder, sizeof folder))
+        return;
+
+    int exported = 0;
+    int failed = 0;
+    for (int pi = 0; pi < g_n_pals; pi++) {
+        char safe_name[64];
+        char filename[96];
+        char path[1200];
+        sanitize_palette_filename(g_pal_name[pi], safe_name);
+        snprintf(filename, sizeof filename, "%03d_%s.png", pi, safe_name);
+        path_join(path, sizeof path, folder, filename);
+        if (write_palette_swatch_png(path, g_pals[pi], g_pal_count[pi]))
+            exported++;
+        else
+            failed++;
+    }
+    char message[160];
+    snprintf(message, sizeof message,
+             failed ? "Exported %d palette(s); %d failed" :
+                      "Exported all %d palette(s)",
+             exported, failed);
+    stage_set_toast(message);
 }
 
 bool palette_color_shift_preview_active(void)

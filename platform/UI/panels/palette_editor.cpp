@@ -514,6 +514,11 @@ void draw_palette(void)
         }
     }
 
+    if (ImGui::Button("Export All Palettes...", ImVec2(-1.0f, 0.0f)))
+        export_all_palettes_to_folder_dialog();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Write one transparent, import-safe PNG swatch per palette to a folder.");
+
     if (ImGui::CollapsingHeader("Blend / Merge Palettes"))
         draw_palette_blend_merge_tool();
 
