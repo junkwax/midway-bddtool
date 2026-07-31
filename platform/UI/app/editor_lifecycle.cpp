@@ -3,6 +3,7 @@
 #include "Core/editor_commands.h"
 #include "undo_manager.h"
 #include "UI/app/PanelManager.h"
+#include "UI/tools/palette_color_tools.h"
 #include "UI/panels/DocumentTabsPanel.h"
 #include "UI/panels/MenuBarPanel.h"
 #include "UI/panels/RightRailPanels.h"
@@ -172,6 +173,7 @@ int bg_editor_canvas_top_px(void)
 void bg_editor_shutdown(void)
 {
     editor_clear_commands();
+    palette_color_tools_shutdown();
     g_panel_manager.clear();
     undo_manager_shutdown();
     ImGui_ImplSDLRenderer2_Shutdown();

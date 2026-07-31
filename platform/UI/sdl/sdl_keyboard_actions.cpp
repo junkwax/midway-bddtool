@@ -9,6 +9,7 @@
 #include "UI/sdl/sdl_tga_file_dialog.h"
 #include "UI/sdl/sdl_tooltip.h"
 #include "UI/assets/texture_cache.h"
+#include "UI/tools/palette_color_tools.h"
 
 #include <cstdio>
 
@@ -17,6 +18,7 @@
 
 static void save_current_stage_from_keyboard(const char *reason)
 {
+    palette_color_shift_cancel_preview();
     int saved_bdb = bdb_save(g_bdb_path);
     int saved_bdd = g_bdd_path[0] ? bdd_save() : 1;
     if (saved_bdb && saved_bdd) {

@@ -2,6 +2,7 @@
 #include "bg_editor_globals.h"
 #include "Core/editor_project_storage.h"
 #include "Core/image_lookup.h"
+#include "UI/tools/palette_color_tools.h"
 #include "undo_manager.h"
 #include <stdio.h>
 #include <string.h>
@@ -358,12 +359,15 @@ void draw_palette(void)
     bool open = ImGui::Begin("Palettes", NULL);
     right_panel_after_begin(RIGHT_PANEL_PALETTES);
     if (!open) {
+        palette_color_shift_cancel_preview();
         ImGui::End();
         return;
     }
 
     if (g_n_pals == 0) {
         ImGui::TextUnformatted("No palettes loaded.");
+        if (ImGui::CollapsingHeader("PNG Magic Wand Palette", ImGuiTreeNodeFlags_DefaultOpen))
+            draw_palette_magic_wand_tool();
         ImGui::End();
         return;
     }
@@ -396,6 +400,18 @@ void draw_palette(void)
     }
 
     draw_palette_slot_table(sel_obj_pal);
+
+    bool shift_open = ImGui::CollapsingHeader("Global / Object Color Shift");
+    if (shift_open)
+        draw_palette_color_shift_tool();
+    else if (palette_color_shift_preview_active())
+        palette_color_shift_cancel_preview();
+
+    bool color_preview_active = palette_color_shift_preview_active();
+    if (color_preview_active) {
+        ImGui::TextDisabled("Accept or cancel the live color preview to edit other palette settings.");
+        ImGui::BeginDisabled();
+    }
 
     int pc = g_pal_count[g_sel_pal];
     if (pc < 0) pc = 0;
@@ -453,6 +469,9 @@ void draw_palette(void)
     if (ImGui::CollapsingHeader("Preview", ImGuiTreeNodeFlags_DefaultOpen))
         draw_palette_preview(g_sel_pal);
 
+    if (ImGui::CollapsingHeader("PNG Magic Wand Palette"))
+        draw_palette_magic_wand_tool();
+
     if (ImGui::Button("+")) {
         undo_save();
         char name[64];
@@ -500,6 +519,9 @@ void draw_palette(void)
 
     if (ImGui::CollapsingHeader("Smart Palette Grouper"))
         draw_mk2_smart_palette_grouper();
+
+    if (color_preview_active)
+        ImGui::EndDisabled();
 
     ImGui::End();
 }

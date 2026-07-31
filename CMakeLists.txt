@@ -160,6 +160,7 @@ add_executable(bddview
     platform/UI/panels/pal_anim_panel.cpp
     platform/UI/actions/palette_actions.cpp
     platform/UI/tools/palette_blend_merge_tool.cpp
+    platform/UI/tools/palette_color_tools.cpp
     platform/UI/panels/palette_editor.cpp
     platform/UI/widgets/path_field.cpp
     platform/UI/dialogs/preferences_panel.cpp

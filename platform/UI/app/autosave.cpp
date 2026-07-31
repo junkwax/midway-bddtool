@@ -4,12 +4,15 @@
 #include "Core/stage_paths.h"
 #include "Core/viewer_save.h"
 #include "UI/app/autosave.h"
+#include "UI/tools/palette_color_tools.h"
 
 #include <cstdio>
 #include <cstring>
 
 void run_auto_save_tick(void)
 {
+    if (palette_color_shift_preview_active())
+        return;
     if (!(g_dirty && (g_have_bdb || g_ni > 0) && g_bdb_path[0] && g_pref_autosave_s > 0)) {
         g_auto_save_tick = 0;
         return;

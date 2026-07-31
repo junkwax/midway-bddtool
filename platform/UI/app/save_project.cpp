@@ -2,6 +2,7 @@
 #include "bg_editor_globals.h"
 #include "Core/path_utils.h"
 #include "Core/project_header.h"
+#include "UI/tools/palette_color_tools.h"
 
 #include <cerrno>
 #include <climits>
@@ -172,6 +173,7 @@ void ensure_bdb_header_for_save(void)
 
 bool save_all_project(void)
 {
+    palette_color_shift_cancel_preview();
     ensure_companion_save_paths();
     if (project_has_bdb_save_data() && !g_bdb_header[0])
         ensure_bdb_header_for_save();

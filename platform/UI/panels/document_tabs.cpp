@@ -2,6 +2,7 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/editor_commands.h"
+#include "UI/tools/palette_color_tools.h"
 
 #include "imgui.h"
 
@@ -33,6 +34,7 @@ static void doc_free(int idx)
 void doc_save(int idx)
 {
     if (idx < 0 || idx >= MAX_DOCS) return;
+    palette_color_shift_cancel_preview();
     Document *d = &g_docs[idx];
     if (!project_snapshot_capture_current(&d->snapshot, true)) return;
     memcpy(d->bdb_path, g_bdb_path, sizeof g_bdb_path);

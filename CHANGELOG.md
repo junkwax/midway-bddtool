@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Palette window: global color-wheel palette shifting, selected-object palette
+  variants that follow matching duplicate placements, live current-view
+  preview with accept/cancel, and a PNG magic wand for tolerance-based region
+  palette extraction with project/swatch export.
+
 ## [1.0.26] - 2026-06-24
 
 ### Added
