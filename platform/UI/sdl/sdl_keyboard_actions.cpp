@@ -18,11 +18,10 @@
 
 static void save_current_stage_from_keyboard(const char *reason)
 {
-    palette_color_shift_cancel_preview();
-    int saved_bdb = bdb_save(g_bdb_path);
-    int saved_bdd = g_bdd_path[0] ? bdd_save() : 1;
-    if (saved_bdb && saved_bdd) {
-        g_dirty = 0;
+    /* Shares save_all_project with the menu and toolbar so Ctrl+S gets the same
+       companion-path handling, and prompts for a location on a new project
+       instead of failing silently with no path. */
+    if (save_all_project()) {
         if (reason && reason[0] == 'c')
             bdd_save_popup_cancel();
     } else {
@@ -30,9 +29,8 @@ static void save_current_stage_from_keyboard(const char *reason)
             fprintf(stderr, "save: keeping confirm dialog because save failed\n");
         else
             fprintf(stderr, "save: keeping dirty flag because save failed\n");
-        bdd_save_logf("%s save failed: saved_bdb=%d bdb=\"%s\" saved_bdd=%d bdd=\"%s\"",
-                      reason ? reason : "keyboard",
-                      saved_bdb, g_bdb_path, saved_bdd, g_bdd_path);
+        bdd_save_logf("%s save failed: bdb=\"%s\" bdd=\"%s\"",
+                      reason ? reason : "keyboard", g_bdb_path, g_bdd_path);
     }
 }
 

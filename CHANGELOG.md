@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.30] - 2026-08-11
+
+### Fixed
+- Saving a brand-new project did nothing visible: New Project handed the stage a
+  bare `NAME.BDB`/`NAME.BDD` with no folder, so Save BDB + BDD wrote both files
+  into whatever directory the app happened to be launched from (usually next to
+  `bddview.exe`). A project without a real location now opens the Save dialog on
+  the first save instead, and Ctrl+S and the quit dialog's "Save & Quit" share
+  that same path rather than saving silently or dropping the write.
+- Save As with a typed name and no extension saved a file with no extension at
+  all; the target now always becomes `NAME.BDB` + `NAME.BDD`, and the Windows
+  save dialog fills in the extension itself.
+- A saved empty stage could not be reopened: `bdd_load` rejected a BDD with zero
+  images and `bdb_load` reported an object-less BDB as a failed load, so a
+  freshly saved New Project came back with its header discarded. Both are
+  legitimately empty projects, not load failures.
+- A world name containing a space corrupted the BDB header, whose fields are
+  read back with `sscanf("%63s %d %d %d %d %d %d")`. Stage names are sanitized
+  where the header is built, as palette names already were.
+
+### Added
+- **File > Share Stage...** builds a stage-catalog entry and opens a pre-filled
+  submission issue. The bundle carries the arena renders (whole stage and the
+  in-game 400x254 framing), a scrolling animation, every BDD image as a prop
+  PNG, a wiki-ready page, and one zip of all of it. The page's "How to enable"
+  section is generated from the stage's real `BGND.ASM` bindings, so it names
+  the actual planes, parallax rates, floor, ground Y, camera and scroll limits
+  instead of a generic recipe. Author, contact, description, credits and licence
+  travel with the stage and are remembered between shares. GitHub wikis cannot
+  accept file uploads, so submissions go through issues and accepted stages are
+  published to the wiki.
+- `bddview --render-scroll FILE OUT_DIR [frames] [zoom]` sweeps the in-game
+  camera across a stage, one PNG per frame, using the stage's own `BGND.ASM`
+  scroll limits. Share Stage encodes those frames with ffmpeg into a
+  back-and-forth `scroll.gif` and a much smaller `scroll.mp4`; without ffmpeg
+  the bundle simply carries no animation.
+- `tools/publish_stage_to_wiki.py` publishes a bundle to the wiki: assets to
+  `stages/<NAME>/`, the page at `/wiki/<NAME>` with its image links rewritten to
+  raw wiki URLs (relative asset links do not resolve inside wiki pages), and a
+  row added to `Stage-Catalog.md` between explicit markers so re-publishing
+  replaces a stage instead of duplicating it.
+- `.github/ISSUE_TEMPLATE/stage-submission.yml` receives those submissions.
+- `bddview --new-project-save-smoke OUT_PREFIX` covers new project -> save to an
+  extension-less target -> reload, headlessly.
+- `bddview --share-bundle-smoke FILE.BDB OUT_DIR` builds a share bundle headlessly.
+- `tools/analyze_mk2_backgrounds.py` now also reports the runtime budget: peak
+  on-screen blocks against the 358-object pool, per-module X-order inversions,
+  straddling blocks, and any block wider than `widest_block` (250).
+- `mk2_background_deep_dive.md` documents the BDD/BDB formats, module/plane
+  limits, parallax rates, skew floors, background animation and the editor gaps,
+  traced to the MK2 sources and measured against all 41 shipped stages.
+
 ## [1.0.29] - 2026-07-30
 
 ### Added

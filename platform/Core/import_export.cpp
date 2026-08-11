@@ -52,7 +52,7 @@ static bool ensure_directory(const char *path)
 #endif
 }
 
-static bool copy_file_overwrite(const char *src, const char *dst)
+bool copy_file_overwrite(const char *src, const char *dst)
 {
     if (!src || !dst || !src[0] || !dst[0]) return false;
 #ifdef _WIN32
@@ -978,7 +978,7 @@ int bg_editor_import_lod(const char *path)
     return import_lod_file(path);
 }
 
-static bool export_composite_to(const char *dest_path)
+bool export_composite_to(const char *dest_path)
 {
     if (!g_have_bdb || g_no == 0 || !dest_path) return false;
     int wx_min, wx_max, wy_min, wy_max;

@@ -85,7 +85,8 @@ void ToolbarPanel::render()
     }
     ImGui::SameLine(0, 3);
     {
-        bool can_save = (g_have_bdb || g_no > 0 || g_ni > 0) && (g_bdb_path[0] || g_bdd_path[0]);
+        /* No path check: an unsaved project asks for a location on save. */
+        bool can_save = (g_have_bdb || g_no > 0 || g_ni > 0);
         if (tb_button("Save", false, "Save BDB + BDD  (Ctrl+S)", !can_save)) {
             editor_emit_save_all();
             g_hint_save = false;

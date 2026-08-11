@@ -83,10 +83,12 @@ int bdd_load(const char *path)
     }
 
     stage.init();
-    if (g_ni == 0) {
-        fprintf(stderr, "bdd: no images loaded from %s\n", path);
-        return 0;
-    }
+    /* Zero images is a legitimately empty project, not a failure -- that is
+       what every New Project template saves before any art is imported, and
+       rejecting it here made a freshly saved stage impossible to reopen.
+       Malformed and missing files already failed above. */
+    if (g_ni == 0)
+        fprintf(stderr, "bdd: no images in %s (empty project)\n", path);
     editor_project_load_bdd_metadata(path);
     fprintf(stderr, "bdd: loaded %d images from %s\n", g_ni, path);
     return 1;
@@ -168,5 +170,9 @@ int bdb_load(const char *path)
     }
 
     fprintf(stderr, "bdb: loaded %d objects from %s\n", g_no, path);
-    return g_no > 0;
+    /* An object-less BDB still carries the header, world size and modules, so
+       it loaded successfully -- callers assign this to g_have_bdb, and treating
+       "no objects yet" as failure dropped a freshly saved empty stage back to
+       image-grid mode with its header thrown away. */
+    return 1;
 }

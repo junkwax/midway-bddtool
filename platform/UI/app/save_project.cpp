@@ -2,6 +2,7 @@
 #include "bg_editor_globals.h"
 #include "Core/path_utils.h"
 #include "Core/project_header.h"
+#include "UI/dialogs/native_file_dialogs.h"
 #include "UI/tools/palette_color_tools.h"
 
 #include <cerrno>
@@ -108,6 +109,23 @@ static int project_has_bdb_save_data(void)
     return g_have_bdb || g_no > 0 || g_bdb_header[0] || g_bdb_num_modules > 0;
 }
 
+/* True when the path names a directory to save into. A bare file name like
+   "MK2STAGE.BDB" -- which is all a freshly created project starts with -- does
+   not: saving it drops the files into whatever the process working directory
+   happens to be, where the user will never find them. Those count as
+   "no location chosen yet" and are used only as a suggested file name. */
+static bool path_is_anchored(const char *path)
+{
+    if (!path || !path[0]) return false;
+    if (strchr(path, '\\') || strchr(path, '/')) return true;
+    return path[1] == ':' && path[2] != '\0';   /* "C:name" */
+}
+
+bool project_save_location_is_set(void)
+{
+    return path_is_anchored(g_bdb_path) || path_is_anchored(g_bdd_path);
+}
+
 void set_project_save_paths_from_any(const char *path)
 {
     if (!path || !path[0]) return;
@@ -119,10 +137,45 @@ void set_project_save_paths_from_any(const char *path)
             derive_path_with_ext(path, ".BDB", g_bdb_path, sizeof g_bdb_path);
         else
             g_bdb_path[0] = '\0';
-    } else {
+    } else if (strcasecmp(ext, ".bdb") == 0) {
         snprintf(g_bdb_path, sizeof g_bdb_path, "%s", path);
         derive_path_with_ext(path, ".BDD", g_bdd_path, sizeof g_bdd_path);
+    } else {
+        /* No stage extension typed -- treat the whole name as the base and
+           give both files their real extensions. */
+        derive_path_with_ext(path, ".BDD", g_bdd_path, sizeof g_bdd_path);
+        if (project_has_bdb_save_data())
+            derive_path_with_ext(path, ".BDB", g_bdb_path, sizeof g_bdb_path);
+        else
+            g_bdb_path[0] = '\0';
     }
+}
+
+/* Name the Save dialog opens with: the current file when the project has one,
+   otherwise the placeholder name a new project was created with, or the world
+   name. Anchored paths also make the dialog open in the project's folder. */
+static void suggested_save_name(char *out, size_t outsz)
+{
+    const char *current = g_bdb_path[0] ? g_bdb_path : g_bdd_path;
+    if (current[0])
+        snprintf(out, outsz, "%s", current);
+    else if (g_name[0])
+        snprintf(out, outsz, "%s.BDB", g_name);
+    else
+        snprintf(out, outsz, "UNTITLED.BDB");
+}
+
+bool prompt_for_project_save_location(void)
+{
+    char path[512] = "";
+    suggested_save_name(path, sizeof path);
+    if (!file_dialog_save_ext("Save Stage As",
+                              "Midway Background Files\0*.BDB;*.bdb;*.BDD;*.bdd\0All Files\0*.*\0",
+                              "BDB", path, sizeof path))
+        return false;
+    set_project_save_paths_from_any(path);
+    ensure_bdb_header_for_save();
+    return project_save_location_is_set();
 }
 
 static void ensure_companion_save_paths(void)
@@ -154,7 +207,9 @@ void ensure_bdb_header_for_save(void)
             if (dot) *dot = '\0';
         }
     }
-    if (!nm[0]) snprintf(nm, sizeof nm, "UNTITLED");
+    char safe_nm[64];
+    sanitize_stage_name(safe_nm, sizeof safe_nm, nm);
+    snprintf(nm, sizeof nm, "%s", safe_nm);
     nm[8] = '\0';
 
     int x0 = INT_MAX, x1 = INT_MIN, y0 = INT_MAX, y1 = INT_MIN;
@@ -174,6 +229,15 @@ void ensure_bdb_header_for_save(void)
 bool save_all_project(void)
 {
     palette_color_shift_cancel_preview();
+    /* A never-saved project has no real location yet -- ask for one instead of
+       writing into the working directory (or failing silently with no path). */
+    if (!project_save_location_is_set()) {
+        if (!prompt_for_project_save_location()) {
+            snprintf(g_toast_msg, sizeof g_toast_msg, "Save cancelled: no location chosen");
+            g_toast_timer = 2.0f;
+            return false;
+        }
+    }
     ensure_companion_save_paths();
     if (project_has_bdb_save_data() && !g_bdb_header[0])
         ensure_bdb_header_for_save();

@@ -7,6 +7,8 @@
 
 #include <stdlib.h>
 
+bool save_all_project(void);
+
 void draw_quit_dialog(void)
 {
     if (!g_quit_requested) return;
@@ -19,11 +21,11 @@ void draw_quit_dialog(void)
             ImGui::Text("Save before quitting?");
             ImGui::Separator();
             if (ImGui::Button("Save && Quit", ImVec2(110, 0))) {
-                palette_color_shift_cancel_preview();
-                if (g_have_bdb && g_bdb_path[0]) bdb_save(g_bdb_path);
-                if (g_bdd_path[0]) bdd_save();
-                g_dirty = 0;
-                exit(0);
+                /* Only quit once the save actually landed -- a never-saved
+                   project prompts for a location, and cancelling it (or a
+                   failed write) must not throw the work away. */
+                if (save_all_project())
+                    exit(0);
             }
             ImGui::SameLine();
             if (ImGui::Button("Discard", ImVec2(80, 0)))

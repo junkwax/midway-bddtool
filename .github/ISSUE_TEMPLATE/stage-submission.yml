@@ -1,0 +1,75 @@
+name: Stage submission
+description: Share a background stage you built in bddtool
+title: "[stage] "
+labels: ["stage-submission"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing a stage!
+
+        The easiest way to fill this in is **File > Share Stage...** in bddtool — it
+        builds the bundle, pre-fills this form, and writes a wiki-ready page with
+        enable instructions generated from your stage's real plane bindings.
+
+        Accepted stages get published to the
+        [wiki](https://github.com/junkwax/midway-bddtool/wiki).
+
+  - type: input
+    id: stage-name
+    attributes:
+      label: Stage name
+      description: The 8-character LOAD2 name from the BDB header.
+      placeholder: WAFFLE
+    validations:
+      required: true
+
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Stage bundle
+      description: |
+        Drag `<NAME>-stage.zip` into this box. It should contain the BDB, the BDD,
+        `composite.png` and the generated `.md` page.
+      placeholder: Drop the zip here...
+    validations:
+      required: true
+
+  - type: textarea
+    id: stats
+    attributes:
+      label: Budget
+      description: Copied in automatically by Share Stage.
+      value: |
+        - Modules (planes):
+        - Blocks:
+        - Images:
+        - Palettes:
+        - Peak on-screen blocks:
+        - Editor hard issues:
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: The bundle zip is attached above
+          required: true
+        - label: The stage loads and saves cleanly in bddtool
+          required: true
+        - label: I authored this art, or it is cleared for redistribution
+          required: true
+        - label: I have tested it in MAME
+          required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: |
+        Anything a player or maintainer should know — what it is based on, which bg
+        id you used, known issues, whether it needs a skew floor.
+    validations:
+      required: false

@@ -1,4 +1,5 @@
 #include "bg_editor_globals.h"
+#include "Core/project_header.h"
 #include "imgui.h"
 #include "undo_manager.h"
 
@@ -58,11 +59,15 @@ void new_project_apply(void)
              "MOD0 0 %d 0 %d", g_new_w > 0 ? g_new_w - 1 : 0, g_new_h > 0 ? g_new_h - 1 : 0);
     editor_project_set_single_module_line(module_line);
 
-    snprintf(g_name, sizeof g_name, "%s", g_new_name);
+    char stage_name[64];
+    sanitize_stage_name(stage_name, sizeof stage_name, g_new_name);
+    snprintf(g_name, sizeof g_name, "%s", stage_name);
     snprintf(g_bdb_header, sizeof g_bdb_header, "%s %d %d %d %d %d 0",
-             g_new_name, g_new_w, g_new_h, g_new_depth, g_bdb_num_modules, g_new_pals);
-    snprintf(g_bdb_path, sizeof g_bdb_path, "%s.BDB", g_new_name);
-    snprintf(g_bdd_path, sizeof g_bdd_path, "%s.BDD", g_new_name);
+             stage_name, g_new_w, g_new_h, g_new_depth, g_bdb_num_modules, g_new_pals);
+    /* Suggested file names only -- with no directory they are not a save
+       location, so the first save asks where the stage should live. */
+    snprintf(g_bdb_path, sizeof g_bdb_path, "%s.BDB", stage_name);
+    snprintf(g_bdd_path, sizeof g_bdd_path, "%s.BDD", stage_name);
 
     for (int i = 0; i < g_new_pals; i++) {
         char pal_name[64];

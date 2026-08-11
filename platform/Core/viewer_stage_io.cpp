@@ -588,6 +588,83 @@ int bdd_viewer_import_lod_smoke_for_path(const char *lod_path, const char *out_p
         bg_editor_import_lod);
 }
 
+/* Covers the "File > New Project, then Save" path end to end: a fresh project
+   must not count as having a save location (its bare NAME.BDB is a suggested
+   file name, not a place on disk), an extension-less save target must grow the
+   .BDB/.BDD extensions, and both files must be written and reload. */
+int bdd_viewer_new_project_save_smoke(const char *out_prefix)
+{
+    char check_bdb[512] = "", check_bdd[512] = "";
+    char expect_bdb[512] = "", expect_bdd[512] = "";
+    int new_modules, new_objects, new_images, new_pals;
+    char new_name[64] = "";
+
+    if (!out_prefix || !out_prefix[0]) {
+        fprintf(stderr, "usage: bddview --new-project-save-smoke OUT_PREFIX\n");
+        return 1;
+    }
+
+    new_project_apply();
+    if (!g_have_bdb || !g_bdb_header[0]) {
+        fprintf(stderr, "new-project-save: new project has no BDB header\n");
+        return 1;
+    }
+    if (project_save_location_is_set()) {
+        fprintf(stderr, "new-project-save: a new project must not claim a save location (bdb=\"%s\")\n",
+                g_bdb_path);
+        return 1;
+    }
+    snprintf(new_name, sizeof new_name, "%s", g_name);
+    new_modules = g_bdb_num_modules;
+    new_objects = g_no;
+    new_images = g_ni;
+    new_pals = g_n_pals;
+
+    /* Extension-less target, as when the user types just a name in Save As. */
+    set_project_save_paths_from_any(out_prefix);
+    bdd_viewer_make_ext(out_prefix, ".BDB", expect_bdb, sizeof expect_bdb);
+    bdd_viewer_make_ext(out_prefix, ".BDD", expect_bdd, sizeof expect_bdd);
+    if (strcmp(g_bdb_path, expect_bdb) != 0 || strcmp(g_bdd_path, expect_bdd) != 0) {
+        fprintf(stderr, "new-project-save: extensions not applied bdb=\"%s\" (want \"%s\") bdd=\"%s\" (want \"%s\")\n",
+                g_bdb_path, expect_bdb, g_bdd_path, expect_bdd);
+        return 1;
+    }
+    if (!project_save_location_is_set()) {
+        fprintf(stderr, "new-project-save: chosen location not recognized bdb=\"%s\"\n", g_bdb_path);
+        return 1;
+    }
+
+    if (!save_all_project()) {
+        fprintf(stderr, "new-project-save: save failed bdb=\"%s\" bdd=\"%s\"\n",
+                g_bdb_path, g_bdd_path);
+        return 1;
+    }
+    const char *written[2] = { expect_bdb, expect_bdd };
+    for (int i = 0; i < 2; i++) {
+        FILE *f = fopen(written[i], "rb");
+        if (!f) {
+            fprintf(stderr, "new-project-save: %s was not written\n", written[i]);
+            return 1;
+        }
+        fclose(f);
+    }
+
+    if (!bdd_viewer_load_stage_for_path(expect_bdb, check_bdb, sizeof check_bdb,
+                                        check_bdd, sizeof check_bdd)) {
+        fprintf(stderr, "new-project-save: saved stage did not reload: %s\n", expect_bdb);
+        return 1;
+    }
+    if (!g_have_bdb || strcmp(g_name, new_name) != 0 || g_bdb_num_modules != new_modules) {
+        fprintf(stderr, "new-project-save: reload mismatch name=%s/%s modules=%d/%d\n",
+                g_name, new_name, g_bdb_num_modules, new_modules);
+        return 1;
+    }
+
+    fprintf(stderr, "new-project-save=ok name=%s bdb=%s bdd=%s modules=%d objects=%d images=%d palettes=%d\n",
+            new_name, check_bdb, check_bdd, new_modules, new_objects, new_images, new_pals);
+    return 0;
+}
+
 int bdd_viewer_import_png_smoke_for_path(const char *png_path, const char *out_prefix)
 {
     char out_bdd[512] = "";

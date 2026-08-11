@@ -2,6 +2,7 @@
 #include "bg_editor_globals.h"
 #include "Core/editor_commands.h"
 #include "UI/app/PanelManager.h"
+#include "UI/tools/stage_share_bundle.h"
 
 #include "imgui.h"
 #include "imgui_impl_sdlrenderer2.h"
@@ -105,6 +106,7 @@ void bg_editor_render(void)
     g_dock_right_panels_next = false;
     draw_welcome();
     draw_new_project();
+    draw_stage_share_dialog();
     draw_help();
     draw_quick_size_audit_window();
     draw_verify();

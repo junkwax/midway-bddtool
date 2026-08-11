@@ -19,6 +19,7 @@ int bdd_viewer_import_img_smoke_for_path(const char *img_path, const char *out_p
 int bdd_viewer_import_img_folder_smoke_for_path(const char *dir, const char *out_prefix);
 int bdd_viewer_import_lod_smoke_for_path(const char *lod_path, const char *out_prefix);
 int bdd_viewer_import_png_smoke_for_path(const char *png_path, const char *out_prefix);
+int bdd_viewer_new_project_save_smoke(const char *out_prefix);
 
 #ifdef __cplusplus
 }

@@ -7,6 +7,7 @@
 #include "Core/viewer_stage_io.h"
 #include "Core/viewer_test_levels.h"
 #include "UI/tools/mk2_runtime_actor_tool.h"
+#include "UI/tools/stage_share_bundle.h"
 
 #include <cstdio>
 #include <cstring>
@@ -740,6 +741,40 @@ int bdd_viewer_run_cli_command(int argc, char **argv, int *exit_code)
             return 1;
         }
         *exit_code = bdd_viewer_import_img_folder_smoke_for_path(argv[2], argv[3]);
+        return 1;
+    }
+    if (argc >= 2 && strcmp(argv[1], "--share-bundle-smoke") == 0) {
+        char zip[600] = "", page[600] = "", err[256] = "";
+        int n;
+        if (argc < 4) {
+            fprintf(stderr, "usage: bddview --share-bundle-smoke FILE.BDB OUT_DIR\n");
+            *exit_code = 1;
+            return 1;
+        }
+        if (!bdd_viewer_load_stage_for_path(argv[2], bdb_path, sizeof bdb_path,
+                                            bdd_path, sizeof bdd_path)) {
+            *exit_code = 1;
+            return 1;
+        }
+        n = stage_share_build_bundle(argv[3], (argc >= 5) ? atoi(argv[4]) : 0,
+                                     zip, sizeof zip, page, sizeof page,
+                                     err, sizeof err);
+        if (n < 0) {
+            fprintf(stderr, "share-bundle: failed: %s\n", err);
+            *exit_code = 1;
+            return 1;
+        }
+        fprintf(stderr, "share-bundle=ok files=%d zip=%s page=%s\n", n, zip, page);
+        *exit_code = 0;
+        return 1;
+    }
+    if (argc >= 2 && strcmp(argv[1], "--new-project-save-smoke") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: bddview --new-project-save-smoke OUT_PREFIX\n");
+            *exit_code = 1;
+            return 1;
+        }
+        *exit_code = bdd_viewer_new_project_save_smoke(argv[2]);
         return 1;
     }
     if (argc >= 2 && strcmp(argv[1], "--import-lod-smoke") == 0) {

@@ -56,6 +56,7 @@ add_executable(bddview
     platform/Core/project_snapshot.cpp
     platform/Core/recent_files.cpp
     platform/Core/stage_path_utils.cpp
+    platform/Core/zip_writer.cpp
     platform/libs/stb_impl.cpp
     platform/Core/test_projects.cpp
     platform/Core/tga_import.cpp
@@ -147,6 +148,8 @@ add_executable(bddview
     platform/UI/tools/mk2_transparency_advisor.cpp
     platform/UI/tools/mk2_visual_diagnostics.cpp
     platform/UI/tools/mk2_workflow.cpp
+    platform/UI/tools/stage_share_bundle.cpp
+    platform/UI/tools/stage_share_media.cpp
     platform/UI/tools/mk2_workspace_import.cpp
     platform/UI/overlays/module_bounds_overlay.cpp
     platform/UI/panels/modules_panel.cpp

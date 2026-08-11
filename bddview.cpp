@@ -30,6 +30,7 @@
 #include "Core/image_lookup.h"
 #include "Core/viewer_cli_commands.h"
 #include "Core/viewer_stage_io.h"
+#include "Core/path_utils.h"
 #include "UI/overlays/sdl_alignment_guides.h"
 #include "UI/assets/app_icon.h"
 #include "UI/sdl/sdl_path_input.h"
@@ -189,6 +190,131 @@ static bool bdd_viewer_render_png(int argc, char *argv[], int *exit_code)
     return true;
 }
 
+/* Headless sweep of the in-game camera across a stage, one PNG per frame, for
+   turning into a scrolling GIF/MP4. Renders a one-way left-to-right sweep; the
+   encoder makes it play back and forth by concatenating the reverse.
+   Handles "--render-scroll <BDD> <out_dir> [frames] [zoom]". */
+static bool bdd_viewer_render_scroll(int argc, char *argv[], int *exit_code)
+{
+    const char *bdd_arg = nullptr;
+    const char *dir_arg = nullptr;
+    int frames = 48;
+    int zoom = 1;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--render-scroll") != 0) continue;
+        if (i + 2 < argc) { bdd_arg = argv[i + 1]; dir_arg = argv[i + 2]; }
+        if (i + 3 < argc) { int n = atoi(argv[i + 3]); if (n >= 2 && n <= 600) frames = n; }
+        if (i + 4 < argc) { int z = atoi(argv[i + 4]); if (z >= 1 && z <= 4) zoom = z; }
+        break;
+    }
+    if (!bdd_arg || !dir_arg)
+        return false;
+    *exit_code = 1;
+
+    char bdb_p[512] = "", bdd_p[512] = "";
+    if (!bdd_viewer_load_stage_for_path(bdd_arg, bdb_p, sizeof bdb_p, bdd_p, sizeof bdd_p)) {
+        fprintf(stderr, "render-scroll: failed to load %s\n", bdd_arg);
+        return true;
+    }
+    if (!ensure_dir_recursive(dir_arg)) {
+        fprintf(stderr, "render-scroll: cannot create %s\n", dir_arg);
+        return true;
+    }
+    runtime_actor_autoload_for_stage();
+    g_show_objects = 1;
+    g_preview_mode = 1;
+    g_runtime_layout_view = 1;
+    g_game_view = 1;
+
+    bdd_reset_game_preview_camera();
+    int start_cam = g_scroll_pos;
+
+    /* Prefer the stage's own BGND.ASM scroll limits -- that is exactly how far
+       the arcade camera can travel. Fall back to the layout extent. */
+    int cam_lo = 0, cam_hi = 0;
+    if (bdd_get_stage_scroll_limits(&cam_lo, &cam_hi) && cam_hi > cam_lo) {
+        /* limits are camera positions already */
+    } else {
+        int x0, x1, y0, y1;
+        bdd_get_runtime_layout_bounds(&x0, &x1, &y0, &y1);
+        if (x0 == INT_MAX || x1 == INT_MIN || x1 - x0 <= 400) {
+            cam_lo = cam_hi = start_cam;
+        } else {
+            cam_lo = x0;
+            cam_hi = x1 - 400;
+        }
+    }
+    if (cam_hi < cam_lo) { int t = cam_lo; cam_lo = cam_hi; cam_hi = t; }
+
+    const int ww = 400 * zoom;
+    const int wh = 254 * zoom;
+
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        fprintf(stderr, "render-scroll: SDL_Init: %s\n", SDL_GetError());
+        return true;
+    }
+    SDL_Window *w = SDL_CreateWindow("bddview-scroll", 0, 0, 64, 64, SDL_WINDOW_HIDDEN);
+    SDL_Renderer *r = w ? SDL_CreateRenderer(w, -1, SDL_RENDERER_ACCELERATED) : nullptr;
+    if (w && !r) r = SDL_CreateRenderer(w, -1, SDL_RENDERER_SOFTWARE);
+    if (!w || !r) {
+        fprintf(stderr, "render-scroll: SDL setup failed: %s\n", SDL_GetError());
+        if (r) SDL_DestroyRenderer(r);
+        if (w) SDL_DestroyWindow(w);
+        SDL_Quit();
+        return true;
+    }
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    bdd_texture_cache_set_renderer(r);
+    bdd_texture_cache_rebuild_all();
+
+    SDL_Texture *target = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888,
+                                            SDL_TEXTUREACCESS_TARGET, ww, wh);
+    unsigned char *buf = (unsigned char *)malloc((size_t)ww * wh * 4);
+    int written = 0;
+    if (target && buf) {
+        for (int i = 0; i < frames; i++) {
+            double t = (frames > 1) ? (double)i / (double)(frames - 1) : 0.0;
+            /* Smoothstep so the pan eases in and out. The encoder plays this
+               sweep forwards then backwards, and easing turns what would be a
+               hard direction change at each end into a gentle turnaround. */
+            double e = t * t * (3.0 - 2.0 * t);
+            g_scroll_pos = cam_lo + (int)((cam_hi - cam_lo) * e + 0.5);
+
+            SDL_SetRenderTarget(r, target);
+            SDL_SetRenderDrawColor(r, g_bg_color[0], g_bg_color[1], g_bg_color[2], 255);
+            SDL_RenderClear(r);
+            bdd_world_objects_draw(r, 0, 0, zoom, ww, wh, 0, 0, 0, 0, 0);
+            runtime_actor_draw_sdl(r, 0, 0, zoom, ww, wh);
+            if (SDL_RenderReadPixels(r, nullptr, SDL_PIXELFORMAT_ABGR8888, buf, ww * 4) != 0)
+                break;
+            SDL_SetRenderTarget(r, nullptr);
+
+            char out[600];
+            snprintf(out, sizeof out, "%s/frame_%04d.png", dir_arg, i);
+            if (!stbi_write_png(out, ww, wh, 4, buf, ww * 4)) {
+                fprintf(stderr, "render-scroll: failed writing %s\n", out);
+                break;
+            }
+            written++;
+        }
+    }
+    free(buf);
+    if (target) SDL_DestroyTexture(target);
+    bdd_texture_cache_destroy();
+    SDL_DestroyRenderer(r);
+    SDL_DestroyWindow(w);
+    SDL_Quit();
+
+    if (written == frames) {
+        fprintf(stderr, "render-scroll=ok frames=%d size=%dx%d cam=[%d,%d] dir=%s\n",
+                written, ww, wh, cam_lo, cam_hi, dir_arg);
+        *exit_code = 0;
+    } else {
+        fprintf(stderr, "render-scroll: wrote %d of %d frames\n", written, frames);
+    }
+    return true;
+}
+
 static int           g_last_obj = -1;   /* g_obj[] index of last dragged/placed object */
 
 /* World view (BDB + BDD)                                              */
@@ -246,6 +372,9 @@ int BddViewApp::init(int argc, char *argv[])
         return cli_exit_code;
 
     if (bdd_viewer_render_png(argc, argv, &cli_exit_code))
+        return cli_exit_code;
+
+    if (bdd_viewer_render_scroll(argc, argv, &cli_exit_code))
         return cli_exit_code;
 
     if (argc >= 2) {

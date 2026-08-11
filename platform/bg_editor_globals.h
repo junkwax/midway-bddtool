@@ -752,7 +752,12 @@ void mk2_lod_stale_check_after_save(void);
 void draw_mk2_lod_stale_warning(void);
 bool save_all_project(void);
 bool file_dialog_save(const char *title, const char *filter, char *out, int outsz);
+bool file_dialog_save_ext(const char *title, const char *filter,
+                          const char *default_ext, char *out, int outsz);
 void set_project_save_paths_from_any(const char *path);
+/* False until the project has a real on-disk location (see save_project.cpp). */
+bool project_save_location_is_set(void);
+bool prompt_for_project_save_location(void);
 void ensure_bdb_header_for_save(void);
 void stage_export_bundle(void);
 extern bool g_show_prefs;

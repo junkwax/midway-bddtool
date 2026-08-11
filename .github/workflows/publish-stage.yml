@@ -1,0 +1,98 @@
+name: Publish stage to wiki
+
+# A maintainer labels an accepted stage submission `stage-approved` and this
+# turns it into a wiki entry. The submitter's bundle already contains the
+# rendered page, arena views, scroll animation and props, so nothing here has
+# to build bddview or run ffmpeg -- it only unpacks, rewrites the asset links
+# and pushes.
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number carrying the stage bundle
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'stage-approved'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out tools
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve the submission issue
+        id: issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+        run: |
+          set -euo pipefail
+          gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" \
+             --json body,author,title > issue.json
+          echo "author=$(jq -r '.author.login' issue.json)" >> "$GITHUB_OUTPUT"
+
+          # Attachments appear in the body as GitHub user-content links.
+          url=$(jq -r '.body' issue.json \
+                | grep -oE 'https://[^) ]*\.zip' | head -1 || true)
+          if [ -z "$url" ]; then
+            echo "::error::No .zip attachment found in issue #$ISSUE"
+            exit 1
+          fi
+          echo "zip=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Download and unpack the bundle
+        run: |
+          set -euo pipefail
+          curl -sSL --fail -o bundle.zip "${{ steps.issue.outputs.zip }}"
+          mkdir -p bundle
+          unzip -q bundle.zip -d bundle
+          # Bundles zip their files at the root, but tolerate one wrapper dir.
+          if [ "$(find bundle -maxdepth 1 -name '*.md' | wc -l)" -eq 0 ]; then
+            inner=$(find bundle -mindepth 1 -maxdepth 1 -type d | head -1)
+            [ -n "$inner" ] && mv "$inner"/* bundle/ || true
+          fi
+          ls -la bundle
+
+      - name: Clone the wiki
+        run: |
+          git clone --quiet \
+            "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki
+          git -C wiki config user.name "github-actions[bot]"
+          git -C wiki config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Publish
+        id: publish
+        run: |
+          set -euo pipefail
+          python tools/publish_stage_to_wiki.py bundle \
+            --repo "$GITHUB_REPOSITORY" \
+            --wiki wiki \
+            --author "${{ steps.issue.outputs.author }}" \
+            --push | tee publish.log
+          name=$(sed -n 's/^stage: *//p' publish.log | head -1)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+        run: |
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body \
+            "Published: https://github.com/${GITHUB_REPOSITORY}/wiki/${{ steps.publish.outputs.name }}
+
+          It is also listed in the [Stage Catalog](https://github.com/${GITHUB_REPOSITORY}/wiki/Stage-Catalog)."

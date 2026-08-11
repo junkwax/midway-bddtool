@@ -5,6 +5,7 @@
 #include "Core/world_module_utils.h"
 #include "UI/sdl/sdl_object_picker.h"
 #include "UI/actions/object_position_undo.h"
+#include "UI/tools/stage_share_bundle.h"
 #include "imgui.h"
 #include "undo_manager.h"
 #include <sys/stat.h>
@@ -299,28 +300,30 @@ void MenuBarPanel::render()
                     mk2_palette_sync_request_prompt("Manual runtime palette sync", true);
             }
             ImGui::Separator();
+            /* No path check: an unsaved project asks for a location on save. */
             if (ImGui::MenuItem(g_simple_mode ? "Save" : "Save All", "Ctrl+S",
-                                false, (g_have_bdb || g_no > 0 || g_ni > 0) &&
-                                       (g_bdb_path[0] || g_bdd_path[0]))) {
+                                false, g_have_bdb || g_no > 0 || g_ni > 0)) {
                 editor_emit_save_all();
             }
             if (!g_simple_mode) {
                 if (ImGui::MenuItem("Save BDB + BDD", NULL, false,
-                                    (g_have_bdb || g_no > 0 || g_ni > 0) &&
-                                    (g_bdb_path[0] || g_bdd_path[0])))
+                                    g_have_bdb || g_no > 0 || g_ni > 0))
                     editor_emit_save_all();
             }
             if (ImGui::MenuItem("Save As...", NULL, false, g_have_bdb || g_no > 0 || g_ni > 0)) {
-                char path[512] = "";
-                if (file_dialog_save("Save As", "Midway Background Files\0*.BDB;*.bdb;*.BDD;*.bdd\0All Files\0*.*\0", path, sizeof path)) {
-                    set_project_save_paths_from_any(path);
-                    ensure_bdb_header_for_save();
+                if (prompt_for_project_save_location())
                     editor_emit_save_all();
-                }
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Export Package...", NULL, false, g_have_bdb && g_bdb_path[0]))
                 stage_export_bundle();
+            if (ImGui::MenuItem("Share Stage...", NULL, false,
+                                (g_have_bdb || g_ni > 0) && project_save_location_is_set()))
+                stage_share_submit_flow();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(project_save_location_is_set()
+                                  ? "Build a shareable bundle and open a stage submission issue"
+                                  : "Save the stage first");
             ImGui::Separator();
             if (ImGui::MenuItem("Preferences..."))
                 editor_emit_show_preferences();
