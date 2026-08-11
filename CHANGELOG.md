@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- macOS could not render the arena or scroll animation in a share bundle:
+  `share_media_exe_path` looked for `/proc/self/exe`, which macOS does not
+  have, so it re-invoked nothing and the bundle silently came out without them.
+  Uses `_NSGetExecutablePath` there.
+
 ## [1.0.30] - 2026-08-11
 
 ### Fixed

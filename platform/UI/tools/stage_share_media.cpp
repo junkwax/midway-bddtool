@@ -17,6 +17,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <unistd.h>
 #else
 #include <unistd.h>
 #endif
@@ -30,6 +33,13 @@ bool share_media_exe_path(char *out, size_t outsz)
 #ifdef _WIN32
     DWORD n = GetModuleFileNameA(NULL, out, (DWORD)outsz);
     return n > 0 && n < outsz;
+#elif defined(__APPLE__)
+    /* macOS has no /proc, so the arena and scroll renders would silently be
+       unavailable there without this. */
+    uint32_t n = (uint32_t)outsz;
+    if (_NSGetExecutablePath(out, &n) != 0) return false;
+    out[outsz - 1] = '\0';
+    return out[0] != '\0';
 #else
     ssize_t n = readlink("/proc/self/exe", out, outsz - 1);
     if (n <= 0) return false;
