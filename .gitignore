@@ -66,10 +66,12 @@ OUTHVN/
 screenshot.*
 !screenshot.jpg
 
-# All .md except root README.md and CHANGELOG.md
+# All .md except the docs we publish
 *.md
 !README.md
 !CHANGELOG.md
+!CONTRIBUTING.md
+!mk2_background_deep_dive.md
 
 # Runtime generated
 /cfg/
