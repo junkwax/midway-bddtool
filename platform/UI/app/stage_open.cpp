@@ -15,7 +15,6 @@ static void enter_edit_layout_after_stage_load(void)
     g_split_view = 0;
     g_runtime_layout_view = 0;
     g_show_images = true;
-    g_show_obj_properties = true;
     g_show_modules = false;
     if (g_hl_obj < 0 && g_no > 0) {
         editor_project_clear_selection();

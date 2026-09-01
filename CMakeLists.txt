@@ -159,7 +159,6 @@ add_executable(bddview
     platform/UI/actions/object_actions.cpp
     platform/UI/panels/object_list.cpp
     platform/UI/actions/object_position_undo.cpp
-    platform/UI/view/onboarding_hints.cpp
     platform/UI/panels/pal_anim_panel.cpp
     platform/UI/actions/palette_actions.cpp
     platform/UI/tools/palette_blend_merge_tool.cpp
@@ -172,6 +171,7 @@ add_executable(bddview
     platform/UI/dialogs/quit_dialog.cpp
     platform/UI/dialogs/reference_settings.cpp
     platform/UI/view/right_panel_layout.cpp
+    platform/UI/view/right_sidebar.cpp
     platform/UI/panels/right_rail_panels.cpp
     platform/UI/dialogs/save_error_popup.cpp
     platform/UI/actions/selection_helpers.cpp

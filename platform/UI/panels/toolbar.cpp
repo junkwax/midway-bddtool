@@ -87,11 +87,8 @@ void ToolbarPanel::render()
     {
         /* No path check: an unsaved project asks for a location on save. */
         bool can_save = (g_have_bdb || g_no > 0 || g_ni > 0);
-        if (tb_button("Save", false, "Save BDB + BDD  (Ctrl+S)", !can_save)) {
+        if (tb_button("Save", false, "Save BDB + BDD  (Ctrl+S)", !can_save))
             editor_emit_save_all();
-            g_hint_save = false;
-        }
-        hint_badge(&g_hint_save, "hint_save");
     }
 
     tb_sep();
@@ -130,11 +127,9 @@ void ToolbarPanel::render()
                 g_toast_timer = 2.0f;
             } else {
                 g_cur_tool = t;
-                if (t == 1) g_hint_place = false;
             }
         }
     }
-    if (g_cur_tool == 1) hint_badge(&g_hint_place, "hint_place");
 
     if (toolbar_sel_count > 0 || g_clip_count > 0) {
         tb_sep();
@@ -159,7 +154,6 @@ void ToolbarPanel::render()
                              path, sizeof path))
             import_png(path);
     }
-    hint_badge(&g_hint_import, "hint_import");
 
     tb_sep();
 

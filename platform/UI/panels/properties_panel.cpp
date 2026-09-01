@@ -408,16 +408,3 @@ void draw_obj_properties_contents(void)
     if (runtime_locked) ImGui::EndDisabled();
 
 }
-
-void draw_obj_properties(void)
-{
-    if (!g_show_obj_properties) return;
-    right_panel_set_next(RIGHT_PANEL_OBJ_PROPERTIES);
-    if (obj_properties_take_focus_request())
-        ImGui::SetNextWindowFocus();
-    bool open = ImGui::Begin("Object Properties", &g_show_obj_properties);
-    right_panel_after_begin(RIGHT_PANEL_OBJ_PROPERTIES);
-    if (open)
-        draw_obj_properties_contents();
-    ImGui::End();
-}

@@ -567,12 +567,8 @@ static void fit_stage_width_and_scroll_to_content(void)
    editable here and write BGND.ASM with a timestamped backup; parallax is
    adjusted from the Game Preview panel so the tuning control stays next to the
    scrolling view. */
-static void draw_module_runtime_binding(void)
+void draw_modules_runtime_contents(void)
 {
-    if (g_runtime_binding_jump_module >= 0)
-        ImGui::SetNextItemOpen(true);
-    if (!ImGui::CollapsingHeader("Runtime Binding (BGND.ASM)"))
-        return;
 
     ImGui::TextWrapped(
         "Module bounds above set world position. The values here come from the "
@@ -943,26 +939,203 @@ static void draw_module_runtime_binding(void)
         ImGui::TextWrapped("%s", g_stage_start_status);
 }
 
-void draw_modules(void)
-{
-    right_panel_set_next(RIGHT_PANEL_MODULES);
-    bool open = ImGui::Begin(g_simple_mode ? "Regions" : "Modules", NULL);
-    right_panel_after_begin(RIGHT_PANEL_MODULES);
-    if (!open) {
-        ImGui::End();
-        return;
-    }
+/* The modules panel is split across sidebar sub-tabs so each one stays a single
+   readable job: what exists, how to add one, per-module edits, runtime wiring. */
 
-    if (!g_have_bdb) {
-        ImGui::TextUnformatted(g_simple_mode ? "No stage loaded." : "No BDB loaded.");
-        ImGui::End();
-        return;
-    }
+static bool modules_require_stage(void)
+{
+    if (g_have_bdb) return true;
+    ImGui::TextUnformatted(g_simple_mode ? "No stage loaded." : "No BDB loaded.");
+    return false;
+}
+
+void draw_modules_summary_contents(void)
+{
+    if (!modules_require_stage()) return;
 
     ImGui::TextDisabled("Modules/regions are export boxes. Floor art uses Layer: Floor/play 0x40.");
     ImGui::Checkbox("Show module bounds in viewport", &g_show_module_bounds);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Draws source BDB module rectangles. Turn off Runtime Layout to line them up with source coordinates.");
+    ImGui::Separator();
+
+    int assigned_total = 0;
+    for (int m = 0; m < g_bdb_num_modules; m++)
+        assigned_total += module_collect_stats(m, NULL, NULL, NULL);
+    int outside = mk2_first_unassigned_object() >= 0 ? 1 : 0;
+    if (outside) {
+        int n = 0;
+        for (int i = 0; i < g_no; i++) {
+            Img *im = img_find(g_obj[i].ii);
+            if (im && assign_module(g_obj[i].depth, g_obj[i].sy, im->w, im->h) < 0)
+                n++;
+        }
+        outside = n;
+    }
+    ImGui::TextWrapped("LOAD2 assigns each object to the first module whose inclusive rectangle fully contains the sprite image. Parallax/floor choice comes from the object's Layer.");
+    ImGui::Text("Assigned: %d / %d objects   Outside: %d   Modules: %d / %d",
+                assigned_total, g_no, outside, g_bdb_num_modules, MK2_LOAD2_MAX_MODULES);
+    int min_load2_x = load2_min_source_x();
+    if (min_load2_x < 0) {
+        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+            "LOAD2 warning: minimum source X is %d; negative coordinates wrap in LOAD2.",
+            min_load2_x);
+        if (ImGui::Button("Shift X >= 0 for LOAD2", ImVec2(-1, 0)))
+            shift_stage_x_for_load2();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Moves every object and module right by %d px and grows "
+                              "the world width by the same amount, preserving relative "
+                              "layout while avoiding unsigned LOAD2 coordinate wrap.",
+                              -min_load2_x);
+    }
+    {
+        char a[64] = "", b[64] = "", stem[16] = "";
+        if (load2_first_module_stem_collision(a, sizeof a, b, sizeof b,
+                                              stem, sizeof stem)) {
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+                "LOAD2 label collision: %s and %s both emit %s* symbols.",
+                a, b, stem);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("LOAD2-generated ASM labels use a shortened module-name stem. "
+                                  "Rename modules so their first 10 characters are unique before "
+                                  "promoting BGNDTBL/BGND records.");
+        }
+    }
+    if (outside > 0) {
+        if (ImGui::Button("Select Outside", ImVec2(130, 0))) {
+            int n = mk2_select_unassigned_objects();
+            char msg[96];
+            snprintf(msg, sizeof msg, "Selected %d outside-module object(s)", n);
+            stage_set_toast(msg);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Isolate Outside", ImVec2(130, 0))) {
+            int n = mk2_isolate_unassigned_objects();
+            char msg[128];
+            snprintf(msg, sizeof msg,
+                     "Showing only %d outside-module object(s)", n);
+            stage_set_toast(msg);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Select objects not covered by any module and hide every assigned object.");
+        ImGui::SameLine();
+        if (ImGui::Button("Include Outside", ImVec2(140, 0))) {
+            int n = mk2_include_unassigned_objects_in_modules();
+            char msg[128];
+            snprintf(msg, sizeof msg,
+                 n ? "Expanded %d module bound(s)" : "No module bounds needed expansion",
+                 n);
+            stage_set_toast(msg);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Delete Outside", ImVec2(130, 0))) {
+            int n = mk2_delete_unassigned_objects();
+            mk2_toast_outside_delete_result(n);
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Show All Objects"))
+            show_all_objects();
+    }
+    if (g_outside_delete_backup_status[0])
+        ImGui::TextWrapped("%s", g_outside_delete_backup_status);
+
+    int selected_modules = module_selection_count();
+    if (selected_modules > 0) {
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.35f, 1.0f),
+                           "%d module%s highlighted for group moves",
+                           selected_modules, selected_modules == 1 ? "" : "s");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear module highlights"))
+            module_selection_clear();
+    }
+
+    if (ImGui::BeginTable("module_summary", 8,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                          ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("sel", ImGuiTableColumnFlags_WidthFixed, 34.0f);
+        ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+        ImGui::TableSetupColumn("name");
+        ImGui::TableSetupColumn("bounds");
+        ImGui::TableSetupColumn("size", ImGuiTableColumnFlags_WidthFixed, 74.0f);
+        ImGui::TableSetupColumn("obj", ImGuiTableColumnFlags_WidthFixed, 46.0f);
+        ImGui::TableSetupColumn("pal", ImGuiTableColumnFlags_WidthFixed, 46.0f);
+        ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthFixed, 168.0f);
+        ImGui::TableHeadersRow();
+        for (int m = 0; m < g_bdb_num_modules; m++) {
+            char name[64] = "";
+            int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+            int ok = parse_module_bounds(m, name, &x1, &x2, &y1, &y2);
+            int pals = 0, layers = 0, first = -1;
+            int objects = ok ? module_collect_stats(m, &pals, &layers, &first) : 0;
+            ImVec4 pal_col = pals > MK2_RUNTIME_PALETTE_SLOTS
+                           ? ImVec4(1.0f, 0.35f, 0.25f, 1.0f)
+                           : (pals > MK2_BG_DYNAMIC_PALETTE_SLOTS
+                              ? ImVec4(1.0f, 0.65f, 0.25f, 1.0f)
+                              : ImVec4(0.75f, 0.9f, 1.0f, 1.0f));
+            ImGui::PushID(m);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            {
+                bool selected = module_selection_get(m);
+                if (ImGui::Checkbox("##module_select", &selected))
+                    module_selection_set(m, selected);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Highlight this module rectangle for group drag/center moves.");
+            }
+            ImGui::TableNextColumn(); ImGui::Text("%d", m);
+            ImGui::TableNextColumn();
+            if (ok) {
+                ImGui::TextUnformatted(name);
+                bool tbl_locked = module_is_locked(name);
+                ImGui::SameLine();
+                if (ImGui::SmallButton(tbl_locked ? "[locked]" : "[unlocked]"))
+                    module_set_locked(name, !tbl_locked);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Click to %s this module against accidental drag.",
+                                      tbl_locked ? "unlock" : "lock");
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "bad line");
+            }
+            ImGui::TableNextColumn();
+            if (ok) ImGui::Text("%d..%d, %d..%d", x1, x2, y1, y2);
+            else ImGui::TextUnformatted("-");
+            ImGui::TableNextColumn();
+            if (ok) ImGui::Text("%dx%d", x2 - x1 + 1, y2 - y1 + 1);
+            else ImGui::TextUnformatted("-");
+            ImGui::TableNextColumn(); ImGui::Text("%d", objects);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Layer count in this module: %d", layers);
+            ImGui::TableNextColumn();
+            ImGui::TextColored(pal_col, "%d", pals);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("MK2 hardware exposes %d simultaneous palette slots; background dynamic budget is tracked separately.",
+                                  MK2_RUNTIME_PALETTE_SLOTS);
+            ImGui::TableNextColumn();
+            if (ImGui::SmallButton("Select")) {
+                int n = module_select_objects(m);
+                char msg[96];
+                snprintf(msg, sizeof msg, "Selected %d object(s) in module %d", n, m);
+                stage_set_toast(msg);
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("View"))
+                module_center_view(m);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Duplicate"))
+                module_duplicate_to_next_slot(m);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Clones this module and its owned assets into the next free MK2 module slot, placed to the right so ownership cannot overlap.");
+            if (first >= 0 && ImGui::IsItemHovered())
+                ImGui::SetTooltip("First assigned object: %d", first);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+}
+
+void draw_modules_create_contents(void)
+{
+    if (!modules_require_stage()) return;
 
     ImGui::SeparatorText(g_simple_mode ? "Create Region" : "Create Module");
     int selected_n = selected_count();
@@ -1095,190 +1268,18 @@ void draw_modules(void)
             }
         }
     }
+}
 
-    ImGui::Separator();
+void draw_modules_edit_contents(void)
+{
+    if (!modules_require_stage()) return;
 
-    if (ImGui::CollapsingHeader("LOAD2 Module Summary", ImGuiTreeNodeFlags_DefaultOpen)) {
-        int assigned_total = 0;
-        for (int m = 0; m < g_bdb_num_modules; m++)
-            assigned_total += module_collect_stats(m, NULL, NULL, NULL);
-        int outside = mk2_first_unassigned_object() >= 0 ? 1 : 0;
-        if (outside) {
-            int n = 0;
-            for (int i = 0; i < g_no; i++) {
-                Img *im = img_find(g_obj[i].ii);
-                if (im && assign_module(g_obj[i].depth, g_obj[i].sy, im->w, im->h) < 0)
-                    n++;
-            }
-            outside = n;
-        }
-        ImGui::TextWrapped("LOAD2 assigns each object to the first module whose inclusive rectangle fully contains the sprite image. Parallax/floor choice comes from the object's Layer.");
-        ImGui::Text("Assigned: %d / %d objects   Outside: %d   Modules: %d / %d",
-                    assigned_total, g_no, outside, g_bdb_num_modules, MK2_LOAD2_MAX_MODULES);
-        int min_load2_x = load2_min_source_x();
-        if (min_load2_x < 0) {
-            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
-                "LOAD2 warning: minimum source X is %d; negative coordinates wrap in LOAD2.",
-                min_load2_x);
-            if (ImGui::Button("Shift X >= 0 for LOAD2", ImVec2(-1, 0)))
-                shift_stage_x_for_load2();
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Moves every object and module right by %d px and grows "
-                                  "the world width by the same amount, preserving relative "
-                                  "layout while avoiding unsigned LOAD2 coordinate wrap.",
-                                  -min_load2_x);
-        }
-        {
-            char a[64] = "", b[64] = "", stem[16] = "";
-            if (load2_first_module_stem_collision(a, sizeof a, b, sizeof b,
-                                                  stem, sizeof stem)) {
-                ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
-                    "LOAD2 label collision: %s and %s both emit %s* symbols.",
-                    a, b, stem);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("LOAD2-generated ASM labels use a shortened module-name stem. "
-                                      "Rename modules so their first 10 characters are unique before "
-                                      "promoting BGNDTBL/BGND records.");
-            }
-        }
-        if (outside > 0) {
-            if (ImGui::Button("Select Outside", ImVec2(130, 0))) {
-                int n = mk2_select_unassigned_objects();
-                char msg[96];
-                snprintf(msg, sizeof msg, "Selected %d outside-module object(s)", n);
-                stage_set_toast(msg);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Isolate Outside", ImVec2(130, 0))) {
-                int n = mk2_isolate_unassigned_objects();
-                char msg[128];
-                snprintf(msg, sizeof msg,
-                         "Showing only %d outside-module object(s)", n);
-                stage_set_toast(msg);
-            }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Select objects not covered by any module and hide every assigned object.");
-            ImGui::SameLine();
-            if (ImGui::Button("Include Outside", ImVec2(140, 0))) {
-                int n = mk2_include_unassigned_objects_in_modules();
-                char msg[128];
-                snprintf(msg, sizeof msg,
-                     n ? "Expanded %d module bound(s)" : "No module bounds needed expansion",
-                     n);
-                stage_set_toast(msg);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Delete Outside", ImVec2(130, 0))) {
-                int n = mk2_delete_unassigned_objects();
-                mk2_toast_outside_delete_result(n);
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Show All Objects"))
-                show_all_objects();
-        }
-        if (g_outside_delete_backup_status[0])
-            ImGui::TextWrapped("%s", g_outside_delete_backup_status);
-
-        int selected_modules = module_selection_count();
-        if (selected_modules > 0) {
-            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.35f, 1.0f),
-                               "%d module%s highlighted for group moves",
-                               selected_modules, selected_modules == 1 ? "" : "s");
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Clear module highlights"))
-                module_selection_clear();
-        }
-
-        if (ImGui::BeginTable("module_summary", 8,
-                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("sel", ImGuiTableColumnFlags_WidthFixed, 34.0f);
-            ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f);
-            ImGui::TableSetupColumn("name");
-            ImGui::TableSetupColumn("bounds");
-            ImGui::TableSetupColumn("size", ImGuiTableColumnFlags_WidthFixed, 74.0f);
-            ImGui::TableSetupColumn("obj", ImGuiTableColumnFlags_WidthFixed, 46.0f);
-            ImGui::TableSetupColumn("pal", ImGuiTableColumnFlags_WidthFixed, 46.0f);
-            ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthFixed, 168.0f);
-            ImGui::TableHeadersRow();
-            for (int m = 0; m < g_bdb_num_modules; m++) {
-                char name[64] = "";
-                int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
-                int ok = parse_module_bounds(m, name, &x1, &x2, &y1, &y2);
-                int pals = 0, layers = 0, first = -1;
-                int objects = ok ? module_collect_stats(m, &pals, &layers, &first) : 0;
-                ImVec4 pal_col = pals > MK2_RUNTIME_PALETTE_SLOTS
-                               ? ImVec4(1.0f, 0.35f, 0.25f, 1.0f)
-                               : (pals > MK2_BG_DYNAMIC_PALETTE_SLOTS
-                                  ? ImVec4(1.0f, 0.65f, 0.25f, 1.0f)
-                                  : ImVec4(0.75f, 0.9f, 1.0f, 1.0f));
-                ImGui::PushID(m);
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                {
-                    bool selected = module_selection_get(m);
-                    if (ImGui::Checkbox("##module_select", &selected))
-                        module_selection_set(m, selected);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Highlight this module rectangle for group drag/center moves.");
-                }
-                ImGui::TableNextColumn(); ImGui::Text("%d", m);
-                ImGui::TableNextColumn();
-                if (ok) {
-                    ImGui::TextUnformatted(name);
-                    bool tbl_locked = module_is_locked(name);
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton(tbl_locked ? "[locked]" : "[unlocked]"))
-                        module_set_locked(name, !tbl_locked);
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Click to %s this module against accidental drag.",
-                                          tbl_locked ? "unlock" : "lock");
-                } else {
-                    ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "bad line");
-                }
-                ImGui::TableNextColumn();
-                if (ok) ImGui::Text("%d..%d, %d..%d", x1, x2, y1, y2);
-                else ImGui::TextUnformatted("-");
-                ImGui::TableNextColumn();
-                if (ok) ImGui::Text("%dx%d", x2 - x1 + 1, y2 - y1 + 1);
-                else ImGui::TextUnformatted("-");
-                ImGui::TableNextColumn(); ImGui::Text("%d", objects);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Layer count in this module: %d", layers);
-                ImGui::TableNextColumn();
-                ImGui::TextColored(pal_col, "%d", pals);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("MK2 hardware exposes %d simultaneous palette slots; background dynamic budget is tracked separately.",
-                                      MK2_RUNTIME_PALETTE_SLOTS);
-                ImGui::TableNextColumn();
-                if (ImGui::SmallButton("Select")) {
-                    int n = module_select_objects(m);
-                    char msg[96];
-                    snprintf(msg, sizeof msg, "Selected %d object(s) in module %d", n, m);
-                    stage_set_toast(msg);
-                }
-                ImGui::SameLine();
-                if (ImGui::SmallButton("View"))
-                    module_center_view(m);
-                ImGui::SameLine();
-                if (ImGui::SmallButton("Duplicate"))
-                    module_duplicate_to_next_slot(m);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Clones this module and its owned assets into the next free MK2 module slot, placed to the right so ownership cannot overlap.");
-                if (first >= 0 && ImGui::IsItemHovered())
-                    ImGui::SetTooltip("First assigned object: %d", first);
-                ImGui::PopID();
-            }
-            ImGui::EndTable();
-        }
+    if (g_bdb_num_modules == 0) {
+        ImGui::TextDisabled(g_simple_mode
+                            ? "No regions yet. Add one from the Create tab."
+                            : "No modules yet. Add one from the Create tab.");
+        return;
     }
-
-    if (!g_simple_mode) {
-        ImGui::Separator();
-        draw_module_runtime_binding();
-    }
-
-    ImGui::Separator();
 
     for (int i = 0; i < g_bdb_num_modules; i++) {
         ImGui::PushID(i);
@@ -1353,6 +1354,4 @@ void draw_modules(void)
             g_edit_mod_idx = -1;
         }
     }
-
-    ImGui::End();
 }

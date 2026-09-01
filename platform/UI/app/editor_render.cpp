@@ -98,12 +98,8 @@ void bg_editor_render(void)
     draw_unsaved_action_prompt();
     draw_img_import_picker();
     draw_mk2_simple_level_dialog();
-    if (!show_welcome) {
-        right_panel_frame_begin();
+    if (!show_welcome)
         g_panel_manager.render_panels(EditorPanelRegion::RightRail);
-        right_panel_frame_end();
-    }
-    g_dock_right_panels_next = false;
     draw_welcome();
     draw_new_project();
     draw_stage_share_dialog();

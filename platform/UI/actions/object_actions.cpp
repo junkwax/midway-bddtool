@@ -31,7 +31,6 @@ void open_object_properties(int idx)
     g_hl_obj = idx;
     if (selected_count() == 0)
         g_sel_flags[idx] = 1;
-    g_show_obj_properties = true;
     g_focus_obj_properties_next = true;
 }
 

@@ -66,8 +66,6 @@ extern "C" {
 
 int selected_count(void);
 void set_left_panel_default(float y, float w, float h);
-void right_panel_set_next(int id);
-void right_panel_after_begin(int id);
 void center_view_on_object(int idx);
 float gv_scroll_factor(int layer_byte);
 void gv_object_origin(int obj_index, int *x, int *y);
@@ -339,7 +337,6 @@ bool g_show_level_stats  = false;
 bool g_show_bpp_preview  = false;
 bool g_show_gc           = false;
 bool g_show_checkpoints  = false;
-bool g_show_obj_properties = true;
 bool g_show_modules      = false;
 bool g_focus_obj_properties_next = false;
 bool g_show_module_bounds = false;
@@ -406,7 +403,6 @@ const char *stage_overlay_mode_name(void);
 void export_composite_png(void);
 void export_viewport_png(void);
 bool file_dialog_save(const char *title, const char *filter, char *out, int outsz);
-bool hint_badge(bool *flag, const char *id);
 void runtime_guides_clear_session(void);
 void add_image_to_view_center(int img_i);
 void select_all_with_image_ii(int image_ii);
@@ -447,11 +443,6 @@ bool g_show_debug_info = false;
 
 bool g_show_help      = false;
 bool g_show_prefs     = false;
-
-/* onboarding hint badges — dismissed per session when clicked */
-bool g_hint_import = true;
-bool g_hint_place  = true;
-bool g_hint_save   = true;
 
 /* world-view plain LMB drag state (intercepts SDL before bddview.c) */
 static bool g_wv_drag           = false;

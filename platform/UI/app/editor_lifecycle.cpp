@@ -28,15 +28,15 @@ void bg_editor_init(SDL_Window *window, SDL_Renderer *renderer)
     io.IniFilename = "bddview_layout.ini";
 
     /* Delete old ini only on version change (bumped on major UI layout changes) */
-    /* Currently version 6 - right rail uses dockable/reorderable packed panels */
+    /* Currently version 7 - one fixed right sidebar replaces the docked rail */
     FILE *vi_f = fopen("bddview_layout.ver", "r");
     int layout_ver = 0;
     if (vi_f) { fscanf(vi_f, "%d", &layout_ver); fclose(vi_f); }
-    if (layout_ver < 6) {
+    if (layout_ver < 7) {
         remove("bddview_layout.ini");
         remove("bddview_right_panels.cfg");
         vi_f = fopen("bddview_layout.ver", "w");
-        if (vi_f) { fprintf(vi_f, "6"); fclose(vi_f); }
+        if (vi_f) { fprintf(vi_f, "7"); fclose(vi_f); }
     }
 
     settings_load();
@@ -131,16 +131,10 @@ void bg_editor_init(SDL_Window *window, SDL_Renderer *renderer)
     g_panel_manager.register_panel(std::make_unique<GarbageCollectPanel>());
     g_panel_manager.register_panel(std::make_unique<CheckpointsPanel>());
     g_panel_manager.register_panel(std::make_unique<GroupBppReducerPanel>());
-    g_panel_manager.register_panel(std::make_unique<ObjectListPanel>());
-    g_panel_manager.register_panel(std::make_unique<ObjectPropertiesPanel>());
+    g_panel_manager.register_panel(std::make_unique<RightSidebarPanel>());
     g_panel_manager.register_panel(std::make_unique<BlockEditorPanel>());
     g_panel_manager.register_panel(std::make_unique<SpriteResizePanel>());
     g_panel_manager.register_panel(std::make_unique<SplitObjectPanel>());
-    g_panel_manager.register_panel(std::make_unique<PalettePanel>());
-    g_panel_manager.register_panel(std::make_unique<ModulesPanel>());
-    g_panel_manager.register_panel(std::make_unique<LayersPanel>());
-    g_panel_manager.register_panel(std::make_unique<ImageListPanel>());
-    g_panel_manager.register_panel(std::make_unique<MinimapPanel>());
 
     recent_load();
 }

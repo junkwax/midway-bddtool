@@ -384,15 +384,6 @@ int bg_editor_object_snap_rect_at(int obj_index, int origin_x, int origin_y,
 #endif
 
 // Enums and C++ specific
-enum RightPanelId {
-    RIGHT_PANEL_OBJECTS = 0,
-    RIGHT_PANEL_OBJ_PROPERTIES,
-    RIGHT_PANEL_PALETTES,
-    RIGHT_PANEL_IMAGES,
-    RIGHT_PANEL_MODULES,
-    RIGHT_PANEL_COUNT
-};
-
 struct PanCoverageSummary {
     float full;
     float top;
@@ -452,10 +443,6 @@ int apply_palette_blend_tool(void);
 int apply_palette_union_merge_tool(void);
 int object_palette_for_image(const Obj *o, const Img *im);
 int group_bpp_color_index(const Uint32 *pal, int count, Uint32 color);
-void right_panel_set_next(int id);
-void right_panel_after_begin(int id);
-void right_panel_frame_begin(void);
-void right_panel_frame_end(void);
 void set_left_panel_default(float y, float w, float h);
 SDL_Texture *editor_texture_at(int img_i);
 void draw_editor_texture_transparent(SDL_Texture *tex, float width, float height);
@@ -910,10 +897,6 @@ void assign_layer_to_object_targets(int active, int layer);
 void assign_palette_to_object_targets(int active, int pal);
 void assign_module_to_object_targets(int active, int module_idx);
 int active_menu_image_index(void);
-extern bool g_hint_place;
-extern bool g_hint_import;
-extern bool g_hint_save;
-bool hint_badge(bool *flag, const char *id);
 void add_image_to_view_center(int img_i);
 extern int g_block_edit_img;
 extern int g_block_edit_zoom;
@@ -945,14 +928,15 @@ bool pal_animation_enabled(void);
 void pal_animation_step(float dt);
 void draw_pal_anim_panel(void);
 extern bool g_show_minimap;
-void draw_minimap(void);
+void draw_minimap_contents(void);
 extern bool g_show_layers;
 extern char g_obj_filter[16];
-void draw_layers(void);
+void draw_layers_contents(void);
 extern bool g_show_modules;
-void draw_modules(void);
-extern bool g_show_obj_properties;
-void draw_obj_list(void);
+void draw_modules_summary_contents(void);
+void draw_modules_create_contents(void);
+void draw_modules_edit_contents(void);
+void draw_modules_runtime_contents(void);
 void draw_obj_list_contents(void);
 extern int g_hover_img_ii;
 extern float g_fps;
@@ -961,7 +945,8 @@ extern float g_fps_timer;
 extern float g_prev_display_w;
 extern float g_prev_display_h;
 extern bool g_display_w_resized;
-void draw_image_list(void);
+void draw_image_list_assets_contents(void);
+void draw_image_list_tools_contents(void);
 extern bool g_show_undo_history;
 void draw_undo_history(void);
 extern bool g_show_debug_info;
@@ -974,7 +959,6 @@ extern bool g_show_checkpoints;
 void open_mk2_tool(int tool);
 void zoom_to_fit(void);
 void zoom_to_selection(void);
-extern bool g_dock_right_panels_next;
 void settings_save(void);
 void settings_load(void);
 void settings_load_runtime_autoload_pref_once(void);
@@ -985,6 +969,9 @@ void draw_about(void);
 
 extern bool g_show_ref_settings;
 void draw_ref_settings(void);
-void draw_obj_properties(void);
 void draw_obj_properties_contents(void);
+void draw_palette_colors_contents(void);
+void draw_palette_slots_contents(void);
+void draw_palette_tools_contents(void);
+void palette_tools_frame_tick(void);
 #endif // BG_EDITOR_GLOBALS_H

@@ -6,6 +6,7 @@
 #include "UI/sdl/sdl_object_picker.h"
 #include "UI/actions/object_position_undo.h"
 #include "UI/tools/stage_share_bundle.h"
+#include "UI/view/right_sidebar.h"
 #include "imgui.h"
 #include "undo_manager.h"
 #include <sys/stat.h>
@@ -691,12 +692,13 @@ void MenuBarPanel::render()
                 ImGui::TextDisabled("No active image");
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Show Image List", NULL, g_show_images))
-                g_show_images = !g_show_images;
+            if (ImGui::MenuItem("Show Image List")) {
+                g_show_images = true;
+                right_sidebar_show_tab(SIDEBAR_TAB_IMAGES, 0);
+            }
             if (ImGui::MenuItem("Arm Place Tool", NULL, false, has_img)) {
                 g_place_tool_img = active_img;
                 g_cur_tool = 1;
-                g_hint_place = false;
             }
             if (ImGui::MenuItem("Add to Center of View", NULL, false, has_img && g_no < object_cap))
                 add_image_to_view_center(active_img);
@@ -722,10 +724,8 @@ void MenuBarPanel::render()
         if (ImGui::BeginMenu("Tools")) {
             if (ImGui::MenuItem("Select Tool", "S", g_cur_tool == 0))
                 g_cur_tool = 0;
-            if (ImGui::MenuItem("Place Tool", "P", g_cur_tool == 1, g_ni > 0)) {
+            if (ImGui::MenuItem("Place Tool", "P", g_cur_tool == 1, g_ni > 0))
                 g_cur_tool = 1;
-                g_hint_place = false;
-            }
             if (ImGui::MenuItem("Pan Tool", "H", g_cur_tool == 2))
                 g_cur_tool = 2;
             if (ImGui::MenuItem("Zoom Tool", "Z", g_cur_tool == 3))
@@ -783,11 +783,32 @@ void MenuBarPanel::render()
             }
             ImGui::MenuItem("Palette Animation", NULL, &g_show_pal_anim);
             ImGui::Separator();
-            ImGui::MenuItem("Minimap",        NULL, &g_show_minimap);
-            ImGui::MenuItem("Layers",         NULL, &g_show_layers);
-            ImGui::MenuItem("Image List",     NULL, &g_show_images);
-            ImGui::MenuItem(g_simple_mode ? "Regions" : "Modules", NULL, &g_show_modules);
-            ImGui::MenuItem("Object Properties", NULL, &g_show_obj_properties);
+            /* The sidebar always carries every section, so these jump to a tab
+               rather than showing or hiding a window. */
+            ImGui::TextDisabled("Go to sidebar tab");
+            if (ImGui::MenuItem("Object Properties"))
+                right_sidebar_show_tab(SIDEBAR_TAB_OBJECTS, 0);
+            if (ImGui::MenuItem("Object List"))
+                right_sidebar_show_tab(SIDEBAR_TAB_OBJECTS, 1);
+            if (ImGui::MenuItem("Image List")) {
+                g_show_images = true;
+                right_sidebar_show_tab(SIDEBAR_TAB_IMAGES, 0);
+            }
+            if (ImGui::MenuItem("Palettes"))
+                right_sidebar_show_tab(SIDEBAR_TAB_PALETTES, 0);
+            if (ImGui::MenuItem(g_simple_mode ? "Regions" : "Modules")) {
+                g_show_modules = true;
+                right_sidebar_show_tab(SIDEBAR_TAB_MODULES, 0);
+            }
+            if (ImGui::MenuItem("Layers")) {
+                g_show_layers = true;
+                right_sidebar_show_tab(SIDEBAR_TAB_STAGE, 0);
+            }
+            if (ImGui::MenuItem("Minimap")) {
+                g_show_minimap = true;
+                right_sidebar_show_tab(SIDEBAR_TAB_STAGE, 1);
+            }
+            ImGui::Separator();
             ImGui::MenuItem("History",        NULL, &g_show_undo_history);
             ImGui::MenuItem("Level Stats",    NULL, &g_show_level_stats);
             ImGui::MenuItem("Selected BPP Reducer", NULL, &g_show_group_bpp_reducer);
@@ -809,14 +830,14 @@ void MenuBarPanel::render()
             if (ImGui::MenuItem("Zoom to Selection", "Ctrl+Shift+Z", false, g_have_bdb && g_no > 0))
                 zoom_to_selection();
             ImGui::Separator();
-            if (ImGui::MenuItem("Snap Panels to Rails")) {
-                g_dock_right_panels_next = true;
-            }
+            if (ImGui::MenuItem("Reset Sidebar Width"))
+                right_sidebar_reset_layout();
             if (ImGui::MenuItem("Reset Window Layout")) {
                 remove("bddview_layout.ini");
                 remove("bddview_layout.ver");
                 remove("bddview_right_panels.cfg");
-                g_dock_right_panels_next = true;
+                remove("bddview_sidebar.cfg");
+                right_sidebar_reset_layout();
             }
             ImGui::Separator();
             bool adv = !g_simple_mode;

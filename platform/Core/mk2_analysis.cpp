@@ -325,7 +325,6 @@ int mk2_select_unassigned_objects(void)
     }
     if (count > 0) {
         center_view_on_object(g_hl_obj);
-        g_show_obj_properties = true;
         g_focus_obj_properties_next = true;
     }
     return count;
@@ -353,7 +352,6 @@ int mk2_isolate_unassigned_objects(void)
     }
     if (count > 0) {
         center_view_on_object(g_hl_obj);
-        g_show_obj_properties = true;
         g_focus_obj_properties_next = true;
     }
     g_view_changed = 1;

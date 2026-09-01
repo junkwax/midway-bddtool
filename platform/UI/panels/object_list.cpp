@@ -304,13 +304,3 @@ void draw_obj_list_contents(void)
         ImGui::ProgressBar(object_cap > 0 ? (float)g_no / (float)object_cap : 0.0f, ImVec2(-1, 0), cap_lbl);
     }
 }
-
-void draw_obj_list(void)
-{
-    right_panel_set_next(RIGHT_PANEL_OBJECTS);
-    bool open = ImGui::Begin("Objects", NULL, ImGuiWindowFlags_HorizontalScrollbar);
-    right_panel_after_begin(RIGHT_PANEL_OBJECTS);
-    if (open)
-        draw_obj_list_contents();
-    ImGui::End();
-}

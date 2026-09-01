@@ -2,6 +2,7 @@
 #include "Core/editor_project_globals.h"
 #include "Core/image_lookup.h"
 #include "UI/view/navigation.h"
+#include "UI/view/right_sidebar.h"
 
 #include <imgui.h>
 #include <climits>
@@ -22,13 +23,14 @@ void zoom_to_fit(void)
     if (bh < 1) bh = 1;
 
     ImVec2 ds = ImGui::GetIO().DisplaySize;
-    int zx = (int)(ds.x / bw);
+    float view_w = editor_canvas_right_x();
+    int zx = (int)(view_w / bw);
     int zy = (int)(ds.y / bh);
     g_zoom = (zx < zy) ? zx : zy;
     if (g_zoom < 1) g_zoom = 1;
     if (g_zoom > 8) g_zoom = 8;
 
-    g_view_x = wx_min - pad_x - (int)(ds.x / g_zoom - bw) / 2;
+    g_view_x = wx_min - pad_x - (int)(view_w / g_zoom - bw) / 2;
     g_view_y = wy_min - pad_y - (int)(ds.y / g_zoom - bh) / 2;
 
     g_view_changed = 1;
@@ -56,10 +58,11 @@ void zoom_to_selection(void)
     int bw = wx_max - wx_min + pad_x * 2, bh = wy_max - wy_min + pad_y * 2;
     if (bw < 1) bw = 1; if (bh < 1) bh = 1;
     ImVec2 ds = ImGui::GetIO().DisplaySize;
-    int zx = (int)(ds.x / bw), zy = (int)(ds.y / bh);
+    float view_w = editor_canvas_right_x();
+    int zx = (int)(view_w / bw), zy = (int)(ds.y / bh);
     g_zoom = (zx < zy) ? zx : zy;
     if (g_zoom < 1) g_zoom = 1; if (g_zoom > 8) g_zoom = 8;
-    g_view_x = wx_min - pad_x - (int)(ds.x / g_zoom - bw) / 2;
+    g_view_x = wx_min - pad_x - (int)(view_w / g_zoom - bw) / 2;
     g_view_y = wy_min - pad_y - (int)(ds.y / g_zoom - bh) / 2;
     g_view_changed = 1;
 }
@@ -67,7 +70,7 @@ void zoom_to_selection(void)
 void fit_game_preview_zoom_to_window(void)
 {
     ImVec2 ds = ImGui::GetIO().DisplaySize;
-    int zx = (int)(ds.x * 0.68f / 400.0f);
+    int zx = (int)(editor_canvas_right_x() * 0.68f / 400.0f);
     float top = (float)bg_editor_canvas_top_px();
     float avail_y = ds.y - top - 188.0f;
     if (avail_y < 254.0f) avail_y = 254.0f;
@@ -81,7 +84,7 @@ void focus_editor_on_game_preview_screen(void)
 {
     if (!g_have_bdb || g_no <= 0) return;
     ImVec2 ds = ImGui::GetIO().DisplaySize;
-    int view_w = (int)(ds.x / (float)(g_zoom > 0 ? g_zoom : 1));
+    int view_w = (int)(editor_canvas_right_x() / (float)(g_zoom > 0 ? g_zoom : 1));
     int view_h = (int)(ds.y / (float)(g_zoom > 0 ? g_zoom : 1));
     if (view_w < 400) view_w = 400;
     if (view_h < 254) view_h = 254;

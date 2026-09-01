@@ -1,18 +1,20 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
+#include "UI/view/right_sidebar.h"
 #include "imgui.h"
 
 #include <limits.h>
 
-void draw_minimap(void)
+void draw_minimap_contents(void)
 {
-    if (!g_show_minimap || !g_have_bdb || g_no == 0) return;
-    set_left_panel_default(ImGui::GetIO().DisplaySize.y - 190.0f, 180.0f, 140.0f);
-    if (!ImGui::Begin("Minimap", &g_show_minimap)) return;
+    if (!g_have_bdb || g_no == 0) {
+        ImGui::TextDisabled("No stage loaded.");
+        return;
+    }
 
     int wx_min, wx_max, wy_min, wy_max;
     bdd_get_world_bounds(&wx_min, &wx_max, &wy_min, &wy_max);
-    if (wx_min == INT_MAX) { ImGui::TextUnformatted("No objects"); ImGui::End(); return; }
+    if (wx_min == INT_MAX) { ImGui::TextUnformatted("No objects"); return; }
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
     float sx = avail.x / (float)(wx_max - wx_min + 1);
@@ -58,12 +60,10 @@ void draw_minimap(void)
         float cy = (mp.y - origin.y) / scale + wy_min;
         ImVec2 ds = ImGui::GetIO().DisplaySize;
         int center_x = 0, center_y = 0;
-        bdd_screen_to_world((int)(ds.x * 0.5f), (int)(ds.y * 0.5f),
+        bdd_screen_to_world((int)(editor_canvas_right_x() * 0.5f), (int)(ds.y * 0.5f),
                             0, 0, g_zoom, &center_x, &center_y);
         g_view_x = (int)cx - center_x;
         g_view_y = (int)cy - center_y;
         g_view_changed = 1;
     }
-
-    ImGui::End();
 }

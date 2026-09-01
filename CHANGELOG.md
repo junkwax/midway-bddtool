@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The right-hand panels are now one fixed sidebar pinned to the window edge
+  instead of five separately draggable, snap-docking windows. Objects, Images,
+  Palettes, Regions/Modules and Stage are tabs in that sidebar, and each of them
+  is split into sub-tabs -- Assets/Tools, Colors/Slots/Tools,
+  Overview/Create/Edit/Runtime and so on -- so no single panel is one long wall
+  of controls. The sidebar resizes from its left edge, collapses to an icon
+  strip, remembers its width and section, and the canvas (zoom-to-fit, the
+  scrollbars, the minimap) now fits the space it leaves rather than sliding
+  underneath it.
+- The View menu's panel entries jump to the matching sidebar tab; every section
+  is always present, so nothing has to be switched on before it can be used.
+  "Snap Panels to Rails" is now "Reset Sidebar Width".
+
+### Removed
+- The pulsing orange "!" onboarding badges next to Import PNG, Place and Save in
+  simple mode. They appeared on launch as a bare exclamation mark whose only
+  explanation was a "Click to dismiss this tip" tooltip, so they flagged
+  something without ever saying what.
+
 ### Fixed
 - macOS could not render the arena or scroll animation in a share bundle:
   `share_media_exe_path` looked for `/proc/self/exe`, which macOS does not

@@ -353,22 +353,14 @@ void draw_selected_palette_swatches(int pal_idx)
         palette_slot_undo_commit(&g_palette_color_undo, "Edit Palette Color");
 }
 
-void draw_palette(void)
-{
-    right_panel_set_next(RIGHT_PANEL_PALETTES);
-    bool open = ImGui::Begin("Palettes", NULL);
-    right_panel_after_begin(RIGHT_PANEL_PALETTES);
-    if (!open) {
-        palette_color_shift_cancel_preview();
-        ImGui::End();
-        return;
-    }
+/* The palette editor is split across three sidebar sub-tabs: the live color
+   grid, the slot bookkeeping, and the heavier remapping tools. */
 
+void draw_palette_colors_contents(void)
+{
     if (g_n_pals == 0) {
         ImGui::TextUnformatted("No palettes loaded.");
-        if (ImGui::CollapsingHeader("PNG Magic Wand Palette", ImGuiTreeNodeFlags_DefaultOpen))
-            draw_palette_magic_wand_tool();
-        ImGui::End();
+        ImGui::TextDisabled("Build one from a PNG in the Tools tab.");
         return;
     }
 
@@ -401,15 +393,11 @@ void draw_palette(void)
 
     draw_palette_slot_table(sel_obj_pal);
 
-    bool shift_open = ImGui::CollapsingHeader("Global / Object Color Shift");
-    if (shift_open)
-        draw_palette_color_shift_tool();
-    else if (palette_color_shift_preview_active())
-        palette_color_shift_cancel_preview();
-
+    /* A live color-shift preview owns the palette bytes until it is accepted or
+       cancelled, so freeze the editing widgets while one is running. */
     bool color_preview_active = palette_color_shift_preview_active();
     if (color_preview_active) {
-        ImGui::TextDisabled("Accept or cancel the live color preview to edit other palette settings.");
+        ImGui::TextDisabled("Accept or cancel the live color preview (Tools tab) to edit palettes.");
         ImGui::BeginDisabled();
     }
 
@@ -466,12 +454,26 @@ void draw_palette(void)
     if (ImGui::SmallButton("Redo")) redo_restore();
     if (redo_disabled) ImGui::EndDisabled();
 
-    if (ImGui::CollapsingHeader("Preview", ImGuiTreeNodeFlags_DefaultOpen))
-        draw_palette_preview(g_sel_pal);
+    ImGui::SeparatorText("Preview");
+    draw_palette_preview(g_sel_pal);
 
-    if (ImGui::CollapsingHeader("PNG Magic Wand Palette"))
-        draw_palette_magic_wand_tool();
+    if (color_preview_active)
+        ImGui::EndDisabled();
+}
 
+void draw_palette_slots_contents(void)
+{
+    if (g_n_pals == 0) {
+        ImGui::TextUnformatted("No palettes loaded.");
+        return;
+    }
+    if (g_sel_pal < 0) g_sel_pal = 0;
+    if (g_sel_pal >= g_n_pals) g_sel_pal = g_n_pals - 1;
+
+    bool color_preview_active = palette_color_shift_preview_active();
+    if (color_preview_active) ImGui::BeginDisabled();
+
+    ImGui::SeparatorText("Add / Remove");
     if (ImGui::Button("+")) {
         undo_save();
         char name[64];
@@ -519,14 +521,40 @@ void draw_palette(void)
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Write one transparent, import-safe PNG swatch per palette to a folder.");
 
+    if (color_preview_active)
+        ImGui::EndDisabled();
+}
+
+static int g_palette_tools_last_frame = -1;
+
+void draw_palette_tools_contents(void)
+{
+    g_palette_tools_last_frame = ImGui::GetFrameCount();
+
+    if (ImGui::CollapsingHeader("Global / Object Color Shift"))
+        draw_palette_color_shift_tool();
+    else if (palette_color_shift_preview_active())
+        palette_color_shift_cancel_preview();
+
+    if (ImGui::CollapsingHeader("PNG Magic Wand Palette",
+                               g_n_pals == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0))
+        draw_palette_magic_wand_tool();
+
+    if (g_n_pals == 0)
+        return;
+
     if (ImGui::CollapsingHeader("Blend / Merge Palettes"))
         draw_palette_blend_merge_tool();
 
     if (ImGui::CollapsingHeader("Smart Palette Grouper"))
         draw_mk2_smart_palette_grouper();
+}
 
-    if (color_preview_active)
-        ImGui::EndDisabled();
-
-    ImGui::End();
+/* Leaving the Tools tab has to drop any live preview, the same way collapsing
+   the old header did. Called once per frame after the sidebar has drawn. */
+void palette_tools_frame_tick(void)
+{
+    if (g_palette_tools_last_frame != ImGui::GetFrameCount() &&
+        palette_color_shift_preview_active())
+        palette_color_shift_cancel_preview();
 }

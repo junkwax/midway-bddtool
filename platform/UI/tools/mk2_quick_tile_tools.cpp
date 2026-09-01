@@ -5,14 +5,12 @@
 
 void draw_mk2_quick_tile_tools(void)
 {
-    if (ImGui::Button("Import PNG...", ImVec2(g_hint_import ? -26.0f : -1.0f, 0.0f))) {
+    if (ImGui::Button("Import PNG...", ImVec2(-1.0f, 0.0f))) {
         char path[512] = "";
         if (file_dialog_open("Import PNG", "PNG Files\0*.PNG;*.png\0All Files\0*.*\0", path, sizeof path)) {
             import_png(path);
-            g_hint_import = false;
         }
     }
-    hint_badge(&g_hint_import, "hint_import");
 
     if (g_ni <= 0) {
         ImGui::TextDisabled("Import at least one PNG, then tile it into the world.");

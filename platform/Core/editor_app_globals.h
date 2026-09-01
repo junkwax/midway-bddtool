@@ -55,7 +55,6 @@ extern bool g_mk2_palette_prompt_after_img_import;
 extern bool g_mk2_palette_sync_dirty;
 extern bool g_show_mk2_workflow;
 extern bool g_show_module_bounds;
-extern bool g_show_obj_properties;
 extern bool g_show_modules;
 extern bool g_preview_mode;
 extern bool g_gv_needs_autozoom;

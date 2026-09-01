@@ -38,6 +38,13 @@ static int stage_health(char issues[][64], int max_issues, int *issue_n)
     return sev;
 }
 
+/* Height of the bottom status strip, so pinned panels can stop above it. */
+float status_bar_height(void)
+{
+    if (!g_have_bdb) return 20.0f;
+    return g_simple_mode ? 20.0f : 68.0f;
+}
+
 void draw_status(void)
 {
     if (!g_have_bdb) {
@@ -94,7 +101,7 @@ void draw_status(void)
                  "%s%s  -  %d sprites  %d images  %d palettes  |  Zoom: %dx  |  (%d, %d)%s",
                  g_dirty ? "* " : "", g_name[0] ? g_name : "untitled",
                  g_no, g_ni, g_n_pals, g_zoom, wx, wy, sel_bbox);
-        bar_h = 20;
+        bar_h = (int)status_bar_height();
     } else {
         const char *preview_mode = g_game_view ? "Game Preview" : "World View";
         const char *layout_mode = g_runtime_layout_view ? "Runtime Layout" : "BDB Source";
@@ -108,7 +115,7 @@ void draw_status(void)
                  g_game_view ? "layer scroll active" : "shown in game preview",
                  g_bdb_path[0] ? g_bdb_path : "(none)",
                  g_bdd_path[0] ? g_bdd_path : "(none)");
-        bar_h = 68;
+        bar_h = (int)status_bar_height();
     }
     ImGui::SetNextWindowPos(ImVec2(0, ImGui::GetIO().DisplaySize.y - (float)bar_h));
     ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x, (float)bar_h));

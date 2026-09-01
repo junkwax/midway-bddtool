@@ -2,5 +2,6 @@
 #define STATUS_BAR_H
 
 void draw_status(void);
+float status_bar_height(void);
 
 #endif

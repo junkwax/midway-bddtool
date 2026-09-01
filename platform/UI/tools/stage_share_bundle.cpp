@@ -102,6 +102,23 @@ static void section_credits(std::string &md, const char *name)
         md_append(md, "**Credits / sources:** %s\n\n", g_share_credits);
 }
 
+/* The stage files ride along in the bundle and the wiki publisher copies them
+   next to the renders, so a plain relative link resolves both in an unzipped
+   bundle and on the published page. Someone who just wants to play the stage
+   should not have to read the enable steps to find them. */
+static void section_download(std::string &md, const char *bdb_file, const char *bdd_file)
+{
+    if (!bdb_file[0] && !bdd_file[0]) return;
+
+    md += "## Download\n\n";
+    if (bdb_file[0])
+        md_append(md, "- [`%s`](%s) — blocks, modules and palettes\n", bdb_file, bdb_file);
+    if (bdd_file[0])
+        md_append(md, "- [`%s`](%s) — the image data\n", bdd_file, bdd_file);
+    md += "\nThe two together are the stage. See [How to enable](#how-to-enable)\n"
+          "for where they go.\n\n";
+}
+
 /* The How-to-enable section is generated from the stage's real BGND.ASM
    bindings, so a reader gets this stage's planes, rates and floor rather than
    a generic recipe they have to adapt. */
@@ -112,7 +129,11 @@ static void section_enable(std::string &md, const char *bdb_file, const char *bd
     md += "the stage as authored -- substitute your own bg id if it collides.\n\n";
 
     md += "### 1. Put the files in `data/`\n\n";
-    md_append(md, "Copy `%s` and `%s` into `mk2-main/data/`.\n\n", bdb_file, bdd_file);
+    if (bdb_file[0] && bdd_file[0])
+        md_append(md, "Copy [`%s`](%s) and [`%s`](%s) into `mk2-main/data/`.\n\n",
+                  bdb_file, bdb_file, bdd_file, bdd_file);
+    else
+        md += "Copy this stage's `.BDB` and `.BDD` into `mk2-main/data/`.\n\n";
 
     md += "### 2. Add it to the background `.LOD`\n\n";
     md += "In `data/BGNDTEST.LOD` (or whichever `.LOD` builds your backgrounds), add:\n\n";
@@ -235,6 +256,7 @@ static void build_page(std::string &md, const char *name,
         md_append(md, "%s\n\n", g_share_description);
 
     md += "**Contents:** ";
+    if (bdb_file[0] || bdd_file[0]) md += "[Download](#download) · ";
     if (mp4_file && mp4_file[0]) md += "[Video](#video) · ";
     md += "[Arena](#arena) · ";
     if (gif_file && gif_file[0]) md += "[Animated Arena](#animated-arena) · ";
@@ -242,6 +264,7 @@ static void build_page(std::string &md, const char *name,
     md += "[How to enable](#how-to-enable) · [Budget](#budget)\n\n";
 
     section_credits(md, name);
+    section_download(md, bdb_file, bdd_file);
     md += "---\n\n";
 
     if (mp4_file && mp4_file[0]) {
@@ -365,8 +388,8 @@ int stage_share_build_bundle(const char *out_dir, int scroll_frames,
 
     std::string md;
     build_page(md, name,
-               bdb_dst[0] ? path_basename_ptr(bdb_dst) : "(no BDB)",
-               bdd_dst[0] ? path_basename_ptr(bdd_dst) : "(no BDD)",
+               bdb_dst[0] ? path_basename_ptr(bdb_dst) : "",
+               bdd_dst[0] ? path_basename_ptr(bdd_dst) : "",
                have_layout, have_game,
                gif_path[0] ? "scroll.gif" : "",
                mp4_path[0] ? "scroll.mp4" : "",

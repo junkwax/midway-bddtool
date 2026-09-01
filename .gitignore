@@ -81,6 +81,7 @@ __pycache__/
 *.pyc
 bddview_layout.ini
 bddview_right_panels.cfg
+bddview_sidebar.cfg
 bddview_recent.txt
 bddview_settings.cfg
 bddview_layout.ver
@@ -134,6 +135,9 @@ BGPROF_source.png
 # the author's local MK2 pipeline and stays on disk but untracked.
 tools/*
 !tools/roundtrip_smoke.py
+# Runs in CI -- .github/workflows/publish-stage.yml invokes it after checkout,
+# so it has to be tracked or every stage submission fails on a missing file.
+!tools/publish_stage_to_wiki.py
 
 # Removed MK2 tool sources kept locally for revisiting (not shipped)
 /platform/_local/

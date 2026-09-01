@@ -4,6 +4,7 @@
 #include "UI/view/canvas_scrollbars.h"
 #include "UI/app/editor_lifecycle.h"
 #include "UI/view/welcome_screen.h"
+#include "UI/view/right_sidebar.h"
 #include "imgui.h"
 
 #include <limits.h>
@@ -65,7 +66,7 @@ void draw_canvas_scrollbars(void)
     const float left = 6.0f;
     const float top = editor_canvas_top_y();
     const float status_h = (!g_simple_mode && g_have_bdb) ? 70.0f : 22.0f;
-    float right = ds.x - 6.0f;
+    float right = editor_canvas_right_x() - 6.0f;
     float bottom = ds.y - status_h - 6.0f;
 
     float h_track_x = left;

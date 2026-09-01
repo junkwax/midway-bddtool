@@ -4,11 +4,12 @@
 
 #include <stdio.h>
 
-void draw_layers(void)
+void draw_layers_contents(void)
 {
-    if (!g_show_layers || !g_have_bdb || g_no == 0) return;
-    set_left_panel_default(92.0f, 300.0f, 280.0f);
-    if (!ImGui::Begin("Layers", &g_show_layers)) return;
+    if (!g_have_bdb || g_no == 0) {
+        ImGui::TextDisabled("No stage loaded.");
+        return;
+    }
 
     int layer_vals[256], layer_n = 0;
     for (int i = 0; i < g_no; i++) {
@@ -131,5 +132,4 @@ void draw_layers(void)
     }
     ImGui::Separator();
     ImGui::TextDisabled("Click swatch to filter  |  Assign = set selected to layer");
-    ImGui::End();
 }

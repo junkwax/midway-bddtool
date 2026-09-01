@@ -173,23 +173,18 @@ static void image_list_select_asset(int i)
     }
 }
 
-void draw_image_list(void)
+struct ImageListStats {
+    int unused_imgs;
+    int unused_pals;
+    int unused_imported_imgs;
+    int unused_imported_pixels;
+    int high_bpp_imgs;
+};
+
+/* One pass over the image table feeds both the Assets and Tools tabs, so the
+   warning banner and the cleanup buttons never disagree about what is unused. */
+static ImageListStats image_list_gather_stats(void)
 {
-    right_panel_set_next(RIGHT_PANEL_IMAGES);
-    bool open = ImGui::Begin("Images", NULL);
-    right_panel_after_begin(RIGHT_PANEL_IMAGES);
-    if (!open) {
-        ImGui::End();
-        return;
-    }
-
-    if (g_ni == 0) {
-        ImGui::TextUnformatted("No images loaded.");
-        ImGui::End();
-        return;
-    }
-    g_hover_img_ii = -1;
-
     int unused_imgs = 0, unused_pals = 0, unused_imported_imgs = 0, unused_imported_pixels = 0;
     int high_bpp_imgs = 0;
     const int pal_cap = editor_project_palette_capacity();
@@ -219,15 +214,30 @@ void draw_image_list(void)
     }
     for (int pi = 0; pi < g_n_pals && pi < pal_cap; pi++)
         if (!pal_used[(size_t)pi]) unused_pals++;
-    if (unused_imgs > 0 || unused_pals > 0)
-        ImGui::TextColored(ImVec4(1,0.6f,0.2f,1), "%d unused images, %d unused palettes",
-                          unused_imgs, unused_pals);
-    if (high_bpp_imgs > 0)
-        ImGui::TextColored(ImVec4(1,0.75f,0.25f,1), "%d image(s) exceed 6bpp", high_bpp_imgs);
+    ImageListStats st;
+    st.unused_imgs = unused_imgs;
+    st.unused_pals = unused_pals;
+    st.unused_imported_imgs = unused_imported_imgs;
+    st.unused_imported_pixels = unused_imported_pixels;
+    st.high_bpp_imgs = high_bpp_imgs;
+    return st;
+}
 
-    /* Bulk maintenance tools live in a collapsible section so the panel leads
-       with its filters and asset grid instead of a wall of buttons. */
-    if (ImGui::CollapsingHeader("Cleanup & Tools")) {
+/* Sidebar tab: bulk maintenance. Kept apart from the asset grid so neither one
+   is a wall of controls. */
+void draw_image_list_tools_contents(void)
+{
+    if (g_ni == 0) {
+        ImGui::TextUnformatted("No images loaded.");
+        return;
+    }
+
+    ImageListStats st = image_list_gather_stats();
+    int unused_imgs = st.unused_imgs;
+    int unused_imported_imgs = st.unused_imported_imgs;
+    int unused_imported_pixels = st.unused_imported_pixels;
+
+    ImGui::SeparatorText("Cleanup");
     if (unused_imported_imgs > 0) {
         if (ImGui::SmallButton("Delete Imported Unused")) {
             delete_unused_images_impl(true, "Delete Imported Unused Images");
@@ -304,7 +314,48 @@ void draw_image_list(void)
     ImGui::InputInt("Chop H", &g_chop_tile_h);
     ImGui::SameLine();
     ImGui::Checkbox("Trim tiles", &g_chop_trim_tiles);
-    }  /* end Cleanup & Tools */
+
+    ImGui::SeparatorText("Image IDs");
+    bool runtime_preview_loaded_for_ids = runtime_actor_preview_imports_loaded();
+    if (runtime_preview_loaded_for_ids) ImGui::BeginDisabled();
+    if (ImGui::SmallButton("Compact Image IDs")) {
+        undo_save_ex("Compact Image Indices");
+        for (int i = 0; i < g_ni; i++) {
+            int old_idx = g_img[i].idx;
+            if (old_idx == i) continue;
+            g_img[i].idx = i;
+            for (int oi = 0; oi < g_no; oi++)
+                if (g_obj[oi].ii == old_idx) g_obj[oi].ii = i;
+        }
+        g_need_rebuild = 1;
+        g_dirty = 1;
+        stage_set_toast("Image IDs compacted");
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(runtime_preview_loaded_for_ids
+            ? "Discard runtime preview imports before compacting image IDs."
+            : "Renumbers BDD image IDs to match current list order.");
+    if (runtime_preview_loaded_for_ids) ImGui::EndDisabled();
+}
+
+/* Sidebar tab: the filterable asset grid. */
+void draw_image_list_assets_contents(void)
+{
+    if (g_ni == 0) {
+        ImGui::TextUnformatted("No images loaded.");
+        return;
+    }
+    g_hover_img_ii = -1;
+
+    ImageListStats st = image_list_gather_stats();
+    int unused_imgs = st.unused_imgs;
+    int unused_pals = st.unused_pals;
+    int high_bpp_imgs = st.high_bpp_imgs;
+    if (unused_imgs > 0 || unused_pals > 0)
+        ImGui::TextColored(ImVec4(1,0.6f,0.2f,1), "%d unused images, %d unused palettes",
+                          unused_imgs, unused_pals);
+    if (high_bpp_imgs > 0)
+        ImGui::TextColored(ImVec4(1,0.75f,0.25f,1), "%d image(s) exceed 6bpp", high_bpp_imgs);
 
     static int  img_filter = 0;
     static char img_search[64] = "";
@@ -491,29 +542,7 @@ void draw_image_list(void)
                 ? "Discard runtime preview imports before changing BDD image order."
                 : "Reorders image records only; object image IDs stay the same.");
         if (runtime_preview_loaded) ImGui::EndDisabled();
-        ImGui::SameLine();
     }
-    bool runtime_preview_loaded_for_ids = runtime_actor_preview_imports_loaded();
-    if (runtime_preview_loaded_for_ids) ImGui::BeginDisabled();
-    if (ImGui::SmallButton("Compact Image IDs")) {
-        undo_save_ex("Compact Image Indices");
-        for (int i = 0; i < g_ni; i++) {
-            int old_idx = g_img[i].idx;
-            if (old_idx == i) continue;
-            g_img[i].idx = i;
-            for (int oi = 0; oi < g_no; oi++)
-                if (g_obj[oi].ii == old_idx) g_obj[oi].ii = i;
-        }
-        g_need_rebuild = 1;
-        g_dirty = 1;
-        stage_set_toast("Image IDs compacted");
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(runtime_preview_loaded_for_ids
-            ? "Discard runtime preview imports before compacting image IDs."
-            : "Renumbers BDD image IDs to match current list order.");
-    if (runtime_preview_loaded_for_ids) ImGui::EndDisabled();
-
     int shown_images = 0;
     for (int i = 0; i < g_ni; i++)
         if (image_passes_list_filter(&g_img[i], img_filter, img_search, search_idx))
@@ -727,6 +756,4 @@ void draw_image_list(void)
         snprintf(img_cap_lbl, sizeof img_cap_lbl, "Images  %d / %d", g_ni, image_cap);
         ImGui::ProgressBar(image_cap > 0 ? (float)g_ni / (float)image_cap : 0.0f, ImVec2(-1, 0), img_cap_lbl);
     }
-
-    ImGui::End();
 }
