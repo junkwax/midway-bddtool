@@ -31,7 +31,38 @@ enum {
      * init and silently drops the last-scanned (newest) blocks. Worst-case
      * (Dead Pool) default; lower it for lighter stages. */
     BDD_CORE_MK2_DISPLAY_OBJECT_RUNTIME_RESERVE = 56,
-    BDD_CORE_MK2_BG_DYNAMIC_PALETTE_SLOTS = 35
+    BDD_CORE_MK2_BG_DYNAMIC_PALETTE_SLOTS = 35,
+    /* BAKGND.ASM widest_block (line 51): the backward window bsrch1stxb scans
+     * from its binary-search hit when it gathers the blocks touching the
+     * current screen column. A block wider than this is never reached by that
+     * scan, so the runtime silently skips it -- LOAD2 still packs the pixels
+     * into ROM, and nothing ever draws them. The widest block Midway shipped
+     * is 244 (NUPOOL), so the ceiling has never actually been tested in
+     * anger; treat anything over it as art that will not appear. */
+    BDD_CORE_MK2_RUNTIME_WIDEST_BLOCK = 250,
+    /* Strip-chop pressure. A "strip" is a block whose short side is at or
+     * under this, and BDD_CORE_MK2_STRIP_RUN_MIN of them stacked edge to edge
+     * in one module is a chop run -- what a sprite sliced for tighter
+     * silhouettes and better dedup looks like from the block table.
+     * Chopping trades ROM for display objects (nobj = 358, shared with the
+     * fighters) and bsrch1stxb walk length, and the runtime half of that
+     * trade is the part nothing else in the tool measures. */
+    BDD_CORE_MK2_STRIP_SHORT_SIDE = 24,
+    BDD_CORE_MK2_STRIP_RUN_MIN = 4,
+    /* Display objects a stage can get back by re-merging its chop runs before
+     * the chopping is worth a second look on its own merits. Measured against
+     * the shipped game rather than guessed: the heaviest chopper Midway
+     * released is MK1CAVE at 55 reclaimable objects (then MKSTORY1 48,
+     * NUENT1/2 46, DEDPOOL/HISCORE1/MKSTORY2/3 43), and all of them run. The
+     * threshold sits above that whole range so it means "past anything the
+     * shipped game does", not "you chopped something". Chopping under it
+     * still gets its cost reported, just not a warning -- what a chop buys in
+     * dedup is not measurable from the BDB, so a stage that pays for its
+     * slices must not be second-guessed on the strength of a partial number. */
+    BDD_CORE_MK2_STRIP_EXCESS_WARN = 64,
+    /* Share of the worst on-screen moment that has to be chop slices before
+     * they are worth blaming for display-object pressure, in percent. */
+    BDD_CORE_MK2_STRIP_PEAK_SHARE_PCT = 25
 };
 
 struct BddCoreModule {

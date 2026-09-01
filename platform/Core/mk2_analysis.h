@@ -16,6 +16,11 @@
 #define MK2_DISPLAY_OBJECT_WARN BDD_CORE_MK2_DISPLAY_OBJECT_WARN
 #define MK2_DISPLAY_OBJECT_RUNTIME_RESERVE BDD_CORE_MK2_DISPLAY_OBJECT_RUNTIME_RESERVE
 #define MK2_BG_DYNAMIC_PALETTE_SLOTS BDD_CORE_MK2_BG_DYNAMIC_PALETTE_SLOTS
+#define MK2_RUNTIME_WIDEST_BLOCK BDD_CORE_MK2_RUNTIME_WIDEST_BLOCK
+#define MK2_STRIP_SHORT_SIDE BDD_CORE_MK2_STRIP_SHORT_SIDE
+#define MK2_STRIP_RUN_MIN BDD_CORE_MK2_STRIP_RUN_MIN
+#define MK2_STRIP_EXCESS_WARN BDD_CORE_MK2_STRIP_EXCESS_WARN
+#define MK2_STRIP_PEAK_SHARE_PCT BDD_CORE_MK2_STRIP_PEAK_SHARE_PCT
 
 struct Mk2Diag {
     int missing_images;
@@ -44,6 +49,31 @@ struct Mk2Diag {
     int display_object_pressure;
     int high_color_images;
     int order_issues;
+    char order_issue_module[64];
+
+    /* Blocks wider than BAKGND.ASM's widest_block scan window. LOAD2 packs
+       them, bsrch1stxb never finds them, so they never draw. */
+    int runtime_wide_blocks;
+    int max_block_width;
+    char widest_block_label[64];
+
+    /* Module rectangles that overlap, and the blocks that sit inside more than
+       one of them. LOAD2 gives each block to the FIRST module in BDB order
+       that fully contains it and never revisits that choice, so the later
+       module loses them -- along with its parallax plane, since the module is
+       what binds a block to a plane. */
+    int module_overlap_pairs;
+    int module_overlap_stolen;
+    char module_overlap_detail[96];
+
+    /* Strip-chop pressure: sprites sliced into stacks of thin blocks. */
+    int strip_chop_runs;          /* chop runs found */
+    int strip_chop_blocks;        /* blocks those runs consume */
+    int strip_chop_excess;        /* display objects re-merging would return */
+    int strip_chop_peak;          /* run blocks live at the worst camera X */
+    int strip_chop_longest;       /* blocks in the deepest single run */
+    size_t strip_chop_rom_saved;  /* packed bytes the chopping actually buys */
+    int strip_chop_pressure;
 };
 
 struct Mk2Budget {
@@ -116,6 +146,11 @@ bool mk2_has_drawable_stage(void);
 PanCoverageSummary mk2_compute_pan_summary(void);
 size_t mk2_estimate_duplicate_savings(void);
 void mk2_readiness_report(char *out, size_t outsz);
+/* Runtime-silent problems worth a word at save time: blocks the engine
+   will skip, blocks the wrong module will claim, and X-order inversions
+   that break the per-module binary search. Returns the issue count and
+   fills a one-line summary; 0 means the save is clean on all three. */
+int mk2_runtime_integrity_summary(char *out, size_t outsz);
 bool find_first_duplicate_pair(int *keep_i, int *replace_i, bool *mirror);
 int apply_safe_dedup(int keep_i, int replace_i, bool mirror);
 

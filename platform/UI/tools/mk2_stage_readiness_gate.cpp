@@ -71,7 +71,7 @@ void draw_mk2_stage_readiness_gate(void)
     bool floor_ok = ps.floor >= (float)g_gate_min_floor_coverage;
     bool color_ok = !g_gate_block_on_high_color || b.high_color_images == 0;
     bool ready = load2_ok && budget_ok && full_ok && top_ok && floor_ok && color_ok;
-    bool clean = ready && order_ok && dup_savings == 0;
+    bool clean = ready && order_ok && dup_savings == 0 && d.strip_chop_pressure == 0;
 
     if (clean)
         ImGui::TextColored(ImVec4(0.45f, 1.0f, 0.55f, 1.0f), "READY: clean to package.");
@@ -119,9 +119,34 @@ void draw_mk2_stage_readiness_gate(void)
                  d.max_visible_objects, MK2_DISPLAY_OBJECT_CAP, d.max_visible_objects_x);
         draw_gate_row("Display objs", display_ok, detail,
             "Too many background objects are visible at once near this X. Thin out or merge objects there, or push some onto other layers.");
-        snprintf(detail, sizeof detail, "%d X-order caution(s)", d.order_issues);
+        if (d.order_issues > 0 && d.order_issue_module[0])
+            snprintf(detail, sizeof detail, "%d X-order caution(s), first in %s",
+                     d.order_issues, d.order_issue_module);
+        else
+            snprintf(detail, sizeof detail, "%d X-order caution(s)", d.order_issues);
         draw_gate_row("Object order", order_ok, detail,
-            "Draw order is not X-major. Click 'Run Safe Fixes' below, or 'Sort Objects X-Major for LOAD2' in the LOAD2 Doctor.");
+            "Draw order is not X-major, so the runtime's per-module binary search stops early and misses blocks past the inversion. Click 'Run Safe Fixes' below, or 'Sort Objects X-Major for LOAD2' in the LOAD2 Doctor.");
+        bool block_width_ok = d.runtime_wide_blocks == 0;
+        snprintf(detail, sizeof detail, "widest %d / %d px, %d over",
+                 d.max_block_width, MK2_RUNTIME_WIDEST_BLOCK, d.runtime_wide_blocks);
+        draw_gate_row("Block width", block_width_ok, detail,
+            "Blocks wider than widest_block are packed into ROM and never drawn: BAKGND.ASM only scans back that far from each binary-search hit. Split the art into side-by-side blocks or trim it under the limit.");
+        /* Five shipped stages overlap module rectangles with nothing in the
+           shared region. Overlap alone is legal; losing blocks to it is not. */
+        bool module_overlap_ok = d.module_overlap_stolen == 0;
+        snprintf(detail, sizeof detail, "%d rect pair(s), %d contested block(s)",
+                 d.module_overlap_pairs, d.module_overlap_stolen);
+        draw_gate_row("Module overlap", module_overlap_ok, detail,
+            "Overlapping module rectangles hand every shared block to whichever module the BDB lists first, which also decides its parallax plane. Shrink one rectangle in the Modules panel, or reorder the modules so the intended owner comes first.");
+        bool strip_ok = d.strip_chop_pressure == 0;
+        if (d.strip_chop_runs > 0)
+            snprintf(detail, sizeof detail, "%d run(s), %d blocks, %d reclaimable, %d live at X %d",
+                     d.strip_chop_runs, d.strip_chop_blocks, d.strip_chop_excess,
+                     d.strip_chop_peak, d.max_visible_objects_x);
+        else
+            snprintf(detail, sizeof detail, "no chop runs");
+        draw_gate_row("Strip chops", strip_ok, detail,
+            "Chopped sprites spend one display object per slice out of the 358 the fighters share, and lengthen each module's block walk. Merge runs whose art is mostly solid; keep the ones cutting real transparency out of a wide silhouette.");
         snprintf(detail, sizeof detail, "0x%zX / 0x%X", b.estimated_payload, g_gate_payload_limit);
         draw_gate_row("ROM budget", budget_ok, detail,
             "Payload exceeds the limit. Use the budget relief suggestions shown below, dedupe mirrored art (Optimize > Duplicate / Mirror Finder), or reduce color depth.");

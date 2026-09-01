@@ -26,6 +26,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <cstddef>
 #include <ctime>
 #include <vector>
 
@@ -119,14 +121,192 @@ static int mk2_estimate_max_visible_objects(int *out_x)
     return best;
 }
 
+/* ---- Strip-chop pressure -------------------------------------------------
+ *
+ * Slicing one sprite into a stack of thin blocks is a real MK2 technique, not
+ * a mistake: each slice trims to its own silhouette, so the packed pixel cost
+ * drops and identical slices dedup against each other. What it is not is
+ * free. Every slice becomes its own display object out of the 358 the
+ * fighters draw from too, and every slice lengthens the per-module list
+ * bsrch1stxb walks on the way to the screen column.
+ *
+ * A chop run is MK2_STRIP_RUN_MIN or more thin blocks in one module stacked
+ * edge to edge -- what a chopped sprite looks like once it is only block
+ * table rows. Slices drift sideways as a silhouette narrows, so neighbours
+ * are matched by overlap on the long axis rather than by a fixed tolerance.
+ */
+
+struct Mk2StripBlock {
+    int obj;
+    int module;
+    int x, y, w, h;
+    int bpp;
+    int claimed;
+};
+
+struct Mk2StripRunAcc {
+    int module;
+    int tail;                    /* index of the block currently ending the run */
+    std::vector<int> members;
+};
+
+/* The gap two slices may leave between them and still read as one chop. Real
+   chops butt exactly; a pixel or two of slack covers hand-nudged art. */
+static const int MK2_STRIP_JOIN_SLACK = 2;
+
+static bool mk2_strip_is_thin(int w, int h)
+{
+    if (w <= 0 || h <= 0) return false;
+    return (w < h ? w : h) <= MK2_STRIP_SHORT_SIDE;
+}
+
+static bool mk2_strip_continues(const Mk2StripBlock &tail,
+                                const Mk2StripBlock &next,
+                                bool vertical)
+{
+    if (vertical) {
+        bool overlap = tail.x < next.x + next.w && next.x < tail.x + tail.w;
+        int gap = next.y - (tail.y + tail.h);
+        return overlap && gap >= -MK2_STRIP_JOIN_SLACK && gap <= MK2_STRIP_JOIN_SLACK;
+    }
+    bool overlap = tail.y < next.y + next.h && next.y < tail.y + tail.h;
+    int gap = next.x - (tail.x + tail.w);
+    return overlap && gap >= -MK2_STRIP_JOIN_SLACK && gap <= MK2_STRIP_JOIN_SLACK;
+}
+
+/* Fold one finished run into the diagnostic. Runs shorter than the minimum
+   are dropped without marking their blocks, so the other axis still gets a
+   chance at them. */
+static void mk2_strip_close_run(std::vector<Mk2StripBlock> &blocks,
+                                const Mk2StripRunAcc &run,
+                                Mk2Diag *d)
+{
+    const int n = (int)run.members.size();
+    if (n < MK2_STRIP_RUN_MIN) return;
+
+    int x1 = INT_MAX, y1 = INT_MAX, x2 = INT_MIN, y2 = INT_MIN, bpp = 1;
+    long long strip_pixels = 0;
+    for (int i = 0; i < n; i++) {
+        Mk2StripBlock &b = blocks[(size_t)run.members[(size_t)i]];
+        b.claimed = 1;
+        if (b.x < x1) x1 = b.x;
+        if (b.y < y1) y1 = b.y;
+        if (b.x + b.w > x2) x2 = b.x + b.w;
+        if (b.y + b.h > y2) y2 = b.y + b.h;
+        if (b.bpp > bpp) bpp = b.bpp;
+        strip_pixels += (long long)b.w * (long long)b.h;
+    }
+
+    d->strip_chop_runs++;
+    d->strip_chop_blocks += n;
+    d->strip_chop_excess += n - 1;   /* one merged block would replace them all */
+    if (n > d->strip_chop_longest) d->strip_chop_longest = n;
+
+    /* What the chop buys: the transparent pixels a single block spanning the
+       run would have to carry anyway, at the run's deepest colour depth. */
+    long long merged_pixels = (long long)(x2 - x1) * (long long)(y2 - y1);
+    long long saved_pixels = merged_pixels - strip_pixels;
+    if (saved_pixels > 0)
+        d->strip_chop_rom_saved += (size_t)((saved_pixels * bpp) / 8);
+}
+
+static void mk2_collect_strip_chop(std::vector<Mk2StripBlock> &blocks, Mk2Diag *d)
+{
+    if (blocks.empty()) return;
+
+    /* Vertical stacks first -- the common chop -- then horizontal ones over
+       whatever is still unclaimed, so no block is charged to two runs. */
+    for (int pass = 0; pass < 2; pass++) {
+        const bool vertical = (pass == 0);
+        std::vector<int> order;
+        order.reserve(blocks.size());
+        for (size_t i = 0; i < blocks.size(); i++)
+            if (!blocks[i].claimed) order.push_back((int)i);
+        if ((int)order.size() < MK2_STRIP_RUN_MIN) continue;
+
+        std::sort(order.begin(), order.end(), [&](int a, int b) {
+            const Mk2StripBlock &A = blocks[(size_t)a];
+            const Mk2StripBlock &B = blocks[(size_t)b];
+            if (A.module != B.module) return A.module < B.module;
+            int amain = vertical ? A.y : A.x;
+            int bmain = vertical ? B.y : B.x;
+            if (amain != bmain) return amain < bmain;
+            return (vertical ? A.x : A.y) < (vertical ? B.x : B.y);
+        });
+
+        std::vector<Mk2StripRunAcc> open;
+        int cur_module = -1;
+        for (size_t oi = 0; oi < order.size(); oi++) {
+            const int bi = order[oi];
+            const Mk2StripBlock &b = blocks[(size_t)bi];
+
+            if (b.module != cur_module) {
+                for (size_t r = 0; r < open.size(); r++)
+                    mk2_strip_close_run(blocks, open[r], d);
+                open.clear();
+                cur_module = b.module;
+            }
+
+            /* Retire runs the sweep has already passed: sorted ascending on
+               the main axis, a run whose tail ends before this block starts
+               can never be continued again. */
+            int near_edge = vertical ? b.y : b.x;
+            for (size_t r = 0; r < open.size(); ) {
+                const Mk2StripBlock &t = blocks[(size_t)open[r].tail];
+                int far_edge = vertical ? (t.y + t.h) : (t.x + t.w);
+                if (far_edge + MK2_STRIP_JOIN_SLACK < near_edge) {
+                    mk2_strip_close_run(blocks, open[r], d);
+                    open.erase(open.begin() + (std::ptrdiff_t)r);
+                    continue;
+                }
+                r++;
+            }
+
+            bool joined = false;
+            for (size_t r = 0; r < open.size() && !joined; r++) {
+                if (!mk2_strip_continues(blocks[(size_t)open[r].tail], b, vertical))
+                    continue;
+                open[r].members.push_back(bi);
+                open[r].tail = bi;
+                joined = true;
+            }
+            if (joined) continue;
+
+            Mk2StripRunAcc run;
+            run.module = b.module;
+            run.tail = bi;
+            run.members.push_back(bi);
+            open.push_back(run);
+        }
+        for (size_t r = 0; r < open.size(); r++)
+            mk2_strip_close_run(blocks, open[r], d);
+    }
+
+    if (d->strip_chop_runs <= 0) return;
+
+    /* The number that actually matters: how much of the worst on-screen
+       moment is chop slices rather than art. */
+    for (size_t i = 0; i < blocks.size(); i++) {
+        if (!blocks[i].claimed) continue;
+        if (mk2_object_visible_at_camera(blocks[i].obj, d->max_visible_objects_x,
+                                         g_game_view_y, 400, 254, 0x00, 0xFF))
+            d->strip_chop_peak++;
+    }
+}
+
 int mk2_diag_hard_issues(const Mk2Diag *d)
 {
     if (!d) return 0;
+    /* "Hard" here means the stage is silently wrong once it runs, not that
+       LOAD2 refuses it: outside-module blocks, blocks past widest_block and
+       blocks the wrong module claims all build clean and then do not draw
+       where the author put them. */
     return d->missing_images + d->bad_palettes + d->unassigned_objects +
            d->module_bound_issues + d->load2_oversize_images +
            d->load2_palette_overflow + d->load2_module_overflow +
            d->load2_image_header_overflow + d->load2_block_table_overflow +
-           d->display_object_overflow;
+           d->display_object_overflow + d->runtime_wide_blocks +
+           d->module_overlap_stolen;
 }
 
 int mk2_diag_cautions(const Mk2Diag *d)
@@ -135,7 +315,7 @@ int mk2_diag_cautions(const Mk2Diag *d)
     return d->old_style_bounds + d->high_color_images + d->order_issues +
            d->runtime_palette_pressure + d->runtime_palette16_pressure +
            d->load2_narrow_padded_images + d->load2_zero_compress_disabled +
-           d->display_object_pressure;
+           d->display_object_pressure + d->strip_chop_pressure;
 }
 
 void mk2_collect_diag(Mk2Diag *d)
@@ -158,14 +338,42 @@ void mk2_collect_diag(Mk2Diag *d)
     if (exportable_images > MK2_LOAD2_MAX_BLOCKS)
         d->load2_block_table_overflow = exportable_images - MK2_LOAD2_MAX_BLOCKS;
 
+    /* Parse every module rectangle once. The per-object work below asks about
+       module bounds a lot, and re-running sscanf over the BDB text for each
+       question is the difference between a cheap check and a stall. */
+    struct Mk2ModRect { int x1, x2, y1, y2; int ok; };
+    std::vector<Mk2ModRect> mod_rect((size_t)(g_bdb_num_modules > 0 ? g_bdb_num_modules : 0));
     for (int m = 0; m < g_bdb_num_modules; m++) {
         int x1, x2, y1, y2;
+        mod_rect[(size_t)m].ok = 0;
         if (!parse_module_bounds(m, NULL, &x1, &x2, &y1, &y2) || x2 < x1 || y2 < y1) {
             d->module_bound_issues++;
             continue;
         }
+        mod_rect[(size_t)m].x1 = x1;
+        mod_rect[(size_t)m].x2 = x2;
+        mod_rect[(size_t)m].y1 = y1;
+        mod_rect[(size_t)m].y2 = y2;
+        mod_rect[(size_t)m].ok = 1;
         if (have_world && ((world_w > 0 && x2 == world_w) || (world_h > 0 && y2 == world_h)))
             d->old_style_bounds++;
+    }
+
+    /* Overlapping module rectangles. LOAD2 walks the modules in BDB order and
+       gives each block to the first one that fully contains it (ldbgnd2.c),
+       so anything in a shared region belongs to the earlier module whatever
+       the author intended -- and since the module is what binds a block to a
+       parallax plane, a stolen block scrolls at the wrong rate. */
+    for (int a = 0; a < g_bdb_num_modules; a++) {
+        if (!mod_rect[(size_t)a].ok) continue;
+        for (int b = a + 1; b < g_bdb_num_modules; b++) {
+            if (!mod_rect[(size_t)b].ok) continue;
+            if (mod_rect[(size_t)a].x1 <= mod_rect[(size_t)b].x2 &&
+                mod_rect[(size_t)b].x1 <= mod_rect[(size_t)a].x2 &&
+                mod_rect[(size_t)a].y1 <= mod_rect[(size_t)b].y2 &&
+                mod_rect[(size_t)b].y1 <= mod_rect[(size_t)a].y2)
+                d->module_overlap_pairs++;
+        }
     }
 
     for (int i = 0; i < g_ni; i++) {
@@ -203,8 +411,11 @@ void mk2_collect_diag(Mk2Diag *d)
     std::vector<unsigned char> used_palette((size_t)(palette_cap > 0 ? palette_cap : 0), 0);
     std::vector<unsigned char> module_palette((size_t)(module_cap > 0 && palette_cap > 0 ? module_cap * palette_cap : 0), 0);
 
+    std::vector<Mk2StripBlock> strip_blocks;
+
     for (int pos = 0; pos < g_no; pos++) {
-        Obj *o = &g_obj[obj_order[(size_t)pos]];
+        const int obj_idx = obj_order[(size_t)pos];
+        Obj *o = &g_obj[obj_idx];
         Img *im = img_find(o->ii);
         if (!im) {
             d->missing_images++;
@@ -216,6 +427,18 @@ void mk2_collect_diag(Mk2Diag *d)
         if (o->fl >= 16) d->palette_high_nibble++;
         if (o->fl >= 0 && o->fl < palette_cap)
             used_palette[(size_t)o->fl] = 1;
+
+        /* Blocks past widest_block are placed and packed like any other and
+           then never drawn: bsrch1stxb only scans back that far from its
+           binary-search hit, so the block is not in the set it gathers. */
+        if (im->w > d->max_block_width) {
+            d->max_block_width = im->w;
+            snprintf(d->widest_block_label, sizeof d->widest_block_label, "%s",
+                     im->label[0] ? im->label : "(unnamed)");
+        }
+        if (im->w > MK2_RUNTIME_WIDEST_BLOCK)
+            d->runtime_wide_blocks++;
+
         int m = assign_module(o->depth, o->sy, im->w, im->h);
         if (m < 0) {
             d->unassigned_objects++;
@@ -223,12 +446,52 @@ void mk2_collect_diag(Mk2Diag *d)
         }
         if (m >= 0 && m < module_cap && o->fl >= 0 && o->fl < palette_cap)
             module_palette[(size_t)m * (size_t)palette_cap + (size_t)o->fl] = 1;
-        int x1 = 0;
-        parse_module_bounds(m, NULL, &x1, NULL, NULL, NULL);
+
+        /* assign_module already reproduces LOAD2's first-fit choice. If a
+           later module also contains the block whole, that module is being
+           authored blind -- it will never see this block. */
+        for (int later = m + 1; later < g_bdb_num_modules; later++) {
+            if (!mod_rect[(size_t)later].ok) continue;
+            if (o->depth < mod_rect[(size_t)later].x1 ||
+                o->sy < mod_rect[(size_t)later].y1 ||
+                o->depth + im->w - 1 > mod_rect[(size_t)later].x2 ||
+                o->sy + im->h - 1 > mod_rect[(size_t)later].y2)
+                continue;
+            d->module_overlap_stolen++;
+            if (!d->module_overlap_detail[0]) {
+                char winner[64] = "", loser[64] = "";
+                parse_module_bounds(m, winner, NULL, NULL, NULL, NULL);
+                parse_module_bounds(later, loser, NULL, NULL, NULL, NULL);
+                snprintf(d->module_overlap_detail, sizeof d->module_overlap_detail,
+                         "%s claims blocks %s can never see",
+                         winner[0] ? winner : "module", loser[0] ? loser : "a later module");
+            }
+            break;
+        }
+
+        int x1 = (m >= 0 && m < (int)mod_rect.size() && mod_rect[(size_t)m].ok)
+                     ? mod_rect[(size_t)m].x1 : 0;
         int local_x = o->depth - x1;
         if (m >= 0 && m < module_cap) {
-            if (local_x < last_x[(size_t)m]) d->order_issues++;
+            if (local_x < last_x[(size_t)m]) {
+                d->order_issues++;
+                if (!d->order_issue_module[0])
+                    parse_module_bounds(m, d->order_issue_module, NULL, NULL, NULL, NULL);
+            }
             if (local_x > last_x[(size_t)m]) last_x[(size_t)m] = local_x;
+        }
+
+        if (mk2_strip_is_thin(im->w, im->h)) {
+            Mk2StripBlock sb;
+            sb.obj = obj_idx;
+            sb.module = m;
+            sb.x = o->depth;
+            sb.y = o->sy;
+            sb.w = im->w;
+            sb.h = im->h;
+            sb.bpp = mk2_bpp_for_image(im);
+            sb.claimed = 0;
+            strip_blocks.push_back(sb);
         }
     }
 
@@ -264,6 +527,24 @@ void mk2_collect_diag(Mk2Diag *d)
         d->display_object_overflow = runtime_budget - MK2_DISPLAY_OBJECT_CAP;
     else if (runtime_budget > MK2_DISPLAY_OBJECT_WARN)
         d->display_object_pressure = 1;
+
+    /* Runs on the worst camera X, so it has to come after the peak sample. */
+    mk2_collect_strip_chop(strip_blocks, d);
+
+    /* Chopping is a trade, and only half of it is measurable here: the
+       display objects are countable, what the slices buy back in LOAD2's
+       block dedup is not. So the cost is always reported and the warning is
+       kept for the two cases that do not need the missing half to be
+       actionable -- more slices than any stage Midway shipped, or a peak
+       on-screen moment that is already crowding the pool and is substantially
+       made of slices. Every shipped stage stays quiet under both. */
+    if (d->strip_chop_excess >= MK2_STRIP_EXCESS_WARN)
+        d->strip_chop_pressure = 1;
+    else if (d->strip_chop_excess > 0 &&
+             runtime_budget > MK2_DISPLAY_OBJECT_WARN &&
+             d->max_visible_objects > 0 &&
+             d->strip_chop_peak * 100 >= d->max_visible_objects * MK2_STRIP_PEAK_SHARE_PCT)
+        d->strip_chop_pressure = 1;
 }
 
 int mk2_create_default_module(void)
@@ -1310,8 +1591,28 @@ void mk2_readiness_report(char *out, size_t outsz)
              d.max_visible_objects, MK2_DISPLAY_OBJECT_CAP, d.max_visible_objects_x,
              d.runtime_palette_count, d.max_module_palettes);
     stage_append(out, outsz, line);
-    snprintf(line, sizeof line, "X-order cautions: %d\n", d.order_issues);
+    snprintf(line, sizeof line, "X-order cautions: %d%s%s\n", d.order_issues,
+             d.order_issue_module[0] ? ", first module " : "",
+             d.order_issue_module[0] ? d.order_issue_module : "");
     stage_append(out, outsz, line);
+    snprintf(line, sizeof line, "Widest block: %d/%d px%s%s (%d over)\n",
+             d.max_block_width, MK2_RUNTIME_WIDEST_BLOCK,
+             d.widest_block_label[0] ? ", " : "",
+             d.widest_block_label[0] ? d.widest_block_label : "",
+             d.runtime_wide_blocks);
+    stage_append(out, outsz, line);
+    snprintf(line, sizeof line, "Module overlap: %d rect pair(s), %d contested block(s)%s%s\n",
+             d.module_overlap_pairs, d.module_overlap_stolen,
+             d.module_overlap_detail[0] ? "; " : "",
+             d.module_overlap_detail[0] ? d.module_overlap_detail : "");
+    stage_append(out, outsz, line);
+    if (d.strip_chop_runs > 0) {
+        snprintf(line, sizeof line,
+                 "Strip chops: %d run(s), %d block(s), %d reclaimable display object(s), %d live at X %d, saves ~%zu bytes\n",
+                 d.strip_chop_runs, d.strip_chop_blocks, d.strip_chop_excess,
+                 d.strip_chop_peak, d.max_visible_objects_x, d.strip_chop_rom_saved);
+        stage_append(out, outsz, line);
+    }
     snprintf(line, sizeof line, "Payload estimate: 0x%zX / limit 0x%X\n", b.estimated_payload, g_gate_payload_limit);
     stage_append(out, outsz, line);
     if (g_gate_payload_limit > 0 && b.estimated_payload > (size_t)g_gate_payload_limit)
@@ -1326,6 +1627,50 @@ void mk2_readiness_report(char *out, size_t outsz)
     snprintf(line, sizeof line, "Stage FX: %s, triggers: %s\n",
              g_stage_red_enabled ? "enabled" : "disabled", stage_fx_trigger_summary());
     stage_append(out, outsz, line);
+}
+
+/* The three ways a saved stage can build clean and still be wrong on the
+   hardware. None of them fail LOAD2, none of them show up in an editor
+   render, and all three are cheap to check, so a save is the right moment to
+   say so rather than letting it reach MAME. */
+int mk2_runtime_integrity_summary(char *out, size_t outsz)
+{
+    if (out && outsz) out[0] = '\0';
+    if (!mk2_has_drawable_stage()) return 0;
+
+    Mk2Diag d;
+    mk2_collect_diag(&d);
+
+    int issues = d.runtime_wide_blocks + d.module_overlap_stolen + d.order_issues;
+    if (issues <= 0) return 0;
+    if (!out || !outsz) return issues;
+
+    char parts[3][160];
+    int n = 0;
+    if (d.runtime_wide_blocks > 0)
+        snprintf(parts[n++], sizeof parts[0],
+                 "%d block(s) wider than %d px will not draw",
+                 d.runtime_wide_blocks, MK2_RUNTIME_WIDEST_BLOCK);
+    if (d.module_overlap_stolen > 0)
+        snprintf(parts[n++], sizeof parts[0],
+                 "%d block(s) sit inside two modules",
+                 d.module_overlap_stolen);
+    if (d.order_issues > 0)
+        snprintf(parts[n++], sizeof parts[0],
+                 "%d block(s) break per-module X order%s%s",
+                 d.order_issues,
+                 d.order_issue_module[0] ? " in " : "",
+                 d.order_issue_module[0] ? d.order_issue_module : "");
+
+    size_t used = 0;
+    for (int i = 0; i < n; i++) {
+        int wrote = snprintf(out + used, outsz > used ? outsz - used : 0,
+                             "%s%s", used ? "; " : "", parts[i]);
+        if (wrote < 0) break;
+        used += (size_t)wrote;
+        if (used >= outsz) break;
+    }
+    return issues;
 }
 
 bool find_first_duplicate_pair(int *keep_i, int *replace_i, bool *mirror)

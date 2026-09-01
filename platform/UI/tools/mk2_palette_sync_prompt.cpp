@@ -3062,6 +3062,26 @@ bool stage_bgnd_install_tower_high_clouds(void)
         return true;
     }
 
+    /* The process emitted below references CLOUD2 / CLOUD3.  Those labels only
+       exist once data/HICLOUD.LOD has packed them out of CASTLE.IMG and BGND.ASM
+       includes the table LOAD2 generates for it.  Emitting the code without that
+       leaves a tree that cannot assemble, so refuse instead. */
+    bool has_hicloud_tbl = false;
+    for (size_t i = 0; i < lines.size(); i++) {
+        if (lines[i].find("hicloud.tbl") != std::string::npos ||
+            lines[i].find("HICLOUD.TBL") != std::string::npos) {
+            has_hicloud_tbl = true;
+            break;
+        }
+    }
+    if (!has_hicloud_tbl) {
+        snprintf(g_stage_start_status, sizeof g_stage_start_status,
+                 "%s does not include hicloud.tbl, so CLOUD2/CLOUD3 are undefined. "
+                 "Pack them with data/HICLOUD.LOD and add \".include hicloud.tbl\" first.",
+                 bgnd);
+        return false;
+    }
+
     int calla = find_label("calla_tower");
     int scroll = find_label("tower_scroll");
     int dlists = find_label("dlists_tower");
@@ -3130,26 +3150,43 @@ bool stage_bgnd_install_tower_high_clouds(void)
     if (list8_line > list2_line) list8_line--;
     lines.insert(lines.begin() + list8_line, list2);
 
-    lines[(size_t)scroll2_line] = "\t.long\t>10000\t\t; 2 - optional high CLOUD2/CLOUD3";
+    lines[(size_t)scroll2_line] = "\t.long\t010000h\t\t; 2 - high CLOUD2/CLOUD3";
 
     const char *const runtime[] = {
-        "; Optional Tower high clouds.  CLOUD2 and CLOUD3 are supplied by CASTLE.IMG.",
-        "; Kept separate from cloud_proc: stock cloud lists baklst7/baklst8 remain untouched.",
+        "**************************************************************************",
+        "*\t\t\t\t\t\t\t\t\t     *",
+        "*  Optional Tower high clouds.  CLOUD2 / CLOUD3 are the two flat sky\t     *",
+        "*  shapes out of CASTLE.IMG, packed into data/HICLOUD.LOD.\t\t     *",
+        "*\t\t\t\t\t\t\t\t\t     *",
+        "*  They are packed under POF>, so their records carry no palette.  Each\t     *",
+        "*  object is therefore created from cloud1a - which does carry newcld_p -    *",
+        "*  and the image is then swapped with ani_flag, exactly the way\t\t     *",
+        "*  get_a8_to_a11 swaps in cloud1b-d.  CASTLE.IMG's CLOUD palette is\t     *",
+        "*  byte-identical to newcld_p, so the colours are exact.\t\t     *",
+        "*\t\t\t\t\t\t\t\t\t     *",
+        "*  Kept separate from cloud_proc: baklst7 / baklst8 stay untouched.\t     *",
+        "*\t\t\t\t\t\t\t\t\t     *",
+        "**************************************************************************",
         "tower_high_cloud_proc",
-        "\tmovi\tcloud2,a5",
-        "\tmovi\t>000c0000+window_left->80,b2\t; y=12, start left",
-        "\tmovi\t>12000,a14",
+        "\tmovi\t0000c0000h+window_left-080h,b2\t; y=12, start left",
+        "\tmovi\t012000h,a14\t\t\t; drift velocity",
+        "\tmovi\tCLOUD2,a6",
+        "\tmovk\t2,a11",
         "\tcallr\ttower_make_high_cloud",
         "\tmove\ta8,b0",
-        "\tmovi\tcloud3,a5",
-        "\tmovi\t>001f0000+window_left+>70,b2\t; y=31, start right",
-        "\tmovi\t>08000,a14",
+        "",
+        "\tmovi\t0001f0000h+window_left+070h,b2\t; y=31, start right",
+        "\tmovi\t08000h,a14\t\t\t; drift velocity",
+        "\tmovi\tCLOUD3,a6",
+        "\tmovk\t1,a11",
         "\tcallr\ttower_make_high_cloud",
         "\tmove\ta8,b1",
+        "",
         "\tmove\tb1,*b0(olink),l",
-        "\tclr\ta0",
-        "\tmove\ta0,*b1(olink),l",
+        "\tclr\tb3\t\t\t\t; b-file: olink deref needs same file",
+        "\tmove\tb3,*b1(olink),l",
         "\tmove\tb0,@baklst2,l",
+        "",
         "tower_high_cloud_loop",
         "\tmove\tb0,a8",
         "\tcallr\ttower_high_cloud_wrap",
@@ -3158,28 +3195,39 @@ bool stage_bgnd_install_tower_high_clouds(void)
         "\tsleep\t2",
         "\tjruc\ttower_high_cloud_loop",
         "",
+        "",
+        "* a6 = high cloud image, b2 = packed y:x, a14 = x velocity, a11 = sort link.",
+        "* Returns the new object in a8.",
         "tower_make_high_cloud",
         "\tpush\ta14",
-        "\tcalla\tgso_dmawnz\t\t; a5 = CLOUD2 or CLOUD3",
+        "\tpush\ta6",
+        "\tmovi\tcloud1a,a5\t\t\t; create from cloud1a for newcld_p",
+        "\tcalla\tgso_dmawnz",
         "\tmove\t*a8(oflags),a4,w",
         "\tori\tdmaclp,a4",
-        "\tmove\ta4,*a8(oflags),w",
+        "\tmove\ta4,*a8(oflags),w\t\t; set the \"register clip bit\"",
         "\tmove\tb2,a4",
         "\tcalla\tset_xy_coordinates",
+        "\tmove\ta11,*a8(oslink),w",
+        "\tpull\ta6",
+        "\tmove\ta6,a1",
+        "\tcalla\tani_flag\t\t\t; swap art, palette kept",
         "\tpull\ta14",
         "\tmove\ta14,*a8(oxvel),l",
         "\trets",
+        "",
         "",
         "tower_high_cloud_wrap",
         "\tmove\t*a8(oxpos),a0,w",
         "\tcmpi\twindow_right,a0",
         "\tjrls\ttower_high_cloud_wrap_done",
-        "\tmovi\twindow_left->e0,a0",
+        "\tmovi\twindow_left-0e0h,a0",
         "\tmove\ta0,*a8(oxpos),w",
         "\tclr\ta0",
         "\tmove\ta0,*a8(ofset),w",
         "tower_high_cloud_wrap_done",
         "\trets",
+        "",
         ""
     };
     lines.insert(lines.begin() + cloud_proc, runtime, runtime + (sizeof runtime / sizeof runtime[0]));
@@ -3188,7 +3236,8 @@ bool stage_bgnd_install_tower_high_clouds(void)
     if (!bgnd_commit(bgnd, lines, ".pre_tower_high_clouds", backup, sizeof backup))
         return false;
     snprintf(g_stage_start_status, sizeof g_stage_start_status,
-             "Installed CLOUD2/CLOUD3 Tower runtime on baklst2. Backup: %s. Rebuild MK2 to test.",
+             "Installed CLOUD2/CLOUD3 Tower runtime on baklst2. Backup: %s. "
+             "Rebuild MK2 (LOAD2 must pack data/HICLOUD.LOD) to test.",
              backup);
     stage_set_toast("Installed Tower high-cloud runtime");
     return true;

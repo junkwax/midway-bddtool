@@ -268,6 +268,16 @@ bool save_all_project(void)
                 !mk2_palette_sync_auto_apply_if_ready("Saved BDD palettes"))
                 mk2_palette_sync_request_prompt("Saved BDD palettes");
         }
+        /* Runtime-silent breakage does not fail the save or the build, so it
+           has to be said out loud here or it reaches MAME unnoticed. */
+        char integrity[256] = "";
+        int integrity_issues = mk2_runtime_integrity_summary(integrity, sizeof integrity);
+        if (integrity_issues > 0) {
+            bdd_save_logf("post-save runtime integrity: %s", integrity);
+            snprintf(g_toast_msg, sizeof g_toast_msg,
+                     "Saved; %s. See LOAD2 Doctor.", integrity);
+            g_toast_timer = 5.0f;
+        }
         mk2_lod_stale_check_after_save();
         return true;
     } else if (want_bdb || want_bdd) {

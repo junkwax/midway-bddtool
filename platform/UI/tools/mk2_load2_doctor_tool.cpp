@@ -62,7 +62,28 @@ void draw_mk2_load2_doctor_tool(void)
     ImGui::Text("%d padded, %d no-zero-compress",
                 d.load2_narrow_padded_images, d.load2_zero_compress_disabled);
     ImGui::NextColumn();
-    ImGui::Text("X-order cautions"); ImGui::NextColumn(); ImGui::Text("%d", d.order_issues); ImGui::NextColumn();
+    ImGui::Text("X-order cautions"); ImGui::NextColumn();
+    if (d.order_issues && d.order_issue_module[0])
+        ImGui::Text("%d, first in %s", d.order_issues, d.order_issue_module);
+    else
+        ImGui::Text("%d", d.order_issues);
+    ImGui::NextColumn();
+    ImGui::Text("Widest block"); ImGui::NextColumn();
+    ImGui::Text("%d / %d px%s%s", d.max_block_width, MK2_RUNTIME_WIDEST_BLOCK,
+                d.widest_block_label[0] ? "  " : "",
+                d.widest_block_label[0] ? d.widest_block_label : "");
+    ImGui::NextColumn();
+    ImGui::Text("Module overlap"); ImGui::NextColumn();
+    ImGui::Text("%d rect pair(s), %d contested block(s)",
+                d.module_overlap_pairs, d.module_overlap_stolen);
+    ImGui::NextColumn();
+    ImGui::Text("Strip chops"); ImGui::NextColumn();
+    if (d.strip_chop_runs > 0)
+        ImGui::Text("%d run(s), %d blocks, %d reclaimable",
+                    d.strip_chop_runs, d.strip_chop_blocks, d.strip_chop_excess);
+    else
+        ImGui::Text("none");
+    ImGui::NextColumn();
     ImGui::Columns(1);
 
     /* Translate the raw counts above into concrete remedies. Only issues that
@@ -72,7 +93,8 @@ void draw_mk2_load2_doctor_tool(void)
                       d.module_bound_issues > 0 || d.old_style_bounds > 0 ||
                       d.load2_oversize_images > 0 || d.palette_high_nibble > 0 ||
                       d.high_color_images > 0 || d.load2_narrow_padded_images > 0 ||
-                      d.order_issues > 0;
+                      d.order_issues > 0 || d.runtime_wide_blocks > 0 ||
+                      d.module_overlap_pairs > 0 || d.module_overlap_stolen > 0;
     if (any_guided) {
         ImGui::SeparatorText("What to fix & how");
         mk2_doctor_fix(d.missing_images > 0, true,
@@ -98,7 +120,25 @@ void draw_mk2_load2_doctor_tool(void)
             "Widen the art to 3px or more, or accept the automatic padding if the on-screen result is unaffected.");
         mk2_doctor_fix(d.order_issues > 0, false,
             "Object draw order is not X-major, which LOAD2 expects.",
-            "Click 'Sort Objects X-Major for LOAD2' below to reorder every object automatically.");
+            "Click 'Sort Objects X-Major for LOAD2' below to reorder every object automatically. "
+            "The runtime binary-searches each module's blocks by X (bsrch1stxb), so an inversion "
+            "makes it stop early and silently miss the blocks past it.");
+        mk2_doctor_fix(d.runtime_wide_blocks > 0, true,
+            "At least one block is wider than the runtime's block-scan window.",
+            "BAKGND.ASM scans back only widest_block = 250px from each binary-search hit, so a wider "
+            "block is packed into ROM and then never drawn. Split the art into two blocks side by "
+            "side, or trim it under 250px (Optimize > Trim Transparent Border).");
+        mk2_doctor_fix(d.module_overlap_stolen > 0, true,
+            "Blocks sit inside more than one module rectangle.",
+            "LOAD2 gives each block to the FIRST module in BDB order that fully contains it, so the "
+            "later module never sees them -- and because the module picks the parallax plane, they "
+            "scroll at the wrong rate. Shrink one rectangle in the Modules panel until the overlap "
+            "is clear, or reorder the modules so the intended owner comes first.");
+        mk2_doctor_fix(d.module_overlap_pairs > 0 && d.module_overlap_stolen == 0, false,
+            "Module rectangles overlap, but nothing is contested yet.",
+            "No block currently falls in the shared region, so nothing is lost today. Any block "
+            "placed there later goes to whichever module is listed first in the BDB. Tighten the "
+            "rectangles now if the overlap is not deliberate.");
         ImGui::Spacing();
     }
 
@@ -119,6 +159,65 @@ void draw_mk2_load2_doctor_tool(void)
             g_view_changed = 1;
             stage_set_toast("Jumped to worst object pressure point");
         }
+    }
+    if (d.strip_chop_runs > 0) {
+        /* Chopping is a trade, so show both sides of it and let the author
+           decide. The ROM figure is what the slices buy (transparent pixels a
+           single merged block would still have to carry); the display-object
+           figures are what they cost out of the pool the fighters share. */
+        ImGui::SeparatorText("Strip chop cost");
+        ImGui::TextColored(d.strip_chop_pressure ? ImVec4(1.0f, 0.65f, 0.25f, 1)
+                                                 : ImVec4(0.75f, 0.75f, 0.75f, 1),
+                           "%d chop run(s) across %d block(s); deepest run is %d slices.",
+                           d.strip_chop_runs, d.strip_chop_blocks, d.strip_chop_longest);
+        if (d.max_visible_objects > 0)
+            ImGui::TextDisabled("Costs %d extra display object(s) out of %d; %d of them are live at X %d, "
+                                "where the stage already draws %d.",
+                                d.strip_chop_excess, MK2_DISPLAY_OBJECT_CAP,
+                                d.strip_chop_peak, d.max_visible_objects_x,
+                                d.max_visible_objects);
+        else
+            ImGui::TextDisabled("Costs %d extra display object(s) out of %d.",
+                                d.strip_chop_excess, MK2_DISPLAY_OBJECT_CAP);
+        ImGui::TextDisabled("Buys back at least %zu packed byte(s) of ROM versus one merged block per run, "
+                            "before whatever LOAD2's block dedup saves on top (not measurable from the BDB).",
+                            d.strip_chop_rom_saved);
+        if (d.strip_chop_pressure) {
+            ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.25f, 1),
+                               d.strip_chop_excess >= MK2_STRIP_EXCESS_WARN
+                                   ? "That is more chopping than any stage Midway shipped (MK1CAVE tops the "
+                                     "shipped range at 55 reclaimable objects). Every slice is its own display "
+                                     "object and another step in each module's bsrch1stxb walk. Merge runs whose "
+                                     "art is mostly solid; keep the ones cutting real transparency out of a wide "
+                                     "silhouette."
+                                   : "The worst on-screen moment is already crowding the display pool, and chop "
+                                     "slices are a large share of it. Merge runs whose art is mostly solid; keep "
+                                     "the ones cutting real transparency out of a wide silhouette.");
+            if (ImGui::Button("Jump To Strip Chop Cost X", ImVec2(-1, 0))) {
+                g_scroll_pos = d.max_visible_objects_x;
+                g_view_x = d.max_visible_objects_x;
+                g_view_changed = 1;
+                stage_set_toast("Jumped to worst strip chop pressure point");
+            }
+        }
+    }
+    if (d.module_overlap_pairs > 0 || d.module_overlap_stolen > 0) {
+        ImGui::TextColored(d.module_overlap_stolen > 0 ? ImVec4(1.0f, 0.35f, 0.25f, 1)
+                                                       : ImVec4(0.75f, 0.75f, 0.75f, 1),
+                           "Module overlap: %d rect pair(s) share space, %d block(s) contested.",
+                           d.module_overlap_pairs, d.module_overlap_stolen);
+        if (d.module_overlap_stolen == 0)
+            ImGui::TextDisabled("Nothing sits in the shared region, so nothing is lost. Five shipped "
+                                "stages overlap rectangles the same way.");
+        if (d.module_overlap_detail[0])
+            ImGui::TextDisabled("%s", d.module_overlap_detail);
+    }
+    if (d.runtime_wide_blocks > 0) {
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1),
+                           "%d block(s) exceed widest_block = %d px and are skipped at runtime (widest here: %d px%s%s).",
+                           d.runtime_wide_blocks, MK2_RUNTIME_WIDEST_BLOCK, d.max_block_width,
+                           d.widest_block_label[0] ? ", " : "",
+                           d.widest_block_label[0] ? d.widest_block_label : "");
     }
     if (d.runtime_palette16_pressure > 0) {
         ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.25f, 1),

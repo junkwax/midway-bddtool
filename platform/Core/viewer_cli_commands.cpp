@@ -562,6 +562,52 @@ int bdd_viewer_run_cli_command(int argc, char **argv, int *exit_code)
         *exit_code = bdd_write_bg_proof_level(prefix) ? 0 : 1;
         return 1;
     }
+    if (argc >= 2 && strcmp(argv[1], "--mk2-diag") == 0) {
+        /* Headless dump of the same Mk2Diag the editor panels read, so stage
+           checks are scriptable and the runtime-silent ones (block width,
+           module overlap, X order, strip chops) can be diffed in CI. Exit 1
+           when the stage has hard issues, 0 otherwise. */
+        int rc = 0;
+        if (argc < 3) {
+            fprintf(stderr, "usage: bddview --mk2-diag FILE.BDB|FILE.BDD [...]\n");
+            *exit_code = 1;
+            return 1;
+        }
+        for (int i = 2; i < argc; i++) {
+            if (!bdd_viewer_load_stage_for_path(argv[i], bdb_path, sizeof bdb_path,
+                                                bdd_path, sizeof bdd_path)) {
+                rc = 1;
+                continue;
+            }
+            Mk2Diag d;
+            mk2_collect_diag(&d);
+            int hard = mk2_diag_hard_issues(&d);
+            int cautions = mk2_diag_cautions(&d);
+            printf("stage=%s bdb=%s objects=%d images=%d palettes=%d modules=%d\n",
+                   g_name[0] ? g_name : "(unnamed)",
+                   g_have_bdb ? bdb_path : "(none)",
+                   g_no, g_ni, g_n_pals, g_bdb_num_modules);
+            printf("  hard=%d cautions=%d unassigned=%d peak_objects=%d at X %d\n",
+                   hard, cautions, d.unassigned_objects,
+                   d.max_visible_objects, d.max_visible_objects_x);
+            printf("  x_order=%d%s%s widest_block=%d/%d over=%d\n",
+                   d.order_issues,
+                   d.order_issue_module[0] ? " first_module=" : "",
+                   d.order_issue_module[0] ? d.order_issue_module : "",
+                   d.max_block_width, MK2_RUNTIME_WIDEST_BLOCK, d.runtime_wide_blocks);
+            printf("  module_overlap_pairs=%d contested=%d%s%s\n",
+                   d.module_overlap_pairs, d.module_overlap_stolen,
+                   d.module_overlap_detail[0] ? " detail=" : "",
+                   d.module_overlap_detail[0] ? d.module_overlap_detail : "");
+            printf("  strip_runs=%d strip_blocks=%d excess_objects=%d live_at_peak=%d longest=%d rom_saved=%zu pressure=%d\n",
+                   d.strip_chop_runs, d.strip_chop_blocks, d.strip_chop_excess,
+                   d.strip_chop_peak, d.strip_chop_longest,
+                   d.strip_chop_rom_saved, d.strip_chop_pressure);
+            if (hard > 0) rc = 1;
+        }
+        *exit_code = rc;
+        return 1;
+    }
     if (argc >= 2 && strcmp(argv[1], "--check-open-mode") == 0) {
         const char *expected = (argc >= 4) ? argv[3] : NULL;
         const char *mode;
