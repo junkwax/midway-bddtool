@@ -63,15 +63,18 @@ enum {
     /* Share of the worst on-screen moment that has to be chop slices before
      * they are worth blaming for display-object pressure, in percent. */
     BDD_CORE_MK2_STRIP_PEAK_SHARE_PCT = 25,
-    /* Background sprites must be an even number of pixels wide. For an odd
-     * width LOAD2's background emitter decides the compressed row headers on an
-     * EVEN scan stride while copying the pixel payload from the tight odd-width
-     * rows (mk2asset docs/LOAD2_BACKGROUND_DMA2_QUIRKS.md, "Odd-Width Header
-     * Scan Uses Even Stride"), so the header describes a byte row that drifts
-     * one byte further from the payload with every line and the art shears
-     * progressively down the sprite. All 1081 background images across the 41
-     * shipped stages are even-width; Midway never shipped a single odd one. */
-    BDD_CORE_MK2_BG_WIDTH_ALIGN = 2
+    /* Background sprite widths must be a multiple of 4. LOAD2's zcom_analysis
+     * walks the source with `zero_pad = (4 - xsize) & 3` -- it assumes each row
+     * is padded out to a 4-byte boundary -- while the BDD stores rows tight, and
+     * mk2asset docs/LOAD2_BACKGROUND_DMA2_QUIRKS.md ("Odd-Width Header Scan Uses
+     * Even Stride") records the same fault: the compressed row headers are
+     * decided on the padded stride and the payload copied from the tight rows,
+     * so header and payload walk apart a byte per line and the art shears
+     * progressively down the sprite -- triangular wedges, invisible to any
+     * editor render. All 1081 background images across the 41 shipped stages
+     * are a multiple of 4 wide; there is not one exception. Note that "even" is
+     * not enough: 42 is even and still shears. */
+    BDD_CORE_MK2_BG_WIDTH_ALIGN = 4
 };
 
 struct BddCoreModule {

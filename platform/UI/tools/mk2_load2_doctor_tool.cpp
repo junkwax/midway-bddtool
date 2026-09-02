@@ -139,13 +139,13 @@ void draw_mk2_load2_doctor_tool(void)
             "The runtime binary-searches each module's blocks by X (bsrch1stxb), so an inversion "
             "makes it stop early and silently miss the blocks past it.");
         mk2_doctor_fix(d.odd_width_images > 0, true,
-            "Some placed sprites are an odd number of pixels wide.",
-            "LOAD2's background emitter reads compressed row headers on an EVEN scan stride "
-            "but copies the payload from the tight odd-width rows, so the two walk apart a byte "
-            "per row and the art shears progressively down the sprite - a triangular wedge in "
-            "game that no editor render can show. All 1081 background images in the 41 shipped "
-            "stages are even-width. Pad the sprite with one transparent column (Optimize > Trim "
-            "Transparent Border can then re-tighten the other edges).");
+            "Some placed sprites have a width that is not a multiple of 4.",
+            "LOAD2 walks the source assuming each row is padded to a 4-byte boundary but the BDD "
+            "stores rows tight, so the compressed row headers and the pixel payload drift a byte "
+            "apart per row and the art shears progressively down the sprite - a triangular wedge "
+            "in game that no editor render can show. All 1081 background images in the 41 shipped "
+            "stages are a multiple of 4 wide, without exception; note that merely even is not "
+            "enough, 42 still shears. Pad the sprite out with transparent columns.");
         mk2_doctor_fix(d.runtime_wide_blocks > 0, true,
             "At least one block is wider than the runtime's block-scan window.",
             "BAKGND.ASM scans back only widest_block = 250px from each binary-search hit, so a wider "
@@ -249,9 +249,9 @@ void draw_mk2_load2_doctor_tool(void)
     }
     if (d.odd_width_images > 0) {
         ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1),
-                           "%d placed sprite(s) are odd-width and will shear in game; first: %s.",
+                           "%d placed sprite(s) have a width not divisible by 4 and will shear in game; first: %s.",
                            d.odd_width_images, d.odd_width_label);
-        ImGui::TextDisabled("Midway shipped 1081 background images and not one was odd-width.");
+        ImGui::TextDisabled("Midway shipped 1081 background images and every one was a multiple of 4 wide.");
     }
     if (d.runtime_wide_blocks > 0) {
         ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1),

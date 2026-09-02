@@ -452,10 +452,11 @@ void mk2_collect_diag(Mk2Diag *d)
         if (im->w > MK2_RUNTIME_WIDEST_BLOCK)
             d->runtime_wide_blocks++;
 
-        /* Odd width shears the sprite at load time: the background emitter
-           reads row headers on an even stride and the payload on the tight
-           odd one, so the two walk apart a byte per row. Counted per placed
-           block, since an unplaced image is never emitted. */
+        /* A width that is not a multiple of 4 shears the sprite at load
+           time: the background emitter reads row headers on the padded
+           stride and the payload on the tight one, so the two walk apart a
+           byte per row. Counted per placed block, since an unplaced image is
+           never emitted. */
         if ((im->w % MK2_BG_WIDTH_ALIGN) != 0) {
             d->odd_width_images++;
             if (!d->odd_width_label[0])
@@ -1719,7 +1720,7 @@ int mk2_runtime_integrity_summary(char *out, size_t outsz)
     int n = 0;
     if (d.odd_width_images > 0)
         snprintf(parts[n++], sizeof parts[0],
-                 "%d odd-width sprite(s) will shear in game (%s)",
+                 "%d sprite(s) have a width not divisible by 4 and will shear (%s)",
                  d.odd_width_images, d.odd_width_label);
     if (d.bgndtbl_stale_modules > 0)
         snprintf(parts[n++], sizeof parts[0],
