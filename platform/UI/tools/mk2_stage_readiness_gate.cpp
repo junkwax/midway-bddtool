@@ -126,6 +126,13 @@ void draw_mk2_stage_readiness_gate(void)
             snprintf(detail, sizeof detail, "%d X-order caution(s)", d.order_issues);
         draw_gate_row("Object order", order_ok, detail,
             "Draw order is not X-major, so the runtime's per-module binary search stops early and misses blocks past the inversion. Click 'Run Safe Fixes' below, or 'Sort Objects X-Major for LOAD2' in the LOAD2 Doctor.");
+        bool even_width_ok = d.odd_width_images == 0;
+        snprintf(detail, sizeof detail, "%d odd-width sprite(s)%s%s",
+                 d.odd_width_images,
+                 d.odd_width_label[0] ? ", first " : "",
+                 d.odd_width_label[0] ? d.odd_width_label : "");
+        draw_gate_row("Sprite width", even_width_ok, detail,
+            "Odd-width sprites shear progressively in game: LOAD2 scans row headers on an even stride but copies payload from the tight odd rows. Pad each one with a transparent column. No shipped stage has an odd-width background image.");
         bool block_width_ok = d.runtime_wide_blocks == 0;
         snprintf(detail, sizeof detail, "widest %d / %d px, %d over",
                  d.max_block_width, MK2_RUNTIME_WIDEST_BLOCK, d.runtime_wide_blocks);

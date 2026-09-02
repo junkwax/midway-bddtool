@@ -21,6 +21,7 @@
 #define MK2_STRIP_RUN_MIN BDD_CORE_MK2_STRIP_RUN_MIN
 #define MK2_STRIP_EXCESS_WARN BDD_CORE_MK2_STRIP_EXCESS_WARN
 #define MK2_STRIP_PEAK_SHARE_PCT BDD_CORE_MK2_STRIP_PEAK_SHARE_PCT
+#define MK2_BG_WIDTH_ALIGN BDD_CORE_MK2_BG_WIDTH_ALIGN
 
 struct Mk2Diag {
     int missing_images;
@@ -82,6 +83,12 @@ struct Mk2Diag {
     int bgndtbl_modules_checked;
     int bgndtbl_stale_modules;
     char bgndtbl_stale_detail[192];
+
+    /* Placed sprites whose width is odd. LOAD2's background emitter scans row
+       headers on an even stride but copies payload from the tight odd rows, so
+       the art shears progressively down the sprite. No shipped stage has one. */
+    int odd_width_images;
+    char odd_width_label[64];
 };
 
 struct Mk2Budget {

@@ -306,7 +306,8 @@ int mk2_diag_hard_issues(const Mk2Diag *d)
            d->load2_palette_overflow + d->load2_module_overflow +
            d->load2_image_header_overflow + d->load2_block_table_overflow +
            d->display_object_overflow + d->runtime_wide_blocks +
-           d->module_overlap_stolen + d->bgndtbl_stale_modules;
+           d->module_overlap_stolen + d->bgndtbl_stale_modules +
+           d->odd_width_images;
 }
 
 int mk2_diag_cautions(const Mk2Diag *d)
@@ -450,6 +451,17 @@ void mk2_collect_diag(Mk2Diag *d)
         }
         if (im->w > MK2_RUNTIME_WIDEST_BLOCK)
             d->runtime_wide_blocks++;
+
+        /* Odd width shears the sprite at load time: the background emitter
+           reads row headers on an even stride and the payload on the tight
+           odd one, so the two walk apart a byte per row. Counted per placed
+           block, since an unplaced image is never emitted. */
+        if ((im->w % MK2_BG_WIDTH_ALIGN) != 0) {
+            d->odd_width_images++;
+            if (!d->odd_width_label[0])
+                snprintf(d->odd_width_label, sizeof d->odd_width_label, "%s (%dx%d)",
+                         im->label[0] ? im->label : "(unnamed)", im->w, im->h);
+        }
 
         int m = assign_module(o->depth, o->sy, im->w, im->h);
         if (m < 0) {
@@ -1647,6 +1659,11 @@ void mk2_readiness_report(char *out, size_t outsz)
              d.widest_block_label[0] ? d.widest_block_label : "",
              d.runtime_wide_blocks);
     stage_append(out, outsz, line);
+    snprintf(line, sizeof line, "Odd-width sprites: %d%s%s\n",
+             d.odd_width_images,
+             d.odd_width_label[0] ? ", first " : "",
+             d.odd_width_label[0] ? d.odd_width_label : "");
+    stage_append(out, outsz, line);
     snprintf(line, sizeof line, "Module overlap: %d rect pair(s), %d contested block(s)%s%s\n",
              d.module_overlap_pairs, d.module_overlap_stolen,
              d.module_overlap_detail[0] ? "; " : "",
@@ -1694,12 +1711,16 @@ int mk2_runtime_integrity_summary(char *out, size_t outsz)
     mk2_collect_diag(&d);
 
     int issues = d.runtime_wide_blocks + d.module_overlap_stolen + d.order_issues +
-                 d.bgndtbl_stale_modules;
+                 d.bgndtbl_stale_modules + d.odd_width_images;
     if (issues <= 0) return 0;
     if (!out || !outsz) return issues;
 
-    char parts[4][224];
+    char parts[5][224];
     int n = 0;
+    if (d.odd_width_images > 0)
+        snprintf(parts[n++], sizeof parts[0],
+                 "%d odd-width sprite(s) will shear in game (%s)",
+                 d.odd_width_images, d.odd_width_label);
     if (d.bgndtbl_stale_modules > 0)
         snprintf(parts[n++], sizeof parts[0],
                  "%d BGNDTBL module record(s) no longer match this BDB (%s)",

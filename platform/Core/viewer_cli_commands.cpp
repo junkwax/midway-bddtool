@@ -599,6 +599,10 @@ int bdd_viewer_run_cli_command(int argc, char **argv, int *exit_code)
                    d.module_overlap_pairs, d.module_overlap_stolen,
                    d.module_overlap_detail[0] ? " detail=" : "",
                    d.module_overlap_detail[0] ? d.module_overlap_detail : "");
+            printf("  odd_width=%d%s%s\n",
+                   d.odd_width_images,
+                   d.odd_width_label[0] ? " first=" : "",
+                   d.odd_width_label[0] ? d.odd_width_label : "");
             printf("  bgndtbl_checked=%d stale=%d%s%s\n",
                    d.bgndtbl_modules_checked, d.bgndtbl_stale_modules,
                    d.bgndtbl_stale_detail[0] ? " detail=" : "",

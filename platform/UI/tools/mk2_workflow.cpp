@@ -102,7 +102,7 @@ void draw_mk2_workflow(void)
         if (mk2_tool_header("Play Readiness Checklist", true))
             draw_mk2_play_readiness_checklist();
         ImGui::Separator();
-        if (mk2_tool_header("Sprite Wedge Risk"))
+        if (mk2_tool_header("Sprite Packing Efficiency"))
             draw_mk2_wedge_risk_tool();
         break;
 

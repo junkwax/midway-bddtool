@@ -62,7 +62,16 @@ enum {
     BDD_CORE_MK2_STRIP_EXCESS_WARN = 64,
     /* Share of the worst on-screen moment that has to be chop slices before
      * they are worth blaming for display-object pressure, in percent. */
-    BDD_CORE_MK2_STRIP_PEAK_SHARE_PCT = 25
+    BDD_CORE_MK2_STRIP_PEAK_SHARE_PCT = 25,
+    /* Background sprites must be an even number of pixels wide. For an odd
+     * width LOAD2's background emitter decides the compressed row headers on an
+     * EVEN scan stride while copying the pixel payload from the tight odd-width
+     * rows (mk2asset docs/LOAD2_BACKGROUND_DMA2_QUIRKS.md, "Odd-Width Header
+     * Scan Uses Even Stride"), so the header describes a byte row that drifts
+     * one byte further from the payload with every line and the art shears
+     * progressively down the sprite. All 1081 background images across the 41
+     * shipped stages are even-width; Midway never shipped a single odd one. */
+    BDD_CORE_MK2_BG_WIDTH_ALIGN = 2
 };
 
 struct BddCoreModule {

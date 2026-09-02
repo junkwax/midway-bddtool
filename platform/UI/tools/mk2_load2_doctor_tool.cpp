@@ -77,6 +77,12 @@ void draw_mk2_load2_doctor_tool(void)
     ImGui::Text("%d rect pair(s), %d contested block(s)",
                 d.module_overlap_pairs, d.module_overlap_stolen);
     ImGui::NextColumn();
+    ImGui::Text("Sprite width"); ImGui::NextColumn();
+    if (d.odd_width_images)
+        ImGui::Text("%d odd", d.odd_width_images);
+    else
+        ImGui::Text("all even");
+    ImGui::NextColumn();
     ImGui::Text("BGNDTBL records"); ImGui::NextColumn();
     if (d.bgndtbl_modules_checked <= 0)
         ImGui::Text("not built yet");
@@ -102,7 +108,8 @@ void draw_mk2_load2_doctor_tool(void)
                       d.load2_oversize_images > 0 || d.palette_high_nibble > 0 ||
                       d.high_color_images > 0 || d.load2_narrow_padded_images > 0 ||
                       d.order_issues > 0 || d.runtime_wide_blocks > 0 ||
-                      d.module_overlap_pairs > 0 || d.module_overlap_stolen > 0;
+                      d.module_overlap_pairs > 0 || d.module_overlap_stolen > 0 ||
+                      d.odd_width_images > 0;
     if (any_guided) {
         ImGui::SeparatorText("What to fix & how");
         mk2_doctor_fix(d.missing_images > 0, true,
@@ -131,6 +138,14 @@ void draw_mk2_load2_doctor_tool(void)
             "Click 'Sort Objects X-Major for LOAD2' below to reorder every object automatically. "
             "The runtime binary-searches each module's blocks by X (bsrch1stxb), so an inversion "
             "makes it stop early and silently miss the blocks past it.");
+        mk2_doctor_fix(d.odd_width_images > 0, true,
+            "Some placed sprites are an odd number of pixels wide.",
+            "LOAD2's background emitter reads compressed row headers on an EVEN scan stride "
+            "but copies the payload from the tight odd-width rows, so the two walk apart a byte "
+            "per row and the art shears progressively down the sprite - a triangular wedge in "
+            "game that no editor render can show. All 1081 background images in the 41 shipped "
+            "stages are even-width. Pad the sprite with one transparent column (Optimize > Trim "
+            "Transparent Border can then re-tighten the other edges).");
         mk2_doctor_fix(d.runtime_wide_blocks > 0, true,
             "At least one block is wider than the runtime's block-scan window.",
             "BAKGND.ASM scans back only widest_block = 250px from each binary-search hit, so a wider "
@@ -231,6 +246,12 @@ void draw_mk2_load2_doctor_tool(void)
                                 "stages overlap rectangles the same way.");
         if (d.module_overlap_detail[0])
             ImGui::TextDisabled("%s", d.module_overlap_detail);
+    }
+    if (d.odd_width_images > 0) {
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1),
+                           "%d placed sprite(s) are odd-width and will shear in game; first: %s.",
+                           d.odd_width_images, d.odd_width_label);
+        ImGui::TextDisabled("Midway shipped 1081 background images and not one was odd-width.");
     }
     if (d.runtime_wide_blocks > 0) {
         ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1),
