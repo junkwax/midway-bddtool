@@ -99,6 +99,8 @@ bddview --import-png-smoke FILE.PNG OUT_PREFIX
 bddview --import-img-smoke FILE.IMG OUT_PREFIX
 bddview --import-img-folder-smoke DIR OUT_PREFIX
 bddview --import-lod-smoke FILE.LOD OUT_PREFIX
+bddview --split-object-smoke FILE.BDB|FILE.BDD
+bddview --compact-palettes-smoke FILE.BDB|FILE.BDD
 bddview --write-bg-proof BGPROF
 bddview --write-checker-test CHECKER
 bddtool validate FILE.BDB [FILE.BDD]

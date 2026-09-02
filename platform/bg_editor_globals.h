@@ -91,6 +91,14 @@ struct Mk2Diag {
     int strip_chop_longest;       /* blocks in the deepest single run */
     size_t strip_chop_rom_saved;  /* packed bytes the chopping actually buys */
     int strip_chop_pressure;
+
+    /* BGNDTBL.ASM records vs the BDB they were generated from. LOAD2 bakes each
+       module's shrunk size and block count into <module>BMOD, and the runtime
+       believes that record, not the BDB -- so editing a stage without a full
+       rebuild leaves the game drawing the old module. */
+    int bgndtbl_modules_checked;
+    int bgndtbl_stale_modules;
+    char bgndtbl_stale_detail[192];
 };
 
 struct Mk2Budget {
@@ -903,6 +911,8 @@ void open_group_sprite_resize(void);
 void draw_sprite_resize_dialog(void);
 void open_split_object_dialog(int obj_idx);
 void draw_split_object_dialog(void);
+int  split_object_at_tile_size(int obj_idx, int tile_w, int tile_h, int all_placements,
+                               int compact_palettes);
 extern bool g_show_group_bpp_reducer;
 void draw_mk2_selected_bpp_reducer_tool(void);
 void draw_group_bpp_reducer_panel(void);

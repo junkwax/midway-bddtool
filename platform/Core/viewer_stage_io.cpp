@@ -760,3 +760,309 @@ int bdd_viewer_import_png_smoke_for_path(const char *png_path, const char *out_p
            saved_pal_idx, saved_pal_count, g_ni, g_n_pals);
     return 0;
 }
+
+/* Composites every placement into one RGB canvas, in the layer/order sequence
+   the exporter uses, so a split can be compared pixel-for-pixel. Colours, not
+   palette indices: palette compaction renumbers indices, and what has to stay
+   identical is what the screen shows. */
+static Uint32 *smoke_render_rgb(int x0, int y0, int w, int h)
+{
+    Uint32 *canvas = (Uint32 *)calloc((size_t)w * (size_t)h, sizeof(Uint32));
+    int *ord = (int *)malloc((size_t)(g_no > 0 ? g_no : 1) * sizeof(int));
+    if (!canvas || !ord) { free(canvas); free(ord); return NULL; }
+    for (int i = 0; i < g_no; i++) ord[i] = i;
+    for (int i = 1; i < g_no; i++) {
+        int tmp = ord[i], j = i - 1;
+        int key_layer = (g_obj[tmp].wx >> 8) & 0xFF, key_order = g_obj[tmp].order;
+        while (j >= 0 && (((g_obj[ord[j]].wx >> 8) & 0xFF) > key_layer ||
+                          ((((g_obj[ord[j]].wx >> 8) & 0xFF) == key_layer) &&
+                           g_obj[ord[j]].order > key_order))) {
+            ord[j + 1] = ord[j];
+            j--;
+        }
+        ord[j + 1] = tmp;
+    }
+    for (int p = 0; p < g_no; p++) {
+        const Obj *o = &g_obj[ord[p]];
+        Img *im = img_find(o->ii);
+        if (!im || !im->pix || im->w <= 0 || im->h <= 0) continue;
+        const Uint32 *pal = (o->fl >= 0 && o->fl < g_n_pals) ? g_pals[o->fl] : NULL;
+        for (int yy = 0; yy < im->h; yy++) {
+            int dy = o->sy + yy - y0;
+            if (dy < 0 || dy >= h) continue;
+            int sy = o->vfl ? (im->h - 1 - yy) : yy;
+            for (int xx = 0; xx < im->w; xx++) {
+                int dx = o->depth + xx - x0;
+                if (dx < 0 || dx >= w) continue;
+                int sx = o->hfl ? (im->w - 1 - xx) : xx;
+                Uint8 v = im->pix[(size_t)sy * (size_t)im->w + (size_t)sx];
+                if (!v) continue;
+                canvas[(size_t)dy * (size_t)w + (size_t)dx] =
+                    pal ? pal[v] : (0xFF000000u | (Uint32)(v * 0x010101u));
+            }
+        }
+    }
+    free(ord);
+    return canvas;
+}
+
+/* Block bytes plus image headers -- the half of the payload a split is meant to
+   shrink, independent of how many object records the placements cost. */
+static size_t split_smoke_image_bytes(void)
+{
+    Mk2Budget b = mk2_collect_budget();
+    return b.raw_image_bytes + (size_t)g_ni * 12u;
+}
+
+static int smoke_render_diff(const Uint32 *a, const Uint32 *b, int n)
+{
+    int diff = 0;
+    for (int i = 0; i < n; i++) if (a[i] != b[i]) diff++;
+    return diff;
+}
+
+int bdd_viewer_split_object_smoke_for_path(const char *arg)
+{
+    char in_bdb[512] = "", in_bdd[512] = "";
+    Uint32 *before = NULL, *after_all = NULL, *undone = NULL;
+    int rc = 0;
+
+    if (!arg || !arg[0]) {
+        fprintf(stderr, "usage: bddview --split-object-smoke FILE.BDB|FILE.BDD\n");
+        return 1;
+    }
+    if (!bdd_viewer_load_stage_for_path(arg, in_bdb, sizeof in_bdb, in_bdd, sizeof in_bdd))
+        return 1;
+    if (!g_have_bdb || g_no <= 0 || g_ni <= 0) {
+        fprintf(stderr, "split-smoke: input has no objects: %s\n", arg);
+        return 1;
+    }
+    undo_manager_init();
+
+    /* Take the biggest placed image and give it three more placements --
+       mirrored, flipped and rotated 180. A shared image with flipped copies is
+       exactly the case the split used to price wrong. */
+    int base = -1, best_px = 0;
+    for (int i = 0; i < g_no; i++) {
+        Img *im = img_find(g_obj[i].ii);
+        if (!im || !im->pix) continue;
+        if (im->w * im->h > best_px) { best_px = im->w * im->h; base = i; }
+    }
+    if (base < 0) {
+        fprintf(stderr, "split-smoke: no usable image in %s\n", arg);
+        return 1;
+    }
+    const int img_id = g_obj[base].ii;
+    Img *bim = img_find(img_id);
+    const int src_w = bim->w, src_h = bim->h;
+    const int base_x = g_obj[base].depth, base_y = g_obj[base].sy;
+    int max_order = 0;
+    for (int i = 0; i < g_no; i++) if (g_obj[i].order > max_order) max_order = g_obj[i].order;
+    for (int f = 1; f < 4; f++) {
+        int hfl = f & 1, vfl = (f >> 1) & 1;
+        Obj *o = editor_project_append_object_slot();
+        if (!o) { fprintf(stderr, "split-smoke: could not add placement\n"); return 1; }
+        *o = g_obj[base];
+        o->depth = base_x + f * (src_w + 8);
+        o->sy = base_y;
+        o->hfl = hfl;
+        o->vfl = vfl;
+        o->wx = (g_obj[base].wx & ~0x30) | (hfl ? 0x10 : 0) | (vfl ? 0x20 : 0);
+        o->order = ++max_order;
+    }
+    sync_bdb_header_counts();
+
+    const int uses_before = image_use_count(img_id);
+    const int images_before = g_ni, objects_before = g_no;
+    const size_t image_before = split_smoke_image_bytes();
+    const size_t payload_before = mk2_collect_budget().estimated_payload;
+
+    const int x0 = base_x - 8, y0 = base_y - 8;
+    const int cw = 4 * (src_w + 8) + 16, ch = src_h + 16;
+    const int canvas_px = cw * ch;
+    before = smoke_render_rgb(x0, y0, cw, ch);
+    if (!before) { fprintf(stderr, "split-smoke: out of memory\n"); return 1; }
+
+    /* 1. split every placement from one shared tile set. Palette compaction is
+       left off so a failure here means the split, not the compactor --
+       --compact-palettes-smoke covers that half on its own. */
+    const int tile = 32;
+    if (!split_object_at_tile_size(base, tile, tile, 1, 0)) {
+        fprintf(stderr, "split-smoke: split rejected for object %d\n", base);
+        rc = 1;
+        goto done;
+    }
+    after_all = smoke_render_rgb(x0, y0, cw, ch);
+    if (!after_all) { fprintf(stderr, "split-smoke: out of memory\n"); rc = 1; goto done; }
+
+    {
+        const int diff = smoke_render_diff(before, after_all, canvas_px);
+        const int images_all = g_ni, objects_all = g_no;
+        const size_t image_all = split_smoke_image_bytes();
+        const size_t payload_all = mk2_collect_budget().estimated_payload;
+
+        if (diff != 0) {
+            fprintf(stderr, "split-smoke: %d pixel(s) changed; mirrored/flipped placements lost their form\n", diff);
+            rc = 1;
+        }
+        if (image_use_count(img_id) != 0 || img_find(img_id) != NULL) {
+            fprintf(stderr, "split-smoke: source image 0x%X survived splitting all %d placement(s)\n",
+                    img_id, uses_before);
+            rc = 1;
+        }
+
+        /* 2. undo has to put the stage back exactly */
+        undo_restore();
+        undone = smoke_render_rgb(x0, y0, cw, ch);
+        if (!undone) { fprintf(stderr, "split-smoke: out of memory\n"); rc = 1; goto done; }
+        const int undo_diff = smoke_render_diff(before, undone, canvas_px);
+        if (undo_diff != 0 || g_ni != images_before || g_no != objects_before) {
+            fprintf(stderr, "split-smoke: undo did not restore the stage (%d px, images %d/%d, objects %d/%d)\n",
+                    undo_diff, g_ni, images_before, g_no, objects_before);
+            rc = 1;
+        }
+
+        /* 3. the fix itself: splitting every placement has to leave less image
+           data behind than splitting one and keeping the source alive for the
+           rest. Whole-payload comparison would not hold -- each placement also
+           gains object records, which for a heavily re-used image can outweigh
+           the block saving either way, and the dialog now says so up front. */
+        if (!split_object_at_tile_size(base, tile, tile, 0, 0)) {
+            fprintf(stderr, "split-smoke: single-placement split rejected\n");
+            rc = 1;
+            goto done;
+        }
+        const size_t image_one = split_smoke_image_bytes();
+        if (img_find(img_id) == NULL) {
+            fprintf(stderr, "split-smoke: source image vanished after a single-placement split\n");
+            rc = 1;
+        }
+        if (image_all >= image_one) {
+            fprintf(stderr, "split-smoke: splitting all placements leaves %zu image byte(s), no better than splitting one (%zu)\n",
+                    image_all, image_one);
+            rc = 1;
+        }
+        undo_restore();
+
+        printf("split-object=%s stage=%s object=%d image=0x%X %dx%d placements=%d tile=%d "
+               "images %d->%d objects %d->%d image_bytes %zu->%zu (one-placement %zu) "
+               "payload 0x%zX->0x%zX pixels_changed=%d undo_diff=%d\n",
+               rc ? "FAIL" : "ok", arg, base, img_id, src_w, src_h, uses_before, tile,
+               images_before, images_all, objects_before, objects_all,
+               image_before, image_all, image_one,
+               payload_before, payload_all, diff, undo_diff);
+    }
+
+done:
+    free(before);
+    free(after_all);
+    free(undone);
+    return rc;
+}
+
+int bdd_viewer_compact_palettes_smoke_for_path(const char *arg)
+{
+    char in_bdb[512] = "", in_bdd[512] = "";
+    Uint32 *before = NULL, *after = NULL;
+    int rc = 0;
+
+    if (!arg || !arg[0]) {
+        fprintf(stderr, "usage: bddview --compact-palettes-smoke FILE.BDB|FILE.BDD\n");
+        return 1;
+    }
+    if (!bdd_viewer_load_stage_for_path(arg, in_bdb, sizeof in_bdb, in_bdd, sizeof in_bdd))
+        return 1;
+    if (!g_have_bdb || g_no <= 0 || g_ni <= 0 || g_n_pals <= 0) {
+        fprintf(stderr, "compact-smoke: input has no objects: %s\n", arg);
+        return 1;
+    }
+    undo_manager_init();
+
+    /* Reproduce the hazard on every stage, not just the ones that ship it: place
+       the biggest image a second time under a palette that is not its pal_idx.
+       Compacting that palette against its own images alone would renumber one
+       side of the pairing and silently recolour this placement. */
+    int base = -1, best_px = 0;
+    for (int i = 0; i < g_no; i++) {
+        Img *im = img_find(g_obj[i].ii);
+        if (!im || !im->pix) continue;
+        if (im->w * im->h > best_px) { best_px = im->w * im->h; base = i; }
+    }
+    if (base < 0) {
+        fprintf(stderr, "compact-smoke: no usable image in %s\n", arg);
+        return 1;
+    }
+    Img *bim = img_find(g_obj[base].ii);
+    const int src_w = bim->w, src_h = bim->h;
+    int alt_pal = -1;
+    for (int p = 0; p < g_n_pals; p++)
+        if (p != g_obj[base].fl && g_pal_count[p] > 1) { alt_pal = p; break; }
+    int planted = 0;
+    if (alt_pal >= 0) {
+        int max_order = 0;
+        for (int i = 0; i < g_no; i++) if (g_obj[i].order > max_order) max_order = g_obj[i].order;
+        Obj *o = editor_project_append_object_slot();
+        if (!o) { fprintf(stderr, "compact-smoke: could not add placement\n"); return 1; }
+        *o = g_obj[base];
+        o->depth = g_obj[base].depth + src_w + 8;
+        o->fl = alt_pal;
+        o->order = ++max_order;
+        planted = 1;
+        sync_bdb_header_counts();
+    }
+
+    int wx_min = 0, wx_max = 0, wy_min = 0, wy_max = 0;
+    bdd_get_world_bounds(&wx_min, &wx_max, &wy_min, &wy_max);
+    if (wx_max <= wx_min) wx_max = wx_min + 1;
+    if (wy_max <= wy_min) wy_max = wy_min + 1;
+    const int cw = wx_max - wx_min + 1, ch = wy_max - wy_min + 1;
+    if ((long long)cw * ch > 64LL * 1024 * 1024) {
+        fprintf(stderr, "compact-smoke: world %dx%d too large to composite\n", cw, ch);
+        return 1;
+    }
+    const int canvas_px = cw * ch;
+
+    int pal_entries_before = 0;
+    for (int p = 0; p < g_n_pals; p++) pal_entries_before += g_pal_count[p];
+    const int mismatched = [&]() {
+        int n = 0;
+        for (int i = 0; i < g_no; i++) {
+            Img *im = img_find(g_obj[i].ii);
+            if (im && im->pal_idx != g_obj[i].fl) n++;
+        }
+        return n;
+    }();
+
+    before = smoke_render_rgb(wx_min, wy_min, cw, ch);
+    if (!before) { fprintf(stderr, "compact-smoke: out of memory\n"); return 1; }
+
+    const int compacted = compact_palettes_for_image_range(0, g_ni, false);
+
+    after = smoke_render_rgb(wx_min, wy_min, cw, ch);
+    if (!after) { fprintf(stderr, "compact-smoke: out of memory\n"); rc = 1; goto done; }
+
+    {
+        const int diff = smoke_render_diff(before, after, canvas_px);
+        int pal_entries_after = 0;
+        for (int p = 0; p < g_n_pals; p++) pal_entries_after += g_pal_count[p];
+        if (diff != 0) {
+            fprintf(stderr, "compact-smoke: %d pixel(s) changed colour; compaction renumbered indices out from under a placement\n",
+                    diff);
+            rc = 1;
+        }
+        if (pal_entries_after > pal_entries_before) {
+            fprintf(stderr, "compact-smoke: palette entries grew %d -> %d\n",
+                    pal_entries_before, pal_entries_after);
+            rc = 1;
+        }
+        printf("compact-palettes=%s stage=%s planted_alt_palette=%d cross_palette_placements=%d "
+               "compacted=%d palette_entries %d->%d world=%dx%d pixels_changed=%d\n",
+               rc ? "FAIL" : "ok", arg, planted, mismatched, compacted,
+               pal_entries_before, pal_entries_after, cw, ch, diff);
+    }
+
+done:
+    free(before);
+    free(after);
+    return rc;
+}

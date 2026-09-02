@@ -69,6 +69,7 @@ static void menu_bar_diag_tooltip(const Mk2Diag *d, int hard, int cautions)
         if (d->runtime_wide_blocks) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "%d block(s) over %dpx wide never draw (widest %d)", d->runtime_wide_blocks, MK2_RUNTIME_WIDEST_BLOCK, d->max_block_width);
         if (d->module_overlap_stolen) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "%d block(s) claimed by an overlapping module", d->module_overlap_stolen);
         else if (d->module_overlap_pairs) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "%d module rect pair(s) overlap", d->module_overlap_pairs);
+        if (d->bgndtbl_stale_modules) ImGui::TextColored(ImVec4(1,0.45f,0.30f,1), "%d stale BGNDTBL record(s): the game still draws the old module", d->bgndtbl_stale_modules);
         if (d->strip_chop_pressure) ImGui::TextColored(ImVec4(1,0.75f,0.30f,1), "%d strip chop(s): %d blocks, %d display objects reclaimable", d->strip_chop_runs, d->strip_chop_blocks, d->strip_chop_excess);
     }
     ImGui::EndTooltip();

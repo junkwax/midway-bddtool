@@ -1861,46 +1861,67 @@ static int bdd_resolve_bgndtbl_path(char *out, size_t outsz)
     return 0;
 }
 
-static int bdd_stage_bmod_x_size(const char *module, int *x_size)
+/* Public: read a module's <module>BMOD header from BGNDTBL.ASM -- the
+   ".word xsize,ysize,#blocks" LOAD2 baked from the BDB the last time it ran.
+   This is the record that goes stale when a BDB is edited and the stage is not
+   rebuilt, and the runtime believes these numbers, not the BDB.
+
+   LOAD2 truncates labels to 10 characters, so a longer module name is retried
+   truncated before giving up. */
+int bdd_stage_module_record(const char *module, int *w, int *h, int *blocks)
 {
     char path[512];
     char want[64];
     char label[72];
     FILE *f;
-    char line[512];
-    int in = 0;
-    size_t len;
+    int attempt;
 
-    if (!module || !module[0] || !x_size) return 0;
-    bdd_strip_bmod_suffix(module, want, sizeof want);
-    len = strlen(want);
-    if (len + 4 >= sizeof label) return 0;
-    snprintf(label, sizeof label, "%sBMOD", want);
-
+    if (w) *w = 0;
+    if (h) *h = 0;
+    if (blocks) *blocks = 0;
+    if (!module || !module[0]) return 0;
     if (!bdd_resolve_bgndtbl_path(path, sizeof path)) return 0;
-    f = fopen(path, "r");
-    if (!f) return 0;
-    while (fgets(line, sizeof line, f)) {
-        if (!in) {
-            if (bdd_line_is_label(line, label)) in = 1;
-            continue;
+
+    for (attempt = 0; attempt < 2; attempt++) {
+        char line[512];
+        int in = 0;
+        bdd_strip_bmod_suffix(module, want, sizeof want);
+        if (attempt == 1) {
+            if (strlen(want) <= BDD_LOAD2_LABEL_MAX) return 0;  /* nothing new to try */
+            want[BDD_LOAD2_LABEL_MAX] = '\0';
         }
-        if (bdd_bgnd_asm_active_directive(line, ".word")) {
-            int vals[3];
-            int nv = bdd_parse_word_csv(line, vals, 3);
-            fclose(f);
-            if (nv >= 1) {
-                *x_size = vals[0];
-                return 1;
+        if (strlen(want) + 4 >= sizeof label) return 0;
+        snprintf(label, sizeof label, "%sBMOD", want);
+
+        f = fopen(path, "r");
+        if (!f) return 0;
+        while (fgets(line, sizeof line, f)) {
+            if (!in) {
+                if (bdd_line_is_label(line, label)) in = 1;
+                continue;
             }
-            return 0;
+            if (bdd_bgnd_asm_active_directive(line, ".word")) {
+                int vals[3];
+                int nv = bdd_parse_word_csv(line, vals, 3);
+                fclose(f);
+                if (nv >= 1 && w) *w = vals[0];
+                if (nv >= 2 && h) *h = vals[1];
+                if (nv >= 3 && blocks) *blocks = vals[2];
+                return nv >= 1;
+            }
+            if (!isspace((unsigned char)line[0]) && line[0] != ';' &&
+                line[0] != '*' && line[0] != '.' && line[0] != '\0')
+                break;
         }
-        if (!isspace((unsigned char)line[0]) && line[0] != ';' &&
-            line[0] != '*' && line[0] != '.' && line[0] != '\0')
-            break;
+        fclose(f);
     }
-    fclose(f);
     return 0;
+}
+
+static int bdd_stage_bmod_x_size(const char *module, int *x_size)
+{
+    if (!x_size) return 0;
+    return bdd_stage_module_record(module, x_size, NULL, NULL);
 }
 
 /* Public: parse a module's <module>BLKS block table from BGNDTBL.ASM. Each

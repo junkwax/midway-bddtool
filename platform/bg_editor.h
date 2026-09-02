@@ -108,6 +108,16 @@ typedef struct {
    Returns the block count (capped at max), 0 if not found. */
 int bdd_stage_module_blocks(const char *module, BddBgndBlock *out, int max);
 
+/* LOAD2 truncates the assembly labels it emits to this many characters, so two
+   modules whose names agree over the first 10 collide in BGNDTBL.ASM. */
+#define BDD_LOAD2_LABEL_MAX 10
+
+/* Read a module's <module>BMOD header from BGNDTBL.ASM: the module size and
+   block count LOAD2 baked on its last run. Returns 0 when the stage has no
+   record yet (never built). Compare against the live BDB to catch a stage
+   whose generated tables no longer describe its own data. */
+int bdd_stage_module_record(const char *module, int *w, int *h, int *blocks);
+
 /* Enumerate the loaded stage's background planes (BGND.ASM <stage>_mod order).
    bdd_stage_plane_info fills the plane's module name, placement offset, parallax
    scroll and dlists draw rank. Any out pointer may be NULL. */

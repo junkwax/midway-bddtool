@@ -599,6 +599,10 @@ int bdd_viewer_run_cli_command(int argc, char **argv, int *exit_code)
                    d.module_overlap_pairs, d.module_overlap_stolen,
                    d.module_overlap_detail[0] ? " detail=" : "",
                    d.module_overlap_detail[0] ? d.module_overlap_detail : "");
+            printf("  bgndtbl_checked=%d stale=%d%s%s\n",
+                   d.bgndtbl_modules_checked, d.bgndtbl_stale_modules,
+                   d.bgndtbl_stale_detail[0] ? " detail=" : "",
+                   d.bgndtbl_stale_detail[0] ? d.bgndtbl_stale_detail : "");
             printf("  strip_runs=%d strip_blocks=%d excess_objects=%d live_at_peak=%d longest=%d rom_saved=%zu pressure=%d\n",
                    d.strip_chop_runs, d.strip_chop_blocks, d.strip_chop_excess,
                    d.strip_chop_peak, d.strip_chop_longest,
@@ -760,6 +764,24 @@ int bdd_viewer_run_cli_command(int argc, char **argv, int *exit_code)
             return 1;
         }
         *exit_code = bdd_viewer_undo_move_smoke_for_path(argv[2]);
+        return 1;
+    }
+    if (argc >= 2 && strcmp(argv[1], "--compact-palettes-smoke") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: bddview --compact-palettes-smoke FILE.BDB|FILE.BDD\n");
+            *exit_code = 1;
+            return 1;
+        }
+        *exit_code = bdd_viewer_compact_palettes_smoke_for_path(argv[2]);
+        return 1;
+    }
+    if (argc >= 2 && strcmp(argv[1], "--split-object-smoke") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: bddview --split-object-smoke FILE.BDB|FILE.BDD\n");
+            *exit_code = 1;
+            return 1;
+        }
+        *exit_code = bdd_viewer_split_object_smoke_for_path(argv[2]);
         return 1;
     }
     if (argc >= 2 && strcmp(argv[1], "--import-img-smoke") == 0) {

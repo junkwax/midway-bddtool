@@ -427,6 +427,37 @@ int trim_image_transparent_border(int img_i, bool save_undo)
     return (old_w * old_h) - (new_w * new_h);
 }
 
+static int palette_group_find(std::vector<int> &parent, int x)
+{
+    while (parent[(size_t)x] != x) {
+        parent[(size_t)x] = parent[(size_t)parent[(size_t)x]];
+        x = parent[(size_t)x];
+    }
+    return x;
+}
+
+static void palette_group_union(std::vector<int> &parent, int a, int b)
+{
+    a = palette_group_find(parent, a);
+    b = palette_group_find(parent, b);
+    if (a != b) parent[(size_t)b] = a;
+}
+
+/* An image's pixel values are indices, and the same image can be drawn through
+   more than one palette: `im->pal_idx` is only the authoring palette, while each
+   placement renders through its own `o->fl`. Renumbering an image therefore
+   only stays correct if every palette it is drawn through is renumbered the same
+   way, and renumbering a palette only stays correct if every image drawn through
+   it moves with it. Compacting a palette on its own -- against the images that
+   merely name it as pal_idx -- silently recolours every placement that pairs it
+   with an image belonging to another palette.
+
+   So group images and palettes by that "drawn through" relation and compact a
+   group only when it holds a single palette, which is the ordinary case and
+   behaves exactly as before. A group spanning several palettes could only be
+   renumbered into one shared index space, forcing every palette in it up to the
+   union of their colours -- a compaction that grows the payload is not worth
+   having, so those palettes are left alone instead. */
 int compact_palettes_for_image_range(int start_img, int end_img, bool save_undo)
 {
     if (start_img < 0) start_img = 0;
@@ -434,24 +465,51 @@ int compact_palettes_for_image_range(int start_img, int end_img, bool save_undo)
     if (end_img <= start_img) return 0;
 
     const int palette_cap = editor_project_palette_capacity();
-    std::vector<unsigned char> target_pal((size_t)(palette_cap > 0 ? palette_cap : 0), 0);
-    for (int i = start_img; i < end_img; i++) {
-        Img *im = &g_img[i];
-        if (im->pal_idx >= 0 && im->pal_idx < g_n_pals && im->pal_idx < palette_cap)
-            target_pal[(size_t)im->pal_idx] = 1;
+    const int n_img = g_ni;
+    const int n_pal = (g_n_pals < palette_cap) ? g_n_pals : palette_cap;
+    if (n_img <= 0 || n_pal <= 0) return 0;
+
+    /* nodes [0, n_img) are images, [n_img, n_img + n_pal) are palettes */
+    std::vector<int> parent((size_t)(n_img + n_pal));
+    for (int i = 0; i < n_img + n_pal; i++) parent[(size_t)i] = i;
+    for (int i = 0; i < n_img; i++)
+        if (g_img[i].pal_idx >= 0 && g_img[i].pal_idx < n_pal)
+            palette_group_union(parent, i, n_img + g_img[i].pal_idx);
+    for (int o = 0; o < g_no; o++) {
+        if (g_obj[o].fl < 0 || g_obj[o].fl >= n_pal) continue;
+        Img *im = img_find(g_obj[o].ii);
+        if (!im) continue;
+        int img_i = (int)(im - g_img);
+        if (img_i < 0 || img_i >= n_img) continue;
+        palette_group_union(parent, img_i, n_img + g_obj[o].fl);
     }
+
+    /* the range picks which groups to compact, but a group is always taken
+       whole -- half a group is exactly the corruption above */
+    std::vector<unsigned char> wanted((size_t)(n_img + n_pal), 0);
+    for (int i = start_img; i < end_img; i++)
+        if (g_img[i].pal_idx >= 0 && g_img[i].pal_idx < n_pal)
+            wanted[(size_t)palette_group_find(parent, i)] = 1;
 
     int compacted = 0;
     bool undo_done = false;
-    for (int p = 0; p < g_n_pals && p < palette_cap; p++) {
-        if (!target_pal[(size_t)p]) continue;
+    for (int root = 0; root < n_img + n_pal; root++) {
+        if (!wanted[(size_t)root] || palette_group_find(parent, root) != root) continue;
+
+        std::vector<int> group_imgs, group_pals;
+        for (int i = 0; i < n_img; i++)
+            if (palette_group_find(parent, i) == root) group_imgs.push_back(i);
+        for (int p = 0; p < n_pal; p++)
+            if (palette_group_find(parent, n_img + p) == root) group_pals.push_back(p);
+        /* one palette per group, or leave the group as authored */
+        if (group_pals.size() != 1) continue;
 
         bool used[256];
         memset(used, 0, sizeof used);
         bool any = false;
-        for (int ii = 0; ii < g_ni; ii++) {
-            Img *im = &g_img[ii];
-            if (im->pal_idx != p || !im->pix) continue;
+        for (size_t gi = 0; gi < group_imgs.size(); gi++) {
+            Img *im = &g_img[group_imgs[gi]];
+            if (!im->pix) continue;
             size_t n = (size_t)im->w * (size_t)im->h;
             for (size_t k = 0; k < n; k++) {
                 int v = im->pix[k];
@@ -463,34 +521,39 @@ int compact_palettes_for_image_range(int start_img, int end_img, bool save_undo)
         if (!any) continue;
 
         int map[256];
-        Uint32 new_pal[256];
         memset(map, 0, sizeof map);
-        memset(new_pal, 0, sizeof new_pal);
         int next = 1;
         bool already_contiguous = true;
         for (int i = 1; i < 256; i++) {
             if (!used[i]) continue;
             map[i] = next;
-            new_pal[next] = g_pals[p][i];
             if (i != next) already_contiguous = false;
             next++;
         }
-        if (next == g_pal_count[p] && already_contiguous)
-            continue;
+        if (already_contiguous && g_pal_count[group_pals[0]] == next) continue;
 
         if (save_undo && !undo_done) {
             undo_save_ex("Compact Imported Palettes");
             undo_done = true;
         }
-        for (int ii = 0; ii < g_ni; ii++) {
-            Img *im = &g_img[ii];
-            if (im->pal_idx != p || !im->pix) continue;
-            size_t n = (size_t)im->w * (size_t)im->h;
-            for (size_t k = 0; k < n; k++)
-                if (im->pix[k] > 0) im->pix[k] = (Uint8)map[im->pix[k]];
+        if (!already_contiguous) {
+            for (size_t gi = 0; gi < group_imgs.size(); gi++) {
+                Img *im = &g_img[group_imgs[gi]];
+                if (!im->pix) continue;
+                size_t n = (size_t)im->w * (size_t)im->h;
+                for (size_t k = 0; k < n; k++)
+                    if (im->pix[k] > 0) im->pix[k] = (Uint8)map[im->pix[k]];
+            }
         }
-        editor_project_set_palette_slot(p, NULL, next, new_pal);
-        compacted++;
+        {
+            const int p = group_pals[0];
+            Uint32 new_pal[256];
+            memset(new_pal, 0, sizeof new_pal);
+            for (int i = 1; i < 256; i++)
+                if (used[i]) new_pal[map[i]] = g_pals[p][i];
+            editor_project_set_palette_slot(p, NULL, next, new_pal);
+            compacted++;
+        }
     }
     if (compacted > 0) {
         sync_bdb_header_counts();

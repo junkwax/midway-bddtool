@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is always present, so nothing has to be switched on before it can be used.
   "Snap Panels to Rails" is now "Reset Sidebar Width".
 
+### Added
+- `bddview --split-object-smoke FILE.BDB` -- headless check for Split Object. It
+  gives a stage's largest image three extra placements (mirrored, flipped and
+  rotated 180), splits all of them, and requires the composite to come back
+  pixel-identical, the source image to be freed, undo to restore the stage
+  exactly, and the all-placements split to leave less image data than splitting
+  one placement and keeping the source. Passes on all 50 shipped MK2 stages.
+- `bddview --compact-palettes-smoke FILE.BDB` -- headless check for palette
+  compaction. It plants a second placement of the stage's largest image under a
+  palette that is not that image's `pal_idx`, compacts, and requires the world
+  composite to come back colour-identical and the palette-entry total not to
+  grow. Fails on the pre-fix compactor (506, 3401 and 7516 pixels recoloured on
+  DEDPOOL, ARENA and ATRAX1); passes on all 50 shipped MK2 stages after it.
+
 ### Removed
 - The pulsing orange "!" onboarding badges next to Import PNG, Place and Save in
   simple mode. They appeared on launch as a bare exclamation mark whose only
@@ -28,6 +42,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   something without ever saying what.
 
 ### Fixed
+- Split Object added bytes to a stage instead of saving them whenever the image
+  was placed more than once. It cut the tiles with the chosen placement's flip
+  baked into the pixels, so the tiles only served that one orientation and every
+  other placement kept the source image alive -- the stage paid for the tiles
+  *and* the original. Tiles are now cut from the unflipped source and shared by
+  every placement: a mirrored, flipped or 180-rotated placement re-uses the same
+  tiles with its own flip flags and mirrored offsets, so it keeps its exact form
+  while the source image goes away. Each rebuilt placement also keeps its layer,
+  palette, draw order, lock and hidden state, and its tiles are emitted left to
+  right in the direction it actually shows them, which is the order LOAD2 scans a
+  module's blocks in.
+- The Split Object estimate ignored the 8 bytes each new placement costs and
+  priced every block at one byte per pixel. It now uses the same model as the
+  payload budget -- packed block bytes at the tile's own bit depth, a 12-byte
+  image header, an 8-byte object record -- so the "best" tile size it picks and
+  the saving it quotes are the ones the stage will actually see.
+- "Compact palettes" silently recoloured stages. `compact_palettes_for_image_range`
+  renumbered an image's pixel indices for the palette named by its `pal_idx`
+  alone, but `pal_idx` is only the authoring palette -- each placement renders
+  through its own `o->fl`, and an image drawn under a second palette was left
+  pointing into an index space that had moved. On `DEDPOOL.BDB`, where 26 of 314
+  objects draw an image under a palette other than its `pal_idx`, compacting on
+  its own -- with no other edit -- changed 458 composited pixels. It also culled
+  entries a placement still needed, because an image contributed its colours to
+  only one palette's used-set. Images and palettes are now grouped by which
+  palettes each image is actually drawn through, and a group is compacted only
+  when it holds a single palette; a group spanning several palettes is left as
+  authored, since the only correct alternative is one shared index space that
+  would inflate every palette in it to the union of their colours. Reached from
+  Split Object, Optimize Imported Sprites, the image list's optimize button and
+  the ROM space reclaim tool.
 - macOS could not render the arena or scroll animation in a share bundle:
   `share_media_exe_path` looked for `/proc/self/exe`, which macOS does not
   have, so it re-invoked nothing and the bundle silently came out without them.

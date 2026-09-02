@@ -138,6 +138,14 @@ void draw_mk2_stage_readiness_gate(void)
                  d.module_overlap_pairs, d.module_overlap_stolen);
         draw_gate_row("Module overlap", module_overlap_ok, detail,
             "Overlapping module rectangles hand every shared block to whichever module the BDB lists first, which also decides its parallax plane. Shrink one rectangle in the Modules panel, or reorder the modules so the intended owner comes first.");
+        bool bgndtbl_ok = d.bgndtbl_stale_modules == 0;
+        if (d.bgndtbl_modules_checked <= 0)
+            snprintf(detail, sizeof detail, "no LOAD2 records yet (stage not built)");
+        else
+            snprintf(detail, sizeof detail, "%d of %d module record(s) stale",
+                     d.bgndtbl_stale_modules, d.bgndtbl_modules_checked);
+        draw_gate_row("BGNDTBL", bgndtbl_ok, detail,
+            "BGNDTBL.ASM still describes an older version of this BDB, and the runtime believes those records rather than the BDB. Run a full 'python build.py' from the mk2 tree; --asm-only does not regenerate BLKS/BMOD/HDRS.");
         bool strip_ok = d.strip_chop_pressure == 0;
         if (d.strip_chop_runs > 0)
             snprintf(detail, sizeof detail, "%d run(s), %d blocks, %d reclaimable, %d live at X %d",

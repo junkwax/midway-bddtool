@@ -306,7 +306,7 @@ int mk2_diag_hard_issues(const Mk2Diag *d)
            d->load2_palette_overflow + d->load2_module_overflow +
            d->load2_image_header_overflow + d->load2_block_table_overflow +
            d->display_object_overflow + d->runtime_wide_blocks +
-           d->module_overlap_stolen;
+           d->module_overlap_stolen + d->bgndtbl_stale_modules;
 }
 
 int mk2_diag_cautions(const Mk2Diag *d)
@@ -413,6 +413,18 @@ void mk2_collect_diag(Mk2Diag *d)
 
     std::vector<Mk2StripBlock> strip_blocks;
 
+    /* Live per-module geometry, in LOAD2's terms: the count of blocks a module
+       actually claims and the bounding box it gets shrunk to. This is what
+       BGNDTBL.ASM should already say, and the comparison below is the only
+       thing in the editor that notices when it does not. */
+    struct Mk2ModLive { int count; int x1, y1, x2, y2; };
+    std::vector<Mk2ModLive> mod_live((size_t)(g_bdb_num_modules > 0 ? g_bdb_num_modules : 0));
+    for (size_t i = 0; i < mod_live.size(); i++) {
+        mod_live[i].count = 0;
+        mod_live[i].x1 = INT_MAX; mod_live[i].y1 = INT_MAX;
+        mod_live[i].x2 = INT_MIN; mod_live[i].y2 = INT_MIN;
+    }
+
     for (int pos = 0; pos < g_no; pos++) {
         const int obj_idx = obj_order[(size_t)pos];
         Obj *o = &g_obj[obj_idx];
@@ -481,6 +493,15 @@ void mk2_collect_diag(Mk2Diag *d)
             if (local_x > last_x[(size_t)m]) last_x[(size_t)m] = local_x;
         }
 
+        if (m >= 0 && m < (int)mod_live.size()) {
+            Mk2ModLive &live = mod_live[(size_t)m];
+            live.count++;
+            if (o->depth < live.x1) live.x1 = o->depth;
+            if (o->sy < live.y1) live.y1 = o->sy;
+            if (o->depth + im->w > live.x2) live.x2 = o->depth + im->w;
+            if (o->sy + im->h > live.y2) live.y2 = o->sy + im->h;
+        }
+
         if (mk2_strip_is_thin(im->w, im->h)) {
             Mk2StripBlock sb;
             sb.obj = obj_idx;
@@ -530,6 +551,31 @@ void mk2_collect_diag(Mk2Diag *d)
 
     /* Runs on the worst camera X, so it has to come after the peak sample. */
     mk2_collect_strip_chop(strip_blocks, d);
+
+    /* Compare each module against the record LOAD2 left in BGNDTBL.ASM. A
+       module with no record has simply never been built and is not stale; one
+       whose record disagrees with the data means the game is drawing the old
+       module and no other check in the tool will say so. */
+    for (int m = 0; m < g_bdb_num_modules && m < (int)mod_live.size(); m++) {
+        const Mk2ModLive &live = mod_live[(size_t)m];
+        if (live.count <= 0) continue;
+        char mname[64] = "";
+        if (!parse_module_bounds(m, mname, NULL, NULL, NULL, NULL) || !mname[0])
+            continue;
+        int rw = 0, rh = 0, rblocks = 0;
+        if (!bdd_stage_module_record(mname, &rw, &rh, &rblocks))
+            continue;
+        d->bgndtbl_modules_checked++;
+        int lw = live.x2 - live.x1;
+        int lh = live.y2 - live.y1;
+        if (rw == lw && rh == lh && rblocks == live.count)
+            continue;
+        d->bgndtbl_stale_modules++;
+        if (!d->bgndtbl_stale_detail[0])
+            snprintf(d->bgndtbl_stale_detail, sizeof d->bgndtbl_stale_detail,
+                     "%s: BGNDTBL says %dx%d/%d block(s), data has %dx%d/%d",
+                     mname, rw, rh, rblocks, lw, lh, live.count);
+    }
 
     /* Chopping is a trade, and only half of it is measurable here: the
        display objects are countable, what the slices buy back in LOAD2's
@@ -1606,6 +1652,12 @@ void mk2_readiness_report(char *out, size_t outsz)
              d.module_overlap_detail[0] ? "; " : "",
              d.module_overlap_detail[0] ? d.module_overlap_detail : "");
     stage_append(out, outsz, line);
+    if (d.bgndtbl_stale_modules > 0) {
+        snprintf(line, sizeof line,
+                 "BGNDTBL stale: %d of %d module record(s) disagree with the BDB; %s\n",
+                 d.bgndtbl_stale_modules, d.bgndtbl_modules_checked, d.bgndtbl_stale_detail);
+        stage_append(out, outsz, line);
+    }
     if (d.strip_chop_runs > 0) {
         snprintf(line, sizeof line,
                  "Strip chops: %d run(s), %d block(s), %d reclaimable display object(s), %d live at X %d, saves ~%zu bytes\n",
@@ -1641,12 +1693,17 @@ int mk2_runtime_integrity_summary(char *out, size_t outsz)
     Mk2Diag d;
     mk2_collect_diag(&d);
 
-    int issues = d.runtime_wide_blocks + d.module_overlap_stolen + d.order_issues;
+    int issues = d.runtime_wide_blocks + d.module_overlap_stolen + d.order_issues +
+                 d.bgndtbl_stale_modules;
     if (issues <= 0) return 0;
     if (!out || !outsz) return issues;
 
-    char parts[3][160];
+    char parts[4][224];
     int n = 0;
+    if (d.bgndtbl_stale_modules > 0)
+        snprintf(parts[n++], sizeof parts[0],
+                 "%d BGNDTBL module record(s) no longer match this BDB (%s)",
+                 d.bgndtbl_stale_modules, d.bgndtbl_stale_detail);
     if (d.runtime_wide_blocks > 0)
         snprintf(parts[n++], sizeof parts[0],
                  "%d block(s) wider than %d px will not draw",

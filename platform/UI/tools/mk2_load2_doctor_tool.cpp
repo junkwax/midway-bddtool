@@ -77,6 +77,14 @@ void draw_mk2_load2_doctor_tool(void)
     ImGui::Text("%d rect pair(s), %d contested block(s)",
                 d.module_overlap_pairs, d.module_overlap_stolen);
     ImGui::NextColumn();
+    ImGui::Text("BGNDTBL records"); ImGui::NextColumn();
+    if (d.bgndtbl_modules_checked <= 0)
+        ImGui::Text("not built yet");
+    else if (d.bgndtbl_stale_modules > 0)
+        ImGui::Text("%d of %d stale", d.bgndtbl_stale_modules, d.bgndtbl_modules_checked);
+    else
+        ImGui::Text("%d match", d.bgndtbl_modules_checked);
+    ImGui::NextColumn();
     ImGui::Text("Strip chops"); ImGui::NextColumn();
     if (d.strip_chop_runs > 0)
         ImGui::Text("%d run(s), %d blocks, %d reclaimable",
@@ -159,6 +167,18 @@ void draw_mk2_load2_doctor_tool(void)
             g_view_changed = 1;
             stage_set_toast("Jumped to worst object pressure point");
         }
+    }
+    if (d.bgndtbl_stale_modules > 0) {
+        ImGui::SeparatorText("Generated tables are behind this BDB");
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1),
+                           "%d of %d module record(s) in BGNDTBL.ASM no longer describe this stage.",
+                           d.bgndtbl_stale_modules, d.bgndtbl_modules_checked);
+        if (d.bgndtbl_stale_detail[0])
+            ImGui::TextDisabled("%s", d.bgndtbl_stale_detail);
+        ImGui::TextWrapped("The runtime reads the module size and block count out of <module>BMOD, "
+                           "not out of the BDB, so the game draws whatever the last LOAD2 run baked. "
+                           "Run a full 'python build.py' from the mk2 tree -- --asm-only does not "
+                           "regenerate BLKS/BMOD/HDRS records.");
     }
     if (d.strip_chop_runs > 0) {
         /* Chopping is a trade, so show both sides of it and let the author
