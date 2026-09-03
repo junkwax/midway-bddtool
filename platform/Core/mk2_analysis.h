@@ -166,6 +166,7 @@ void mk2_readiness_report(char *out, size_t outsz);
    that break the per-module binary search. Returns the issue count and
    fills a one-line summary; 0 means the save is clean on all three. */
 int mk2_runtime_integrity_summary(char *out, size_t outsz);
+bool mk2_stage_is_in_active_lod(void);
 bool find_first_duplicate_pair(int *keep_i, int *replace_i, bool *mirror);
 int apply_safe_dedup(int keep_i, int replace_i, bool mirror);
 

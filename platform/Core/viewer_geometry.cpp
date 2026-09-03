@@ -1918,6 +1918,84 @@ int bdd_stage_module_record(const char *module, int *w, int *h, int *blocks)
     return 0;
 }
 
+/* Public: count the image records in the <NAME>HDRS table a module's BMOD
+   points at. LOAD2 emits one per BDD image, in order, so a count that no longer
+   matches the BDD means the image table is stale even when the block table is
+   not -- which is what happens when art is added or stripped without the block
+   list changing. Each record opens with ".word <w>,<h>". */
+int bdd_stage_module_hdrs_count(const char *module)
+{
+    char path[512], want[64], label[72], line[512];
+    char hdrs[64] = "";
+    FILE *f;
+    int in = 0, count = 0, attempt;
+
+    if (!module || !module[0]) return -1;
+    if (!bdd_resolve_bgndtbl_path(path, sizeof path)) return -1;
+
+    /* The HDRS label is the second .long in the BMOD record. */
+    for (attempt = 0; attempt < 2 && !hdrs[0]; attempt++) {
+        bdd_strip_bmod_suffix(module, want, sizeof want);
+        if (attempt == 1) {
+            if (strlen(want) <= BDD_LOAD2_LABEL_MAX) return -1;
+            want[BDD_LOAD2_LABEL_MAX] = '\0';
+        }
+        if (strlen(want) + 4 >= sizeof label) return -1;
+        snprintf(label, sizeof label, "%sBMOD", want);
+        f = fopen(path, "r");
+        if (!f) return -1;
+        in = 0;
+        while (fgets(line, sizeof line, f)) {
+            if (!in) {
+                if (bdd_line_is_label(line, label)) in = 1;
+                continue;
+            }
+            {
+                const char *lp = strstr(line, ".long");
+                if (lp) {
+                    const char *comma = strchr(lp, ',');
+                    if (comma) {
+                        const char *p2 = comma + 1;
+                        size_t k = 0;
+                        while (*p2 == ' ' || *p2 == '\t') p2++;
+                        while (p2[k] && (isalnum((unsigned char)p2[k]) || p2[k] == '_') &&
+                               k + 1 < sizeof hdrs) { hdrs[k] = p2[k]; k++; }
+                        hdrs[k] = '\0';
+                    }
+                    break;
+                }
+            }
+            if (!isspace((unsigned char)line[0]) && line[0] != ';' &&
+                line[0] != '*' && line[0] != '.' && line[0] != '\0')
+                break;
+        }
+        fclose(f);
+    }
+    if (!hdrs[0]) return -1;
+
+    f = fopen(path, "r");
+    if (!f) return -1;
+    in = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!in) {
+            if (bdd_line_is_label(line, hdrs)) in = 1;
+            continue;
+        }
+        if (bdd_bgnd_asm_active_directive(line, ".word")) {
+            int vals[4];
+            if (bdd_parse_word_csv(line, vals, 4) >= 2 && vals[0] > 0 && vals[1] > 0)
+                count++;
+            continue;
+        }
+        if (strstr(line, ".long")) continue;
+        if (!isspace((unsigned char)line[0]) && line[0] != ';' &&
+            line[0] != '*' && line[0] != '.' && line[0] != '\0')
+            break;
+    }
+    fclose(f);
+    return count;
+}
+
 static int bdd_stage_bmod_x_size(const char *module, int *x_size)
 {
     if (!x_size) return 0;

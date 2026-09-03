@@ -52,6 +52,26 @@ static void lod_stale_stage_key(char *out, size_t outsz)
             *p = (char)(*p - 32);
 }
 
+/* The stage's file basename, uppercased. A BDB's internal name and its file
+   name are allowed to differ, and for a stage derived from another they usually
+   do -- TWRSIDE.BDB still calls itself TOWER2 internally so LOAD2 keeps
+   emitting the TOWER2 label prefix, while the LOD lists it as "BBB> TWRSIDE".
+   Looking up only the internal name silently found nothing for exactly the
+   stages most likely to be under active edit. */
+static void lod_stale_file_key(char *out, size_t outsz)
+{
+    out[0] = '\0';
+    const char *base = g_bdb_path[0] ? g_bdb_path : g_bdd_path;
+    if (!base || !base[0]) return;
+    for (const char *p = base; *p; p++)
+        if (*p == '\\' || *p == '/') base = p + 1;
+    snprintf(out, outsz, "%s", base);
+    char *dot = strrchr(out, '.');
+    if (dot) *dot = '\0';
+    for (char *p = out; *p; p++)
+        if (*p >= 'a' && *p <= 'z') *p = (char)(*p - 32);
+}
+
 /* True when the LOAD2 script lists the stage with a "BBB> <stage>" record. */
 static bool lod_stale_lod_references_stage(const char *lod_path, const char *stage)
 {
@@ -149,13 +169,66 @@ static int lod_stale_collect_active_lods(const char *dir, const char *stage,
     return found;
 }
 
+/* Public: is the loaded stage one an active LOD actually builds?
+
+   BGNDTBL only carries records for stages that were packed, and module names
+   are not unique across the tree -- NUPOOL and DEDPOOL both call a module
+   DPUL4, FOREST and FOREST2 both have wood7. Comparing a stage's data against
+   a BGNDTBL record of the same name is only meaningful when this stage is the
+   one that produced it, so anything reasoning about record staleness has to
+   ask this first.
+
+   Cached on the stage path: the answer needs a directory scan and the callers
+   run every frame. */
+/* Collect the active LODs that list this stage, under either name. */
+static int lod_stale_find_active(const char *dir, char *stage, size_t stagesz,
+                                 char *lods, size_t lodssz,
+                                 char *first, size_t firstsz)
+{
+    lod_stale_stage_key(stage, stagesz);
+    int n = stage[0] ? lod_stale_collect_active_lods(dir, stage, lods, lodssz,
+                                                     first, firstsz) : 0;
+    if (n > 0) return n;
+    char alt[64];
+    lod_stale_file_key(alt, sizeof alt);
+    if (!alt[0] || (stage[0] && lod_stale_strcasecmp(alt, stage) == 0)) return 0;
+    n = lod_stale_collect_active_lods(dir, alt, lods, lodssz, first, firstsz);
+    if (n > 0) snprintf(stage, stagesz, "%s", alt);
+    return n;
+}
+
+bool mk2_stage_is_in_active_lod(void)
+{
+    static char cached_path[640] = "";
+    static bool cached_answer = false;
+    static bool cached_valid = false;
+
+    const char *project_path = g_bdd_path[0] ? g_bdd_path : g_bdb_path;
+    if (!project_path || !project_path[0]) return false;
+    if (cached_valid && strcmp(cached_path, project_path) == 0)
+        return cached_answer;
+
+    char stage[64] = "";
+    bool answer = false;
+    {
+        char dir[512];
+        stage_dirname(project_path, dir, sizeof dir);
+        if (dir[0]) {
+            char lods[160], first[96];
+            answer = lod_stale_find_active(dir, stage, sizeof stage,
+                                           lods, sizeof lods,
+                                           first, sizeof first) > 0;
+        }
+    }
+    snprintf(cached_path, sizeof cached_path, "%s", project_path);
+    cached_answer = answer;
+    cached_valid = true;
+    return answer;
+}
+
 void mk2_lod_stale_check_after_save(void)
 {
     if (!g_mk2_lod_stale_warn_after_save) return;
-
-    char stage[64];
-    lod_stale_stage_key(stage, sizeof stage);
-    if (!stage[0]) return;
 
     const char *project_path = g_bdd_path[0] ? g_bdd_path : g_bdb_path;
     if (!project_path || !project_path[0]) return;
@@ -163,9 +236,10 @@ void mk2_lod_stale_check_after_save(void)
     stage_dirname(project_path, dir, sizeof dir);
     if (!dir[0]) return;
 
+    char stage[64] = "";
     char lods[160], first_lod[96];
-    if (!lod_stale_collect_active_lods(dir, stage, lods, sizeof lods,
-                                       first_lod, sizeof first_lod))
+    if (!lod_stale_find_active(dir, stage, sizeof stage, lods, sizeof lods,
+                               first_lod, sizeof first_lod))
         return;
 
     snprintf(s_lod_stale_stage, sizeof s_lod_stale_stage, "%s", stage);

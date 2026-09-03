@@ -569,7 +569,11 @@ void mk2_collect_diag(Mk2Diag *d)
        module with no record has simply never been built and is not stale; one
        whose record disagrees with the data means the game is drawing the old
        module and no other check in the tool will say so. */
-    for (int m = 0; m < g_bdb_num_modules && m < (int)mod_live.size(); m++) {
+    /* Only meaningful for a stage an active LOD actually builds: module names
+       repeat across alternate versions of a stage (NUPOOL/DEDPOOL both have a
+       DPUL4), so an unbuilt stage matches a record that was never its own. */
+    const bool built = mk2_stage_is_in_active_lod();
+    for (int m = 0; built && m < g_bdb_num_modules && m < (int)mod_live.size(); m++) {
         const Mk2ModLive &live = mod_live[(size_t)m];
         if (live.count <= 0) continue;
         char mname[64] = "";
@@ -588,6 +592,33 @@ void mk2_collect_diag(Mk2Diag *d)
             snprintf(d->bgndtbl_stale_detail, sizeof d->bgndtbl_stale_detail,
                      "%s: BGNDTBL says %dx%d/%d block(s), data has %dx%d/%d",
                      mname, rw, rh, rblocks, lw, lh, live.count);
+    }
+
+    /* The image table goes stale on its own. Adding or stripping art without
+       touching the block list leaves every module record correct while HDRS
+       still describes the old BDD, so check the count too -- LOAD2 emits one
+       record per image, in order. Only needs asking once; every module in a
+       stage shares the one HDRS table. */
+    if (built && d->bgndtbl_modules_checked > 0 && d->bgndtbl_stale_modules == 0) {
+        for (int m = 0; m < g_bdb_num_modules && m < (int)mod_live.size(); m++) {
+            if (mod_live[(size_t)m].count <= 0) continue;
+            char mname[64] = "";
+            if (!parse_module_bounds(m, mname, NULL, NULL, NULL, NULL) || !mname[0])
+                continue;
+            int hdrs = bdd_stage_module_hdrs_count(mname);
+            if (hdrs < 0) break;
+            int live_images = 0;
+            for (int i = 0; i < g_ni; i++)
+                if (!runtime_actor_image_is_preview_import(&g_img[i]))
+                    live_images++;
+            if (hdrs != live_images) {
+                d->bgndtbl_stale_modules++;
+                snprintf(d->bgndtbl_stale_detail, sizeof d->bgndtbl_stale_detail,
+                         "image table: BGNDTBL has %d image record(s), BDD has %d",
+                         hdrs, live_images);
+            }
+            break;
+        }
     }
 
     /* Chopping is a trade, and only half of it is measurable here: the

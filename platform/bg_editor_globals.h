@@ -660,6 +660,7 @@ int mk2_diag_hard_issues(const Mk2Diag *d);
 int mk2_diag_cautions(const Mk2Diag *d);
 void mk2_collect_diag(Mk2Diag *d);
 int mk2_runtime_integrity_summary(char *out, size_t outsz);
+bool mk2_stage_is_in_active_lod(void);
 int mk2_create_default_module(void);
 PanCoverageSummary mk2_compute_pan_summary(void);
 DisplayObjectSummary mk2_compute_display_object_summary(void);

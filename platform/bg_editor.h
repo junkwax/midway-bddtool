@@ -118,6 +118,10 @@ int bdd_stage_module_blocks(const char *module, BddBgndBlock *out, int max);
    whose generated tables no longer describe its own data. */
 int bdd_stage_module_record(const char *module, int *w, int *h, int *blocks);
 
+/* Image records in the <NAME>HDRS table that module's BMOD points at, or -1
+   when the stage has no record yet. LOAD2 emits one per BDD image. */
+int bdd_stage_module_hdrs_count(const char *module);
+
 /* Enumerate the loaded stage's background planes (BGND.ASM <stage>_mod order).
    bdd_stage_plane_info fills the plane's module name, placement offset, parallax
    scroll and dlists draw rank. Any out pointer may be NULL. */
