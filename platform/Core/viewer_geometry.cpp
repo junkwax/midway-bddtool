@@ -1537,6 +1537,10 @@ static int bdd_build_stage_module_table(BddStageModuleTable *table)
  * offset/parallax, bg color, module-placement creation, draft create/promote)
  * must call this afterward or the Modules panel and Game Preview keep
  * showing whatever was parsed before the edit until a different stage loads. */
+/* Bumped by every stage-table invalidation so the block-extent memo below can
+   tell "still the same stage/BGND.ASM" from "something rewrote it". */
+static unsigned g_stage_module_generation = 1;
+
 void bdd_invalidate_stage_module_cache(void)
 {
     bdd_bgnd_stage_label_cache_valid = 0;
@@ -1544,6 +1548,7 @@ void bdd_invalidate_stage_module_cache(void)
     bdd_bgnd_stage_label_cached[0] = '\0';
     g_stage_module_cache.valid = 0;
     g_stage_module_cache.label[0] = '\0';
+    g_stage_module_generation++;
 }
 
 static const BddStageModuleTable *bdd_get_stage_module_table(void)
@@ -3160,4 +3165,247 @@ int bdd_object_runtime_draw_rank(int obj_index)
     }
 
     return 500 + obj_index;
+}
+
+/* ---------------------------------------------------------------------------
+   Module view geometry -- ONE projection shared by drawing, hit-testing and
+   the context menus.
+
+   A module rectangle is drawn in two very different places depending on the
+   active view, and every picker that recomputes that projection by hand drifts
+   away from what is actually on screen: the user grabs a box that is not there.
+   These helpers are the single source of truth.
+     - BDB Source view : the authored module rectangle from the BDB header.
+     - Runtime Layout  : the module's BGND.ASM *BMOD placement, tightened to the
+                         extent of the blocks the game really draws for it.
+   x2/y2 are EXCLUSIVE (one past the last pixel), like a screen rect.
+   --------------------------------------------------------------------------- */
+
+/* Extent of a module's <module>BLKS blocks in module-local pixels.
+   bdd_stage_module_blocks re-opens and re-scans BGNDTBL.ASM on every call, and
+   this now runs from the canvas hit-test as well as the draw path -- i.e. once
+   per module per mouse event during a drag. Memoise per module name, keyed on
+   the stage-table generation so any BGND.ASM or stage change drops it. */
+static int bdd_module_block_extent(const char *module_name,
+                                   int *x1, int *y1, int *x2, int *y2)
+{
+    enum { BDD_BLOCK_EXTENT_CACHE = 32 };
+    struct BlockExtentEntry {
+        char name[64];
+        char stage[64];
+        unsigned generation;
+        int valid;
+        int x1, y1, x2, y2;
+    };
+    static struct BlockExtentEntry cache[BDD_BLOCK_EXTENT_CACHE];
+    static int cache_next = 0;
+    static BddBgndBlock blocks[768];
+    int bx1 = INT_MAX, by1 = INT_MAX, bx2 = INT_MIN, by2 = INT_MIN;
+    int slot, n;
+    /* Loading a stage does not bump the generation (the plane table re-parses on
+       a label change instead), and module names like PLANE4 repeat across
+       stages, so the stage label has to be part of the key. */
+    const char *stage_label = bdd_bgnd_stage_label();
+    if (!stage_label) stage_label = "";
+
+    if (!module_name || !module_name[0])
+        return 0;
+
+    for (int i = 0; i < BDD_BLOCK_EXTENT_CACHE; i++) {
+        if (cache[i].generation != g_stage_module_generation) continue;
+        if (strcasecmp(cache[i].name, module_name) != 0) continue;
+        if (strcasecmp(cache[i].stage, stage_label) != 0) continue;
+        if (!cache[i].valid)
+            return 0;
+        if (x1) *x1 = cache[i].x1;
+        if (y1) *y1 = cache[i].y1;
+        if (x2) *x2 = cache[i].x2;
+        if (y2) *y2 = cache[i].y2;
+        return 1;
+    }
+
+    slot = cache_next;
+    cache_next = (cache_next + 1) % BDD_BLOCK_EXTENT_CACHE;
+    snprintf(cache[slot].name, sizeof cache[slot].name, "%s", module_name);
+    snprintf(cache[slot].stage, sizeof cache[slot].stage, "%s", stage_label);
+    cache[slot].generation = g_stage_module_generation;
+    cache[slot].valid = 0;
+
+    n = bdd_stage_module_blocks(module_name, blocks,
+                                (int)(sizeof blocks / sizeof blocks[0]));
+    if (n <= 0)
+        return 0;
+    for (int i = 0; i < n; i++) {
+        int hdr = blocks[i].hdr;
+        int w = 0, h = 0;
+        /* A block whose header image is not in the loaded BDD still occupies its
+           own spot in the module. Skipping it outright pulled the frame in off
+           the module's real left/top edge (FOREST's wood7 loses its first block
+           that way and its frame ended up 7px right of its own art), so count
+           the origin and add the size only when the image resolves. */
+        if (hdr >= 0 && hdr < g_ni) {
+            Img *im = &g_img[hdr];
+            if (im->w > 0 && im->h > 0) {
+                w = im->w;
+                h = im->h;
+            }
+        }
+        if (blocks[i].x < bx1) bx1 = blocks[i].x;
+        if (blocks[i].y < by1) by1 = blocks[i].y;
+        if (blocks[i].x + w > bx2) bx2 = blocks[i].x + w;
+        if (blocks[i].y + h > by2) by2 = blocks[i].y + h;
+    }
+    if (bx1 == INT_MAX || by1 == INT_MAX || bx2 == INT_MIN || by2 == INT_MIN)
+        return 0;
+    cache[slot].valid = 1;
+    cache[slot].x1 = bx1;
+    cache[slot].y1 = by1;
+    cache[slot].x2 = bx2;
+    cache[slot].y2 = by2;
+    if (x1) *x1 = bx1;
+    if (y1) *y1 = by1;
+    if (x2) *x2 = bx2;
+    if (y2) *y2 = by2;
+    return 1;
+}
+
+/* Plane lookup that tolerates a BMOD suffix on either side, so a module named
+   PLANE3 and a plane entry PLANE3BMOD resolve to each other. */
+static int bdd_module_plane_lookup(const char *module_name,
+                                   int *ox, int *oy, float *scroll, int *plane_idx)
+{
+    char want[64] = "";
+    int n;
+
+    bdd_strip_bmod_suffix(module_name, want, sizeof want);
+    if (!want[0])
+        return 0;
+
+    n = bdd_stage_plane_count();
+    for (int p = 0; p < n; p++) {
+        char pn[64] = "";
+        char plane_base[64] = "";
+        int px = 0, py = 0;
+        float ps = 1.0f;
+        if (!bdd_stage_plane_info(p, pn, (int)sizeof pn, &px, &py, &ps, NULL))
+            continue;
+        bdd_strip_bmod_suffix(pn, plane_base, sizeof plane_base);
+        if (strcasecmp(want, plane_base) != 0)
+            continue;
+        if (ox) *ox = px;
+        if (oy) *oy = py;
+        if (scroll) *scroll = ps;
+        if (plane_idx) *plane_idx = p;
+        return 1;
+    }
+    return 0;
+}
+
+int bdd_module_runtime_placement(int module_idx, int *ox, int *oy,
+                                 float *scroll, int *plane_idx)
+{
+    char name[64] = "";
+    if (!parse_module_bounds(module_idx, name, NULL, NULL, NULL, NULL) || !name[0])
+        return 0;
+    return bdd_module_plane_lookup(name, ox, oy, scroll, plane_idx);
+}
+
+int bdd_module_runtime_screen_rect(int module_idx,
+                                   int *x1, int *y1, int *x2, int *y2)
+{
+    char name[64] = "";
+    int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+    int ox = 0, oy = 0, plane_idx = -1;
+    float scroll = 1.0f;
+    int start_x = 0, start_y = 0, scroll_origin_x = 0, parallax = 0;
+    int bx1, by1, bx2, by2;
+
+    if (!parse_module_bounds(module_idx, name, &mx1, &mx2, &my1, &my2) || !name[0])
+        return 0;
+    if (mx2 < mx1 || my2 < my1)
+        return 0;
+    if (!bdd_module_plane_lookup(name, &ox, &oy, &scroll, &plane_idx))
+        return 0;
+
+    /* Default the block extent to the authored rectangle so a module whose
+       BGNDTBL tables have not been generated yet still projects somewhere
+       sensible instead of collapsing to nothing. */
+    bx1 = 0;
+    by1 = 0;
+    bx2 = mx2 - mx1 + 1;
+    by2 = my2 - my1 + 1;
+    bdd_module_block_extent(name, &bx1, &by1, &bx2, &by2);
+
+    bdd_get_stage_start_camera(&start_x, &start_y);
+    scroll_origin_x = start_x;
+    if (plane_idx >= 0)
+        bdd_stage_plane_scroll_origin(plane_idx, &scroll_origin_x);
+    parallax = scroll_origin_x + (int)((float)(g_scroll_pos - start_x) * scroll);
+
+    if (x1) *x1 = ox + bx1 - parallax;
+    if (y1) *y1 = oy + by1 - g_game_view_y;
+    if (x2) *x2 = ox + bx2 - parallax;
+    if (y2) *y2 = oy + by2 - g_game_view_y;
+    return 1;
+}
+
+int bdd_module_view_is_runtime(int module_idx)
+{
+    if (!g_runtime_layout_view)
+        return 0;
+    return bdd_module_runtime_placement(module_idx, NULL, NULL, NULL, NULL);
+}
+
+int bdd_module_view_bounds(int module_idx, int *x1, int *y1, int *x2, int *y2)
+{
+    int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
+
+    if (g_runtime_layout_view) {
+        char name[64] = "";
+        int ox = 0, oy = 0;
+        int bx1, by1, bx2, by2;
+        if (parse_module_bounds(module_idx, name, &mx1, &mx2, &my1, &my2) &&
+            name[0] && mx2 >= mx1 && my2 >= my1 &&
+            bdd_module_plane_lookup(name, &ox, &oy, NULL, NULL)) {
+            /* Runtime Layout is a still, camera-independent composition: objects
+               are drawn at ox + (depth - mx1) with no parallax term (see
+               bdd_object_editor_origin), so the module frame must be plain
+               ox + block-extent too. Folding the preview camera in here is what
+               made the frames slide off their own art as soon as Game Preview
+               had been scrolled. Game Preview itself keeps the full parallax --
+               that projection is bdd_module_runtime_screen_rect. */
+            bx1 = 0;
+            by1 = 0;
+            bx2 = mx2 - mx1 + 1;
+            by2 = my2 - my1 + 1;
+            bdd_module_block_extent(name, &bx1, &by1, &bx2, &by2);
+            if (x1) *x1 = ox + bx1;
+            if (y1) *y1 = oy + by1;
+            if (x2) *x2 = ox + bx2;
+            if (y2) *y2 = oy + by2;
+            return 1;
+        }
+    }
+
+    if (!parse_module_bounds(module_idx, NULL, &mx1, &mx2, &my1, &my2))
+        return 0;
+    if (mx2 < mx1 || my2 < my1)
+        return 0;
+    if (x1) *x1 = mx1;
+    if (y1) *y1 = my1;
+    if (x2) *x2 = mx2 + 1;
+    if (y2) *y2 = my2 + 1;
+    return 1;
+}
+
+int bdd_module_view_contains(int module_idx, int wx, int wy, long *out_area)
+{
+    int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    if (!bdd_module_view_bounds(module_idx, &x1, &y1, &x2, &y2))
+        return 0;
+    if (wx < x1 || wx >= x2 || wy < y1 || wy >= y2)
+        return 0;
+    if (out_area)
+        *out_area = (long)(x2 - x1) * (long)(y2 - y1);
+    return 1;
 }

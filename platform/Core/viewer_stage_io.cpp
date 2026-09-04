@@ -6,9 +6,11 @@
 #include "Core/editor_project_storage.h"
 #include "Core/image_lookup.h"
 #include "Core/viewer_load.h"
+#include "Core/world_module_utils.h"
 #include "Core/viewer_save.h"
 #include "undo_manager.h"
 
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1065,4 +1067,182 @@ done:
     free(before);
     free(after);
     return rc;
+}
+
+/* --- module pick smoke ---------------------------------------------------
+ * The bug this guards: a module rectangle is projected one way for drawing and
+ * another way for picking, so the user grabs a box that is not on screen. Both
+ * now go through bdd_module_view_bounds, and in Runtime Layout the frame is
+ * camera-independent exactly like the objects it contains. Verify:
+ *   1. every module's view rect is non-empty and its own centre picks it back
+ *      (nothing can be selected through a rect that isn't there);
+ *   2. in BDB Source view the view rect IS the authored rectangle;
+ *   3. in Runtime Layout, each runtime-placed module's frame contains the drawn
+ *      origin of the objects that belong to it -- the frame sits on its art;
+ *   4. scrolling the preview camera does not move a Runtime Layout frame, since
+ *      the objects inside it do not move either.
+ */
+
+static int module_pick_smoke_center_picks_self(int m, const char *label,
+                                               const char *path)
+{
+    int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    long area = 0;
+    if (!bdd_module_view_bounds(m, &x1, &y1, &x2, &y2))
+        return 0;   /* not projectable in this view: nothing to check */
+    if (x2 <= x1 || y2 <= y1) {
+        fprintf(stderr, "module-pick-smoke: %s %s module %d empty view rect %d,%d..%d,%d\n",
+                path, label, m, x1, y1, x2, y2);
+        return 1;
+    }
+    if (!bdd_module_view_contains(m, x1 + (x2 - x1) / 2, y1 + (y2 - y1) / 2, &area)) {
+        fprintf(stderr, "module-pick-smoke: %s %s module %d centre does not hit its own rect\n",
+                path, label, m);
+        return 1;
+    }
+    return 0;
+}
+
+int bdd_viewer_module_pick_smoke_for_path(const char *arg)
+{
+    char in_bdb[512] = "", in_bdd[512] = "";
+    int errors = 0;
+    int checked_source = 0, checked_runtime = 0, checked_objects = 0;
+    int runtime_modules = 0, block_backed = 0;
+
+    if (!arg || !arg[0]) {
+        fprintf(stderr, "usage: bddview --module-pick-smoke FILE.BDB|FILE.BDD\n");
+        return 1;
+    }
+    if (!bdd_viewer_load_stage_for_path(arg, in_bdb, sizeof in_bdb,
+                                        in_bdd, sizeof in_bdd)) {
+        fprintf(stderr, "module-pick-smoke: failed to load %s\n", arg);
+        return 1;
+    }
+    if (!g_have_bdb || g_bdb_num_modules <= 0) {
+        /* A stage with no module rectangles has nothing to project or pick;
+           that is not a failure of this check. */
+        fprintf(stderr, "module-pick-smoke: %s has no modules to check\n", arg);
+        return 0;
+    }
+
+    /* 1 + 2: BDB Source view. */
+    g_runtime_layout_view = 0;
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        int ax1 = 0, ax2 = 0, ay1 = 0, ay2 = 0;
+        int vx1 = 0, vy1 = 0, vx2 = 0, vy2 = 0;
+        if (!parse_module_bounds(m, NULL, &ax1, &ax2, &ay1, &ay2)) continue;
+        if (ax2 < ax1 || ay2 < ay1) continue;
+        if (!bdd_module_view_bounds(m, &vx1, &vy1, &vx2, &vy2)) {
+            fprintf(stderr, "module-pick-smoke: %s source module %d has no view rect\n", arg, m);
+            errors++;
+            continue;
+        }
+        if (vx1 != ax1 || vy1 != ay1 || vx2 != ax2 + 1 || vy2 != ay2 + 1) {
+            fprintf(stderr,
+                    "module-pick-smoke: %s source module %d view rect %d,%d..%d,%d != authored %d,%d..%d,%d\n",
+                    arg, m, vx1, vy1, vx2, vy2, ax1, ay1, ax2 + 1, ay2 + 1);
+            errors++;
+            continue;
+        }
+        errors += module_pick_smoke_center_picks_self(m, "source", arg);
+        checked_source++;
+    }
+
+    /* 1 + 3: Runtime Layout view. */
+    g_runtime_layout_view = 1;
+    for (int m = 0; m < g_bdb_num_modules; m++) {
+        int vx1 = 0, vy1 = 0, vx2 = 0, vy2 = 0;
+        char name[64] = "";
+        int ax1 = 0, ax2 = 0, ay1 = 0, ay2 = 0;
+
+        if (!parse_module_bounds(m, name, &ax1, &ax2, &ay1, &ay2)) continue;
+        if (ax2 < ax1 || ay2 < ay1) continue;
+        if (!bdd_module_view_bounds(m, &vx1, &vy1, &vx2, &vy2)) {
+            fprintf(stderr, "module-pick-smoke: %s runtime module %d has no view rect\n", arg, m);
+            errors++;
+            continue;
+        }
+        errors += module_pick_smoke_center_picks_self(m, "runtime", arg);
+        checked_runtime++;
+
+        if (!bdd_module_runtime_placement(m, NULL, NULL, NULL, NULL))
+            continue;
+        runtime_modules++;
+
+        /* Compare the frame against the union of everything LOAD2 hands this
+           module, drawn where Runtime Layout draws it. Per-object containment
+           would be wrong: LOAD2 trims fully transparent blocks, so a module's
+           art extent is legitimately smaller than its rectangle and a sprite in
+           that margin sits outside the frame. What must never happen is the
+           frame drifting clear of its own art -- which is exactly what the old
+           camera-dependent projection did once the preview had been scrolled. */
+        int ux1 = INT_MAX, uy1 = INT_MAX, ux2 = INT_MIN, uy2 = INT_MIN;
+        int members = 0;
+        for (int i = 0; i < g_no; i++) {
+            Img *im = img_find(g_obj[i].ii);
+            int ex = 0, ey = 0;
+            if (!im || im->w <= 0 || im->h <= 0) continue;
+            if (assign_module(g_obj[i].depth, g_obj[i].sy, im->w, im->h) != m) continue;
+            /* Runtime Layout draws a block-backed plane from its *BLKS table and
+               suppresses the BDD copies of those objects, so comparing the frame
+               against them would measure art that is not on screen. The frame
+               for such a module IS the block extent by construction. */
+            if (bdd_object_in_background_plane(i)) continue;
+            bdd_object_editor_origin(i, &ex, &ey);
+            if (ex < ux1) ux1 = ex;
+            if (ey < uy1) uy1 = ey;
+            if (ex + im->w > ux2) ux2 = ex + im->w;
+            if (ey + im->h > uy2) uy2 = ey + im->h;
+            members++;
+        }
+        if (members <= 0) {
+            /* Everything this module owns is drawn from its block table, so the
+               frame is the block extent by definition -- nothing to cross-check. */
+            block_backed++;
+            continue;
+        }
+        if (ux1 >= vx2 || ux2 <= vx1 || uy1 >= vy2 || uy2 <= vy1) {
+            fprintf(stderr,
+                    "module-pick-smoke: %s runtime module %d (%s) frame %d,%d..%d,%d "
+                    "does not overlap its own art %d,%d..%d,%d (%d objects)\n",
+                    arg, m, name, vx1, vy1, vx2, vy2, ux1, uy1, ux2, uy2, members);
+            errors++;
+            continue;
+        }
+        checked_objects += members;
+    }
+
+    /* 4: the Runtime Layout frame must not follow the preview camera. */
+    {
+        int saved_scroll = g_scroll_pos;
+        int saved_view_y = g_game_view_y;
+        for (int m = 0; m < g_bdb_num_modules && errors == 0; m++) {
+            int ax1 = 0, ay1 = 0, ax2 = 0, ay2 = 0;
+            int bx1 = 0, by1 = 0, bx2 = 0, by2 = 0;
+            g_scroll_pos = saved_scroll;
+            g_game_view_y = saved_view_y;
+            if (!bdd_module_view_bounds(m, &ax1, &ay1, &ax2, &ay2)) continue;
+            g_scroll_pos = saved_scroll + 512;
+            g_game_view_y = saved_view_y + 64;
+            if (!bdd_module_view_bounds(m, &bx1, &by1, &bx2, &by2)) continue;
+            if (ax1 != bx1 || ay1 != by1 || ax2 != bx2 || ay2 != by2) {
+                fprintf(stderr,
+                        "module-pick-smoke: %s runtime module %d frame followed the preview camera "
+                        "(%d,%d..%d,%d -> %d,%d..%d,%d)\n",
+                        arg, m, ax1, ay1, ax2, ay2, bx1, by1, bx2, by2);
+                errors++;
+            }
+        }
+        g_scroll_pos = saved_scroll;
+        g_game_view_y = saved_view_y;
+    }
+
+    g_runtime_layout_view = 0;
+    fprintf(stderr,
+            "module-pick-smoke: %s modules=%d source_checked=%d runtime_checked=%d "
+            "runtime_placed=%d block_backed=%d objects_checked=%d errors=%d\n",
+            arg, g_bdb_num_modules, checked_source, checked_runtime,
+            runtime_modules, block_backed, checked_objects, errors);
+    return errors ? 1 : 0;
 }

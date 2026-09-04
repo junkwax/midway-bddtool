@@ -770,6 +770,22 @@ int bdd_viewer_run_cli_command(int argc, char **argv, int *exit_code)
         *exit_code = bdd_viewer_undo_move_smoke_for_path(argv[2]);
         return 1;
     }
+    if (argc >= 2 && strcmp(argv[1], "--module-pick-smoke") == 0) {
+        int rc = 0;
+        if (argc < 3) {
+            fprintf(stderr, "usage: bddview --module-pick-smoke FILE.BDB|FILE.BDD [...]\n");
+            *exit_code = 1;
+            return 1;
+        }
+        for (int i = 2; i < argc; i++) {
+            if (bdd_viewer_module_pick_smoke_for_path(argv[i]) != 0)
+                rc = 1;
+        }
+        if (rc == 0)
+            fprintf(stderr, "module-pick-smoke=ok stages=%d\n", argc - 2);
+        *exit_code = rc;
+        return 1;
+    }
     if (argc >= 2 && strcmp(argv[1], "--compact-palettes-smoke") == 0) {
         if (argc < 3) {
             fprintf(stderr, "usage: bddview --compact-palettes-smoke FILE.BDB|FILE.BDD\n");

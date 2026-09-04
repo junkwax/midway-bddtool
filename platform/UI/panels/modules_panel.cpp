@@ -1,6 +1,7 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/world_module_utils.h"
+#include "UI/actions/module_runtime_promote.h"
 #include "imgui.h"
 #include "UI/actions/selection_helpers.h"
 #include "undo_manager.h"
@@ -738,67 +739,97 @@ void draw_modules_runtime_contents(void)
         "sits further back (slower); 0.00x is locked to the screen. To re-bind a "
         "module to a different plane, move its *BMOD in <stage>_mod.");
 
+    /* Promote: the one place that answers "I moved it on the builder grid, now
+       make the game use that spot". Every row shows both positions and the
+       delta, so it is obvious what a promotion will change before it runs.
+       Promoting only ever writes BGND.ASM -- no BDB rectangle and no object
+       moves, so no object can change which module owns it. */
+    ImGui::SeparatorText("Promote builder position to runtime");
     {
-        int not_placed = 0;
-        for (int m = 0; m < g_bdb_num_modules; m++) {
-            char mn[64] = "";
-            if (sscanf(g_bdb_modules[m], "%63s", mn) != 1) continue;
-            bool found_m = false;
-            for (int p = 0; p < plane_count && !found_m; p++) {
-                char pn[32];
-                if (bdd_stage_plane_info(p, pn, sizeof pn, NULL, NULL, NULL, NULL) &&
-                    runtime_name_ieq(pn, mn))
-                    found_m = true;
-            }
-            if (!found_m) not_placed++;
-        }
-        if (not_placed > 1) {
-            char lbl[64];
-            snprintf(lbl, sizeof lbl, "Re-bind all %d not-placed modules", not_placed);
-            if (ImGui::Button(lbl, ImVec2(-1, 0))) {
-                int bound = 0;
-                for (int m = 0; m < g_bdb_num_modules; m++) {
-                    char mn[64] = ""; int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
-                    if (sscanf(g_bdb_modules[m], "%63s %d %d %d %d", mn, &mx1, &mx2, &my1, &my2) < 1) continue;
-                    bool found_m = false;
-                    for (int p = 0; p < plane_count && !found_m; p++) {
-                        char pn[32];
-                        if (bdd_stage_plane_info(p, pn, sizeof pn, NULL, NULL, NULL, NULL) &&
-                            runtime_name_ieq(pn, mn))
-                            found_m = true;
-                    }
-                    if (!found_m && stage_bgnd_create_module_placement(mn, mx1, my1))
-                        bound++;
+        int drifted = 0, not_placed = 0;
+        module_runtime_promote_pending(&drifted, &not_placed);
+
+        ImGui::TextWrapped(
+            "Builder position is the module rectangle you drag on the world grid. "
+            "Runtime position is the .word x,y the game draws it at. Promote copies "
+            "builder onto runtime.");
+
+        if (drifted == 0 && not_placed == 0) {
+            ImGui::TextColored(ImVec4(0.55f, 1.0f, 0.65f, 1.0f),
+                               "Every module's runtime placement matches the builder grid.");
+        } else {
+            if (drifted > 0) {
+                char lbl[96];
+                snprintf(lbl, sizeof lbl, "Promote %d moved module%s",
+                         drifted, drifted == 1 ? "" : "s");
+                if (ImGui::Button(lbl, ImVec2(-1, 0))) {
+                    module_promote_all_positions_to_runtime(false, NULL, NULL, NULL);
+                    rb_loaded = -2;
                 }
-                char msg[64]; snprintf(msg, sizeof msg, "Re-bound %d module(s)", bound);
-                stage_set_toast(msg);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Sets each already-placed module's BGND.ASM offset to its "
+                                      "current builder rectangle. Backs up BGND.ASM first.");
             }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Adds a *BMOD entry for every not-placed module below, each at its "
-                                  "own current position so none of them move. Useful after renaming "
-                                  "modules whose old names are still in BGND.ASM/the draft.");
+            if (not_placed > 0) {
+                char lbl[96];
+                snprintf(lbl, sizeof lbl, "Place %d unplaced module%s at its builder spot",
+                         not_placed, not_placed == 1 ? "" : "s");
+                if (ImGui::Button(lbl, ImVec2(-1, 0))) {
+                    module_promote_all_positions_to_runtime(true, NULL, NULL, NULL);
+                    rb_loaded = -2;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Adds a *BMOD entry on the next free background plane for "
+                                      "every module that has none, at its builder position, and "
+                                      "promotes any moved modules at the same time.");
+            }
+        }
+
+        if (ImGui::BeginTable("module_promote", 5,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("module");
+            ImGui::TableSetupColumn("builder", ImGuiTableColumnFlags_WidthFixed, 84.0f);
+            ImGui::TableSetupColumn("runtime", ImGuiTableColumnFlags_WidthFixed, 84.0f);
+            ImGui::TableSetupColumn("delta", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+            ImGui::TableHeadersRow();
+            for (int m = 0; m < g_bdb_num_modules; m++) {
+                ModuleRuntimeInfo info;
+                if (!module_runtime_info(m, &info)) continue;
+                bool in_sync = info.placed && info.drift_x == 0 && info.drift_y == 0;
+
+                ImGui::TableNextRow();
+                ImGui::PushID(10000 + m);
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(info.name);
+                ImGui::TableNextColumn();
+                ImGui::Text("%d,%d", info.builder_x, info.builder_y);
+                ImGui::TableNextColumn();
+                if (info.placed) ImGui::Text("%d,%d", info.runtime_x, info.runtime_y);
+                else ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "not placed");
+                ImGui::TableNextColumn();
+                if (!info.placed)
+                    ImGui::TextDisabled("-");
+                else if (in_sync)
+                    ImGui::TextColored(ImVec4(0.55f, 1.0f, 0.65f, 1.0f), "in sync");
+                else
+                    ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.34f, 1.0f), "%+d,%+d",
+                                       info.drift_x, info.drift_y);
+                ImGui::TableNextColumn();
+                if (in_sync) {
+                    ImGui::TextDisabled("-");
+                } else if (ImGui::SmallButton(info.placed ? "Promote" : "Place")) {
+                    module_promote_position_to_runtime(m);
+                    rb_loaded = -2;
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
         }
     }
 
-    static bool allow_source_offset_sync = false;
-    ImGui::Checkbox("Enable source-layout offset sync", &allow_source_offset_sync);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Advanced repair for stages whose BDB source is already composed.");
-    bool source_offset_sync_disabled = !allow_source_offset_sync;
-    if (source_offset_sync_disabled) ImGui::BeginDisabled();
-    if (ImGui::Button("Sync placed runtime offsets from current BDB layout", ImVec2(-1, 0))) {
-        if (stage_bgnd_sync_runtime_offsets_from_bdb())
-            rb_loaded = -2;
-        allow_source_offset_sync = false;
-    }
-    if (source_offset_sync_disabled) ImGui::EndDisabled();
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-            "Writes each already-placed module's BGND.ASM .word x,y offset from that module's\n"
-            "current BDB source rectangle. Use this when source view is already the composed\n"
-            "stage (like this FLAPJACK edit). Do not use it on shelf-style stages where\n"
-            "source modules are intentionally separated and Runtime/Game Preview is the\n"
-            "assembled view.");
+    ImGui::SeparatorText("Plane bindings");
 
     if (ImGui::BeginTable("module_planes", 4,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |

@@ -129,6 +129,32 @@ int bdd_stage_plane_count(void);
 int bdd_stage_plane_info(int index, char *name, int name_sz,
                          int *ox, int *oy, float *scroll, int *draw_rank);
 int bdd_stage_plane_scroll_origin(int index, int *scroll_x);
+
+/* --- Module view geometry ------------------------------------------------
+   One projection shared by drawing, canvas hit-testing and the context menus.
+   A module rectangle lives in two different places depending on the active
+   view; every picker that recomputes that projection by hand drifts away from
+   what is on screen and the user ends up grabbing a box that is not there.
+
+   bdd_module_runtime_placement  -- the module's BGND.ASM *BMOD binding.
+   bdd_module_runtime_screen_rect-- that placement in game-screen-local pixels
+                                    at the current preview camera.
+   bdd_module_view_bounds        -- the rect the module occupies in the ACTIVE
+                                    canvas view, in canvas/world pixels:
+                                    BDB Source -> authored module rectangle,
+                                    Runtime Layout -> the runtime placement.
+   All rects are x2/y2 EXCLUSIVE (one past the last pixel), like a screen rect,
+   unlike parse_module_bounds() whose x2/y2 are inclusive. */
+int bdd_module_runtime_placement(int module_idx, int *ox, int *oy,
+                                 float *scroll, int *plane_idx);
+int bdd_module_runtime_screen_rect(int module_idx,
+                                   int *x1, int *y1, int *x2, int *y2);
+int bdd_module_view_bounds(int module_idx, int *x1, int *y1, int *x2, int *y2);
+/* 1 when the active view draws this module at its runtime placement, so a drag
+   must move the BGND.ASM offset rather than the authored BDB rectangle. */
+int bdd_module_view_is_runtime(int module_idx);
+/* Point test against bdd_module_view_bounds; fills the rect area for tie-break. */
+int bdd_module_view_contains(int module_idx, int wx, int wy, long *out_area);
 int bdd_stage_module_baklst(const char *module_name);
 int bdd_stage_baklst_module(int baklst, char *name, int name_sz);
 

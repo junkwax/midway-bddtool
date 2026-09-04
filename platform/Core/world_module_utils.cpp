@@ -234,6 +234,49 @@ int module_selection_translate(int dx, int dy)
     return moved;
 }
 
+int module_ownership_changes(const int *before_depth, const int *before_sy,
+                             const int *mask, int capacity,
+                             char *from_name, int from_sz,
+                             char *to_name, int to_sz,
+                             int *first_obj_index)
+{
+    int changed = 0;
+
+    if (from_name && from_sz > 0) from_name[0] = '\0';
+    if (to_name && to_sz > 0) to_name[0] = '\0';
+    if (first_obj_index) *first_obj_index = -1;
+    if (!before_depth || !before_sy || capacity <= 0)
+        return 0;
+
+    for (int i = 0; i < g_no && i < capacity; i++) {
+        Img *im;
+        int was, now;
+        if (mask && !mask[i]) continue;
+        if (before_depth[i] == g_obj[i].depth && before_sy[i] == g_obj[i].sy)
+            continue;
+        im = img_find(g_obj[i].ii);
+        if (!im) continue;
+
+        was = assign_module(before_depth[i], before_sy[i], im->w, im->h);
+        now = assign_module(g_obj[i].depth, g_obj[i].sy, im->w, im->h);
+        if (was == now) continue;
+
+        if (changed == 0) {
+            if (first_obj_index) *first_obj_index = i;
+            if (from_name && from_sz > 0) {
+                if (was < 0) snprintf(from_name, (size_t)from_sz, "no module");
+                else parse_module_bounds(was, from_name, NULL, NULL, NULL, NULL);
+            }
+            if (to_name && to_sz > 0) {
+                if (now < 0) snprintf(to_name, (size_t)to_sz, "no module");
+                else parse_module_bounds(now, to_name, NULL, NULL, NULL, NULL);
+            }
+        }
+        changed++;
+    }
+    return changed;
+}
+
 int module_smallest_containing(int depth, int sy, int width, int height)
 {
     int best = -1;

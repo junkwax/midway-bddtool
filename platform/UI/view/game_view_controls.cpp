@@ -6,6 +6,7 @@
 #include "Core/image_processing.h"
 #include "Core/world_module_utils.h"
 #include "UI/view/game_view_controls.h"
+#include "UI/actions/module_runtime_promote.h"
 #include "UI/view/navigation.h"
 #include "UI/actions/object_position_undo.h"
 #include "UI/view/world_view_helpers.h"
@@ -303,61 +304,6 @@ static bool game_view_module_plane_info(const char *module_name,
         return true;
     }
     return false;
-}
-
-struct GameViewRuntimeOffsetDrift {
-    int placed;
-    int stale;
-    int not_placed;
-    int bad_modules;
-    int first_module;
-    char first_name[64];
-    int first_builder_x;
-    int first_builder_y;
-    int first_runtime_x;
-    int first_runtime_y;
-};
-
-static bool game_view_runtime_offset_drift(GameViewRuntimeOffsetDrift *out)
-{
-    if (!out)
-        return false;
-    std::memset(out, 0, sizeof *out);
-    out->first_module = -1;
-
-    if (g_bdb_num_modules <= 0)
-        return false;
-
-    for (int m = 0; m < g_bdb_num_modules; m++) {
-        char name[64] = "";
-        int mx1 = 0, mx2 = 0, my1 = 0, my2 = 0;
-        if (!parse_module_bounds(m, name, &mx1, &mx2, &my1, &my2)) {
-            out->bad_modules++;
-            continue;
-        }
-
-        int ox = 0, oy = 0, rank = -1;
-        float scroll = 1.0f;
-        if (!game_view_module_plane_info(name, &ox, &oy, &scroll, &rank)) {
-            out->not_placed++;
-            continue;
-        }
-
-        out->placed++;
-        if (ox == mx1 && oy == my1)
-            continue;
-
-        if (out->first_module < 0) {
-            out->first_module = m;
-            snprintf(out->first_name, sizeof out->first_name, "%s", name);
-            out->first_builder_x = mx1;
-            out->first_builder_y = my1;
-            out->first_runtime_x = ox;
-            out->first_runtime_y = oy;
-        }
-        out->stale++;
-    }
-    return out->placed > 0 || out->not_placed > 0 || out->bad_modules > 0;
 }
 
 static bool game_view_builder_offset_for_selected_block(int module_idx,
@@ -1828,69 +1774,53 @@ static void draw_game_view_runtime_parallax_editor(void)
         game_view_tools_text_disabled_wrapped("%s  not placed in BGND.ASM", cur_name);
     }
 
-    GameViewRuntimeOffsetDrift drift;
-    if (game_view_runtime_offset_drift(&drift)) {
-        if (drift.stale > 0) {
-            ImGui::SeparatorText("Builder Placement");
-            ImGui::TextColored(ImVec4(1.0f,0.82f,0.34f,1.0f),
-                               "%d runtime offset%s differ from Builder view",
-                               drift.stale, drift.stale == 1 ? "" : "s");
-            game_view_tools_text_disabled_wrapped(
-                "First mismatch: %s builder %d,%d  runtime %d,%d",
-                drift.first_name,
-                drift.first_builder_x, drift.first_builder_y,
-                drift.first_runtime_x, drift.first_runtime_y);
-            if (ImGui::Button("Sync All From Builder")) {
-                if (stage_bgnd_sync_runtime_offsets_from_bdb()) {
-                    s_game_view_parallax_loaded_module = -2;
-                    g_view_changed = 1;
-                }
-            }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Writes every already-placed module's BGND.ASM runtime offset from its current BDB/module rectangle.");
-            if (drift.first_module >= 0) {
-                game_view_tools_same_line_button_if_fits("Select First Mismatch");
-                if (ImGui::SmallButton("Select First Mismatch")) {
-                    game_view_select_parallax_module(drift.first_module);
-                    s_game_view_parallax_loaded_module = -2;
-                }
-            }
-        } else if (drift.placed > 0) {
-            game_view_tools_text_disabled_wrapped(
-                "Builder placement matches runtime offsets for %d placed module%s.",
-                drift.placed, drift.placed == 1 ? "" : "s");
-        }
-        if (drift.not_placed > 0) {
-            game_view_tools_text_disabled_wrapped(
-                "%d module%s not placed in BGND.ASM yet.",
-                drift.not_placed, drift.not_placed == 1 ? "" : "s");
-        }
-    }
+    /* Promotion lives behind one verb here too, sharing the Modules > Runtime
+       implementation, so "Sync"/"Re-bind"/"Set as runtime location" no longer
+       mean four slightly different things in three panels. */
+    ImGui::SeparatorText("Promote Builder Position");
+    {
+        int drifted = 0, not_placed = 0;
+        module_runtime_promote_pending(&drifted, &not_placed);
+        ModuleRuntimeInfo rt;
+        module_runtime_info(s_game_view_parallax_module, &rt);
 
-    int builder_x1 = 0, builder_x2 = 0, builder_y1 = 0, builder_y2 = 0;
-    bool have_builder_bounds = parse_module_bounds(s_game_view_parallax_module, NULL,
-                                                   &builder_x1, &builder_x2,
-                                                   &builder_y1, &builder_y2);
-    if (have_builder_bounds) {
-        if (placed) {
-            int dx = cur_ox - builder_x1;
-            int dy = cur_oy - builder_y1;
-            game_view_tools_text_disabled_wrapped(
-                "Module top-left: builder %d,%d  runtime %d,%d  delta %+d,%+d",
-                builder_x1, builder_y1, cur_ox, cur_oy, dx, dy);
-            if (dx != 0 || dy != 0) {
-                if (ImGui::SmallButton("Sync This From Builder")) {
-                    if (stage_bgnd_set_module_offset(cur_name, builder_x1, builder_y1)) {
-                        s_game_view_parallax_loaded_module = -2;
-                        g_view_changed = 1;
-                    }
-                }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Set this module's BGND.ASM runtime offset to its BDB/source top-left.");
+        if (rt.valid) {
+            if (rt.placed)
+                game_view_tools_text_disabled_wrapped(
+                    "%s: builder %d,%d  runtime %d,%d  delta %+d,%+d",
+                    rt.name, rt.builder_x, rt.builder_y,
+                    rt.runtime_x, rt.runtime_y, rt.drift_x, rt.drift_y);
+            else
+                game_view_tools_text_disabled_wrapped(
+                    "%s: builder %d,%d  not placed at runtime",
+                    rt.name, rt.builder_x, rt.builder_y);
+
+            bool in_sync = rt.placed && !rt.drift_x && !rt.drift_y;
+            if (in_sync) {
+                game_view_tools_text_disabled_wrapped("Runtime placement matches the builder grid.");
+            } else if (ImGui::Button(rt.placed ? "Promote This Module"
+                                               : "Place This Module At Builder Spot")) {
+                if (module_promote_position_to_runtime(s_game_view_parallax_module))
+                    s_game_view_parallax_loaded_module = -2;
             }
-        } else {
-            game_view_tools_text_disabled_wrapped("Module top-left: builder %d,%d",
-                                                 builder_x1, builder_y1);
+            if (!in_sync && ImGui::IsItemHovered())
+                ImGui::SetTooltip("Writes this module's builder position as its BGND.ASM\n"
+                                  "runtime placement. Backs BGND.ASM up first; no BDB\n"
+                                  "rectangle or object moves, so nothing changes module.");
+        }
+
+        if (drifted > 0) {
+            char lbl[80];
+            snprintf(lbl, sizeof lbl, "Promote All %d Moved", drifted);
+            if (ImGui::Button(lbl)) {
+                module_promote_all_positions_to_runtime(false, NULL, NULL, NULL);
+                s_game_view_parallax_loaded_module = -2;
+            }
+        }
+        if (not_placed > 0) {
+            game_view_tools_text_disabled_wrapped(
+                "%d module%s not placed in BGND.ASM yet -- see Modules > Runtime.",
+                not_placed, not_placed == 1 ? "" : "s");
         }
     }
 

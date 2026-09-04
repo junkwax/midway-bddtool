@@ -152,6 +152,7 @@ add_executable(bddview
     platform/UI/tools/stage_share_media.cpp
     platform/UI/tools/mk2_workspace_import.cpp
     platform/UI/overlays/module_bounds_overlay.cpp
+    platform/UI/actions/module_runtime_promote.cpp
     platform/UI/panels/modules_panel.cpp
     platform/UI/view/navigation.cpp
     platform/UI/dialogs/native_file_dialogs.cpp

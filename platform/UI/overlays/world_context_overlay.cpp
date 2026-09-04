@@ -1,6 +1,7 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/world_module_utils.h"
+#include "UI/actions/module_runtime_promote.h"
 #include <imgui.h>
 #include <cstdio>
 #include <cstring>
@@ -175,13 +176,13 @@ void draw_world_context_overlay(void)
             struct { int idx; long area; } found[16];
             int fn = 0;
             for (int mi = 0; mi < g_bdb_num_modules && fn < 16; mi++) {
-                int cx1 = 0, cx2 = 0, cy1 = 0, cy2 = 0;
-                if (!parse_module_bounds(mi, NULL, &cx1, &cx2, &cy1, &cy2)) continue;
-                if (cx2 < cx1 || cy2 < cy1) continue;
-                if (g_ctx_module_wx < cx1 || g_ctx_module_wx > cx2 ||
-                    g_ctx_module_wy < cy1 || g_ctx_module_wy > cy2) continue;
+                long area = 0;
+                /* Same view-aware rect the canvas draws and the picker uses, so
+                   the candidate list can't offer modules that aren't on screen. */
+                if (!bdd_module_view_contains(mi, g_ctx_module_wx, g_ctx_module_wy,
+                                              &area)) continue;
                 found[fn].idx = mi;
-                found[fn].area = (long)(cx2 - cx1 + 1) * (long)(cy2 - cy1 + 1);
+                found[fn].area = area;
                 fn++;
             }
             for (int a = 0; a < fn; a++)
@@ -224,34 +225,49 @@ void draw_world_context_overlay(void)
                     ImGui::TextDisabled("(%d, %d) - (%d, %d)", mx1, my1, mx2, my2);
                     ImGui::Separator();
 
-                    bool placed = false;
-                    int plane_count = bdd_stage_plane_count();
-                    for (int p = 0; p < plane_count && !placed; p++) {
-                        char pn[32];
-                        if (bdd_stage_plane_info(p, pn, sizeof pn, NULL, NULL, NULL, NULL) &&
-                            world_ctx_strcasecmp(pn, mn) == 0)
-                            placed = true;
-                    }
-                    if (!placed) {
-                        if (ImGui::MenuItem("Set as runtime location")) {
-                            stage_bgnd_create_module_placement(mn, mx1, my1);
-                            ImGui::CloseCurrentPopup();
-                        }
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip(
-                                "Stamps this module's current position as its BGND.ASM runtime "
-                                "placement -- adds a new *BMOD entry on the next free background "
-                                "plane, so it doesn't move when you switch to Runtime view.");
+                    /* One promote action, whether or not the module has ever
+                       been placed: stamp where it sits on the builder grid onto
+                       its BGND.ASM runtime placement. Only BGND.ASM is written,
+                       so no object changes module. */
+                    ModuleRuntimeInfo rt;
+                    module_runtime_info(m, &rt);
+                    if (rt.placed) {
+                        ImGui::TextDisabled("Runtime placement: %d,%d%s",
+                                            rt.runtime_x, rt.runtime_y,
+                                            (rt.drift_x || rt.drift_y) ? "" : "  (in sync)");
+                        if (rt.drift_x || rt.drift_y)
+                            ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.34f, 1.0f),
+                                               "Builder is %+d,%+d from runtime",
+                                               -rt.drift_x, -rt.drift_y);
                     } else {
-                        if (ImGui::MenuItem("Edit runtime placement...")) {
-                            g_show_modules = true;
-                            g_runtime_binding_jump_module = m;
-                            ImGui::CloseCurrentPopup();
-                        }
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Already placed -- opens the Modules panel with this "
-                                              "module selected in Edit runtime placement.");
+                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+                                           "Not placed at runtime yet");
                     }
+
+                    bool in_sync = rt.placed && !rt.drift_x && !rt.drift_y;
+                    if (in_sync) ImGui::BeginDisabled();
+                    if (ImGui::MenuItem(rt.placed ? "Promote this position to runtime"
+                                                  : "Place at runtime here")) {
+                        module_promote_position_to_runtime(m);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (in_sync) ImGui::EndDisabled();
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "Writes this module's current builder position (%d,%d) as its\n"
+                            "BGND.ASM runtime placement, so Runtime Layout and the game draw\n"
+                            "it where you just put it. Backs BGND.ASM up first; no BDB\n"
+                            "rectangle or object moves, so nothing changes module.",
+                            mx1, my1);
+
+                    if (ImGui::MenuItem("Edit runtime placement...")) {
+                        g_show_modules = true;
+                        g_runtime_binding_jump_module = m;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Opens Modules > Runtime with this module selected, for\n"
+                                          "typing an exact placement or promoting several at once.");
                     ImGui::Separator();
                     bool mod_selected = module_selection_get(m);
                     if (ImGui::MenuItem(mod_selected ? "Remove module highlight" : "Highlight module",

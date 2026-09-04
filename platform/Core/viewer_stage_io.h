@@ -22,6 +22,10 @@ int bdd_viewer_import_png_smoke_for_path(const char *png_path, const char *out_p
 int bdd_viewer_new_project_save_smoke(const char *out_prefix);
 int bdd_viewer_split_object_smoke_for_path(const char *arg);
 int bdd_viewer_compact_palettes_smoke_for_path(const char *arg);
+/* Checks that the module rectangle the canvas draws is the same rectangle the
+ * canvas pickers test, in both BDB Source and Runtime Layout, and that in
+ * Runtime Layout each frame actually lands on its own module's art. */
+int bdd_viewer_module_pick_smoke_for_path(const char *arg);
 
 #ifdef __cplusplus
 }

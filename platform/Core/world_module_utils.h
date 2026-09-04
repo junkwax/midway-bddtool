@@ -42,4 +42,16 @@ void module_selection_select_only(int module_idx);
 bool module_selection_bounds(int *x1, int *x2, int *y1, int *y2);
 int module_selection_translate(int dx, int dy);
 
+/* LOAD2 derives module ownership purely from which rectangle contains a sprite,
+ * so dragging an object across a module edge silently re-homes its art. Compare
+ * the pre-drag positions against the current ones and report how many objects
+ * changed owner, plus the names involved in the first one, so a drag that
+ * re-parents art can say so instead of doing it behind the user's back.
+ * Pure query: no undo, no UI, nothing written. */
+int module_ownership_changes(const int *before_depth, const int *before_sy,
+                             const int *mask, int capacity,
+                             char *from_name, int from_sz,
+                             char *to_name, int to_sz,
+                             int *first_obj_index);
+
 #endif

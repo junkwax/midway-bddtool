@@ -9,6 +9,7 @@
 #include "UI/sdl/sdl_object_picker.h"
 #include "UI/sdl/sdl_selection_rect.h"
 #include "UI/sdl/sdl_tooltip.h"
+#include "UI/view/toast_notifications.h"
 #include "undo_manager.h"
 
 #include <algorithm>
@@ -152,8 +153,13 @@ static int hit_selected_object_at(int wx, int wy)
     return -1;
 }
 
-/* Find the module rectangle under a world point. When rectangles overlap, the
-   smallest-area one wins so nested modules stay grabbable. */
+/* Find the module rectangle under a world point, using the rectangle the ACTIVE
+   view actually draws (bdd_module_view_bounds): the authored BDB rect in Source
+   view, the BGND.ASM runtime placement in Runtime Layout. Picking against the
+   authored rect while the canvas shows the runtime one is what made modules
+   selectable through boxes that are not on screen. When rectangles overlap, the
+   smallest-area one wins so nested modules stay grabbable.
+   ox1..oy2 are returned INCLUSIVE, matching parse_module_bounds. */
 static int hit_module_at(int wx, int wy, int *ox1, int *ox2, int *oy1, int *oy2)
 {
     int best = -1;
@@ -162,17 +168,17 @@ static int hit_module_at(int wx, int wy, int *ox1, int *ox2, int *oy1, int *oy2)
     if (!g_show_module_bounds) return -1;
     for (int m = 0; m < g_bdb_num_modules; m++) {
         int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
-        if (!parse_module_bounds(m, NULL, &x1, &x2, &y1, &y2)) continue;
-        if (x2 < x1 || y2 < y1) continue;
-        if (wx < x1 || wx > x2 || wy < y1 || wy > y2) continue;
-        long area = (long)(x2 - x1 + 1) * (long)(y2 - y1 + 1);
+        long area = 0;
+        if (!bdd_module_view_bounds(m, &x1, &y1, &x2, &y2)) continue;
+        if (wx < x1 || wx >= x2 || wy < y1 || wy >= y2) continue;
+        area = (long)(x2 - x1) * (long)(y2 - y1);
         if (best < 0 || area < best_area) {
             best = m;
             best_area = area;
             if (ox1) *ox1 = x1;
-            if (ox2) *ox2 = x2;
+            if (ox2) *ox2 = x2 - 1;
             if (oy1) *oy1 = y1;
-            if (oy2) *oy2 = y2;
+            if (oy2) *oy2 = y2 - 1;
         }
     }
     return best;
@@ -197,8 +203,9 @@ static int hit_module_drag_edge_at(int wx, int wy, int zoom,
 
     for (int m = 0; m < g_bdb_num_modules; m++) {
         int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
-        if (!parse_module_bounds(m, NULL, &x1, &x2, &y1, &y2)) continue;
-        if (x2 < x1 || y2 < y1) continue;
+        if (!bdd_module_view_bounds(m, &x1, &y1, &x2, &y2)) continue;
+        x2 -= 1;    /* exclusive -> inclusive edge for the tolerance band */
+        y2 -= 1;
         if (wx < x1 - tol || wx > x2 + tol ||
             wy < y1 - tol || wy > y2 + tol)
             continue;
@@ -217,6 +224,35 @@ static int hit_module_drag_edge_at(int wx, int wy, int zoom,
         }
     }
     return best;
+}
+
+/* LOAD2 decides module ownership from rectangle containment alone, so a drag
+   that crosses a module edge re-homes the art. Moving a module never does this
+   any more (runtime placements move in BGND.ASM, source rects stay disjoint),
+   but dragging an object still can -- say so rather than letting it happen
+   silently, since the undo entry is right there if it was not wanted. */
+static void report_module_ownership_changes(const int *before_depth,
+                                            const int *before_sy,
+                                            int capacity)
+{
+    char from_name[64] = "", to_name[64] = "";
+    int first = -1;
+    int changed = module_ownership_changes(before_depth, before_sy, g_sel_flags,
+                                           capacity, from_name, (int)sizeof from_name,
+                                           to_name, (int)sizeof to_name, &first);
+    if (changed <= 0)
+        return;
+
+    char msg[192];
+    if (changed == 1)
+        snprintf(msg, sizeof msg, "Object %d now belongs to %s (was %s)",
+                 first, to_name[0] ? to_name : "no module",
+                 from_name[0] ? from_name : "no module");
+    else
+        snprintf(msg, sizeof msg, "%d objects changed module (first: %s -> %s)",
+                 changed, from_name[0] ? from_name : "no module",
+                 to_name[0] ? to_name : "no module");
+    stage_set_toast(msg);
 }
 
 static int begin_module_drag(BddSdlMouseState *state, int module_idx,
@@ -789,6 +825,9 @@ void bdd_sdl_mouse_button_up(BddSdlMouseState *state,
         } else {
             g_dirty = 1;
         }
+        report_module_ownership_changes(state->obj_drag_depth_a,
+                                        state->obj_drag_sy_a,
+                                        state->obj_drag_capacity);
         if (last_obj) *last_obj = state->obj_drag_idx;
         state->obj_drag_idx = -1;
         state->obj_drag_use_position_delta = 0;

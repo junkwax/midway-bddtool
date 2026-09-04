@@ -7,41 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- The right-hand panels are now one fixed sidebar pinned to the window edge
-  instead of five separately draggable, snap-docking windows. Objects, Images,
-  Palettes, Regions/Modules and Stage are tabs in that sidebar, and each of them
-  is split into sub-tabs -- Assets/Tools, Colors/Slots/Tools,
-  Overview/Create/Edit/Runtime and so on -- so no single panel is one long wall
-  of controls. The sidebar resizes from its left edge, collapses to an icon
-  strip, remembers its width and section, and the canvas (zoom-to-fit, the
-  scrollbars, the minimap) now fits the space it leaves rather than sliding
-  underneath it.
-- The View menu's panel entries jump to the matching sidebar tab; every section
-  is always present, so nothing has to be switched on before it can be used.
-  "Snap Panels to Rails" is now "Reset Sidebar Width".
-
-### Added
-- `bddview --split-object-smoke FILE.BDB` -- headless check for Split Object. It
-  gives a stage's largest image three extra placements (mirrored, flipped and
-  rotated 180), splits all of them, and requires the composite to come back
-  pixel-identical, the source image to be freed, undo to restore the stage
-  exactly, and the all-placements split to leave less image data than splitting
-  one placement and keeping the source. Passes on all 50 shipped MK2 stages.
-- `bddview --compact-palettes-smoke FILE.BDB` -- headless check for palette
-  compaction. It plants a second placement of the stage's largest image under a
-  palette that is not that image's `pal_idx`, compacts, and requires the world
-  composite to come back colour-identical and the palette-entry total not to
-  grow. Fails on the pre-fix compactor (506, 3401 and 7516 pixels recoloured on
-  DEDPOOL, ARENA and ATRAX1); passes on all 50 shipped MK2 stages after it.
-
-### Removed
-- The pulsing orange "!" onboarding badges next to Import PNG, Place and Save in
-  simple mode. They appeared on launch as a bare exclamation mark whose only
-  explanation was a "Click to dismiss this tip" tooltip, so they flagged
-  something without ever saying what.
-
 ### Fixed
+- Module rectangles in Runtime Layout and Game Preview are now picked where they
+  are drawn. Drawing projected a module one way and the canvas hit-test another,
+  so clicks landed on rectangles that were nowhere on screen -- in Runtime Layout
+  the frame also drifted with the Game Preview camera while the objects inside it
+  did not, putting a 0.5x plane's frame 512px away from its own art after a
+  512px scroll. Drawing, hit-testing, the right-click module menu and the
+  Game Preview overlay all go through one `bdd_module_view_bounds` projection,
+  and the Runtime Layout frame is camera-independent like the art it encloses.
+- A module's runtime frame no longer shrinks off its own left/top edge when the
+  first block in its `*BLKS` table references an image the loaded BDD does not
+  have (FOREST's `wood7` lost its first block that way).
+- Game Preview picked the stage floor -- and anything else on a runtime floor Y
+  -- at the wrong height, because the hit-test used a plain `oy - g_game_view_y`
+  instead of the `bdd_object_game_screen_y` bias the renderer draws with.
+- Dragging a module body in Game Preview did nothing: the whole gesture was
+  gated behind a flag that was never set to true.
+- A module edit rejected for overlapping another module's source rectangle in
+  Game Preview was dropped silently; it now says why.
 - Split Object added bytes to a stage instead of saving them whenever the image
   was placed more than once. It cut the tiles with the chosen placement's flip
   baked into the pixels, so the tiles only served that one orientation and every
@@ -77,6 +61,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `share_media_exe_path` looked for `/proc/self/exe`, which macOS does not
   have, so it re-invoked nothing and the bundle silently came out without them.
   Uses `_NSGetExecutablePath` there.
+
+### Changed
+- Moving a module in Runtime Layout or Game Preview now writes its BGND.ASM
+  runtime placement instead of its BDB rectangle. Runtime placements may overlap
+  freely -- planes stack at runtime by design -- and because no rectangle and no
+  object moves, nothing can be re-assigned to the module it is laying over.
+  Dragging a runtime frame's edge slides the placement; a selected module can
+  also be dragged by its body. Source rectangles still have to stay disjoint,
+  since LOAD2 derives ownership from rectangle containment alone.
+- Dragging an *object* across a module edge still re-homes it, as LOAD2 requires,
+  but now says so ("Object 12 now belongs to PLANE4 (was PLANE3)") instead of
+  changing ownership silently.
+- Promoting a builder position to runtime is one action with one name. Modules >
+  Runtime opens with a "Promote builder position to runtime" table showing every
+  module's builder position, runtime placement and the delta between them, with
+  a per-row Promote/Place button and bulk buttons for the moved and the
+  never-placed. The world-view right-click menu and the Game Preview panel call
+  the same action, replacing "Set as runtime location", "Re-bind all N
+  not-placed modules", "Sync All From Builder", "Sync This From Builder" and the
+  "Enable source-layout offset sync" checkbox that hid the bulk write behind an
+  unexplained gate.
+- The right-hand panels are now one fixed sidebar pinned to the window edge
+  instead of five separately draggable, snap-docking windows. Objects, Images,
+  Palettes, Regions/Modules and Stage are tabs in that sidebar, and each of them
+  is split into sub-tabs -- Assets/Tools, Colors/Slots/Tools,
+  Overview/Create/Edit/Runtime and so on -- so no single panel is one long wall
+  of controls. The sidebar resizes from its left edge, collapses to an icon
+  strip, remembers its width and section, and the canvas (zoom-to-fit, the
+  scrollbars, the minimap) now fits the space it leaves rather than sliding
+  underneath it.
+- The View menu's panel entries jump to the matching sidebar tab; every section
+  is always present, so nothing has to be switched on before it can be used.
+  "Snap Panels to Rails" is now "Reset Sidebar Width".
+
+### Added
+- `bddview --module-pick-smoke FILE.BDB` -- headless check that the module
+  rectangle the canvas draws is the rectangle its pickers test. Requires each
+  module's view rect to be non-empty and to pick itself back at its own centre,
+  the BDB Source rect to be the authored rect exactly, a Runtime Layout frame to
+  overlap the art of the objects it owns, and a Runtime Layout frame not to move
+  when the preview camera does. Fails on the pre-fix projection (FOREST, TOWER2
+  and BATTLE frames all follow a 512px camera move); passes on all 50 shipped
+  MK2 stages after it.
+- `bddview --split-object-smoke FILE.BDB` -- headless check for Split Object. It
+  gives a stage's largest image three extra placements (mirrored, flipped and
+  rotated 180), splits all of them, and requires the composite to come back
+  pixel-identical, the source image to be freed, undo to restore the stage
+  exactly, and the all-placements split to leave less image data than splitting
+  one placement and keeping the source. Passes on all 50 shipped MK2 stages.
+- `bddview --compact-palettes-smoke FILE.BDB` -- headless check for palette
+  compaction. It plants a second placement of the stage's largest image under a
+  palette that is not that image's `pal_idx`, compacts, and requires the world
+  composite to come back colour-identical and the palette-entry total not to
+  grow. Fails on the pre-fix compactor (506, 3401 and 7516 pixels recoloured on
+  DEDPOOL, ARENA and ATRAX1); passes on all 50 shipped MK2 stages after it.
+
+### Removed
+- The pulsing orange "!" onboarding badges next to Import PNG, Place and Save in
+  simple mode. They appeared on launch as a bare exclamation mark whose only
+  explanation was a "Click to dismiss this tip" tooltip, so they flagged
+  something without ever saying what.
 
 ## [1.0.30] - 2026-08-11
 

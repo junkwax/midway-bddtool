@@ -239,91 +239,37 @@ struct GameViewModuleRect {
     bool locked;
 };
 
-static bool game_view_name_ieq(const char *a, const char *b)
+/* Dragging an object across a module edge re-homes its art, because LOAD2 reads
+   ownership from rectangle containment alone. Moving a module no longer does
+   this (runtime placements move in BGND.ASM and source rects stay disjoint),
+   but an object drag still can, so report it instead of doing it silently. */
+static void game_view_report_module_ownership_changes(const int *before_depth,
+                                                      const int *before_sy,
+                                                      int capacity)
 {
-    if (!a || !b) return false;
-    for (; *a && *b; a++, b++) {
-        char ca = *a;
-        char cb = *b;
-        if (ca >= 'a' && ca <= 'z') ca = (char)(ca - 32);
-        if (cb >= 'a' && cb <= 'z') cb = (char)(cb - 32);
-        if (ca != cb) return false;
-    }
-    return *a == *b;
+    char from_name[64] = "", to_name[64] = "";
+    int first = -1;
+    int changed = module_ownership_changes(before_depth, before_sy, g_sel_flags,
+                                           capacity, from_name, (int)sizeof from_name,
+                                           to_name, (int)sizeof to_name, &first);
+    if (changed <= 0)
+        return;
+
+    char msg[192];
+    if (changed == 1)
+        snprintf(msg, sizeof msg, "Object %d now belongs to %s (was %s)",
+                 first, to_name[0] ? to_name : "no module",
+                 from_name[0] ? from_name : "no module");
+    else
+        snprintf(msg, sizeof msg, "%d objects changed module (first: %s -> %s)",
+                 changed, from_name[0] ? from_name : "no module",
+                 to_name[0] ? to_name : "no module");
+    stage_set_toast(msg);
 }
 
-static void game_view_strip_bmod_suffix(const char *name, char *out, size_t out_sz)
-{
-    if (!out || out_sz == 0) return;
-    out[0] = '\0';
-    if (!name) return;
-    snprintf(out, out_sz, "%s", name);
-    size_t n = strlen(out);
-    if (n >= 4 && game_view_name_ieq(out + n - 4, "BMOD"))
-        out[n - 4] = '\0';
-}
-
-static int game_view_find_stage_plane(const char *module_name, int *ox, int *oy,
-                                      float *scroll, int *plane_idx)
-{
-    char want[64] = "";
-    game_view_strip_bmod_suffix(module_name, want, sizeof want);
-    if (!want[0])
-        return 0;
-
-    int n = bdd_stage_plane_count();
-    for (int p = 0; p < n; p++) {
-        char pn[64] = "";
-        int px = 0, py = 0;
-        float ps = 1.0f;
-        if (!bdd_stage_plane_info(p, pn, sizeof pn, &px, &py, &ps, NULL))
-            continue;
-        char plane_base[64] = "";
-        game_view_strip_bmod_suffix(pn, plane_base, sizeof plane_base);
-        if (!game_view_name_ieq(want, plane_base))
-            continue;
-        if (ox) *ox = px;
-        if (oy) *oy = py;
-        if (scroll) *scroll = ps;
-        if (plane_idx) *plane_idx = p;
-        return 1;
-    }
-    return 0;
-}
-
-static bool game_view_module_block_bounds(const char *module_name,
-                                          int *x1, int *x2,
-                                          int *y1, int *y2)
-{
-    static BddBgndBlock blocks[768];
-    int n = bdd_stage_module_blocks(module_name, blocks,
-                                    (int)(sizeof blocks / sizeof blocks[0]));
-    if (n <= 0)
-        return false;
-
-    int bx1 = INT_MAX, bx2 = INT_MIN;
-    int by1 = INT_MAX, by2 = INT_MIN;
-    for (int i = 0; i < n; i++) {
-        int hdr = blocks[i].hdr;
-        if (hdr < 0 || hdr >= g_ni)
-            continue;
-        Img *im = &g_img[hdr];
-        if (im->w <= 0 || im->h <= 0)
-            continue;
-        if (blocks[i].x < bx1) bx1 = blocks[i].x;
-        if (blocks[i].y < by1) by1 = blocks[i].y;
-        if (blocks[i].x + im->w > bx2) bx2 = blocks[i].x + im->w;
-        if (blocks[i].y + im->h > by2) by2 = blocks[i].y + im->h;
-    }
-    if (bx1 == INT_MAX || bx2 == INT_MIN || by1 == INT_MAX || by2 == INT_MIN)
-        return false;
-    if (x1) *x1 = bx1;
-    if (x2) *x2 = bx2;
-    if (y1) *y1 = by1;
-    if (y2) *y2 = by2;
-    return true;
-}
-
+/* Screen rect for a module inside the 400x254 preview viewport. The runtime
+   projection comes from bdd_module_runtime_screen_rect so the rect the picker
+   below tests is byte-for-byte the rect drawn on screen. */
 static bool game_view_project_module_rect(int module_idx,
                                           float gx, float gy, int zoom,
                                           GameViewModuleRect *out)
@@ -339,10 +285,6 @@ static bool game_view_project_module_rect(int module_idx,
     if (out->x2 < out->x1 || out->y2 < out->y1)
         return false;
 
-    int ox = 0;
-    int oy = 0;
-    int plane_idx = -1;
-    float scroll = 1.0f;
     int local_w = out->x2 - out->x1 + 1;
     int local_h = out->y2 - out->y1 + 1;
     float z = (float)(zoom > 0 ? zoom : 1);
@@ -350,29 +292,15 @@ static bool game_view_project_module_rect(int module_idx,
     out->runtime_ox = 0;
     out->runtime_oy = 0;
 
-    out->runtime = game_view_find_stage_plane(out->name, &ox, &oy,
-                                              &scroll, &plane_idx) != 0;
-    out->runtime_ox = ox;
-    out->runtime_oy = oy;
+    int rx1 = 0, ry1 = 0, rx2 = 0, ry2 = 0;
+    out->runtime = bdd_module_runtime_screen_rect(module_idx, &rx1, &ry1, &rx2, &ry2) != 0;
     if (out->runtime) {
-        int bx1 = 0, bx2 = local_w, by1 = 0, by2 = local_h;
-        int start_x = 0, start_y = 0;
-        int scroll_origin_x = 0;
-        bdd_get_stage_start_camera(&start_x, &start_y);
-        scroll_origin_x = start_x;
-        if (plane_idx >= 0)
-            bdd_stage_plane_scroll_origin(plane_idx, &scroll_origin_x);
-        if (!game_view_module_block_bounds(out->name, &bx1, &bx2, &by1, &by2)) {
-            bx1 = 0;
-            by1 = 0;
-            bx2 = local_w;
-            by2 = local_h;
-        }
-        int parallax = scroll_origin_x + (int)((float)(g_scroll_pos - start_x) * scroll);
-        out->sx1 = gx + (float)(ox + bx1 - parallax) * z;
-        out->sy1 = gy + (float)(oy + by1 - g_game_view_y) * z;
-        out->sx2 = gx + (float)(ox + bx2 - parallax) * z;
-        out->sy2 = gy + (float)(oy + by2 - g_game_view_y) * z;
+        bdd_module_runtime_placement(module_idx, &out->runtime_ox, &out->runtime_oy,
+                                     NULL, NULL);
+        out->sx1 = gx + (float)rx1 * z;
+        out->sy1 = gy + (float)ry1 * z;
+        out->sx2 = gx + (float)rx2 * z;
+        out->sy2 = gy + (float)ry2 * z;
         return true;
     }
 
@@ -393,8 +321,13 @@ static void game_view_rewrite_module_bounds(int module_idx, const char *name,
     char line[256];
     snprintf(line, sizeof line, "%s %d %d %d %d",
              (name && name[0]) ? name : "MOD", x1, x2, y1, y2);
-    if (!editor_project_set_module_line(module_idx, line))
+    if (!editor_project_set_module_line(module_idx, line)) {
+        /* LOAD2 assigns objects to the first module rectangle that contains
+           them, so overlapping source rects would silently re-home art. Say so
+           instead of dropping the edit on the floor. */
+        stage_set_toast("Source module rectangles can't overlap; objects stay with their module");
         return;
+    }
     sync_bdb_header_counts();
     g_dirty = 1;
     g_view_changed = 1;
@@ -534,9 +467,15 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
     long hot_area = 0;
     long hot_body_area = 0;
     float tol = 7.0f;
-    bool allow_module_body_move = false;
     if (zoom > 2) tol = 8.0f;
 
+    /* A runtime-placed module's rectangle here IS its BGND.ASM placement, not
+       its authored BDB rectangle. Dragging it therefore moves the placement:
+       grabbing the frame edge slides it, and the BDB rect (and every object's
+       module membership) is left alone, so placements may overlap freely.
+       Only modules with no runtime placement fall back to editing the source
+       rectangle, where LOAD2 still requires the rects to stay disjoint. */
+    bool mouse_free = !blocked && hov && g_cur_tool == 0;
     for (int m = 0; m < g_bdb_num_modules; m++) {
         GameViewModuleRect r;
         if (!game_view_project_module_rect(m, gx, gy, zoom, &r))
@@ -546,22 +485,34 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
             continue;
         }
 
-        int handle = (!blocked && hov && g_cur_tool == 0)
-            ? game_view_module_handle_at(&r, mouse, tol)
-            : GV_MOD_HANDLE_NONE;
+        long area = (long)(r.x2 - r.x1 + 1) * (long)(r.y2 - r.y1 + 1);
+        int handle = mouse_free ? game_view_module_handle_at(&r, mouse, tol)
+                                : GV_MOD_HANDLE_NONE;
+
+        if (r.runtime) {
+            bool in_body = module_selection_get(m) &&
+                           mouse.x >= r.sx1 && mouse.x <= r.sx2 &&
+                           mouse.y >= r.sy1 && mouse.y <= r.sy2;
+            if (mouse_free && !s_resize && !s_move &&
+                (handle != GV_MOD_HANDLE_NONE || in_body) &&
+                (hot_body_mod < 0 || area < hot_body_area)) {
+                hot_body_mod = m;
+                hot_body_area = area;
+            }
+            rects.push_back(r);
+            continue;
+        }
+
         if (handle != GV_MOD_HANDLE_NONE) {
-            long area = (long)(r.x2 - r.x1 + 1) * (long)(r.y2 - r.y1 + 1);
             if (hot_mod < 0 || area < hot_area) {
                 hot_mod = m;
                 hot_handle = handle;
                 hot_area = area;
             }
         }
-        if (allow_module_body_move &&
-            !s_resize && !s_move && !blocked && hov && g_cur_tool == 0 &&
+        if (!s_resize && !s_move && mouse_free &&
             module_selection_get(m) &&
             game_view_module_body_contains(&r, mouse, tol)) {
-            long area = (long)(r.x2 - r.x1 + 1) * (long)(r.y2 - r.y1 + 1);
             if (hot_body_mod < 0 || area < hot_body_area) {
                 hot_body_mod = m;
                 hot_body_area = area;
@@ -597,8 +548,7 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
         }
     }
 
-    if (allow_module_body_move &&
-        !s_resize && !s_move && hot_body_mod >= 0 && !blocked && hov &&
+    if (!s_resize && !s_move && hot_body_mod >= 0 && !blocked && hov &&
         g_cur_tool == 0 && ImGui::IsMouseClicked(0)) {
         GameViewModuleRect *hot_rect = NULL;
         for (size_t i = 0; i < rects.size(); i++) {
@@ -705,9 +655,19 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
         }
         if (s_move_started && (dx != 0 || dy != 0)) {
             if (s_move_runtime) {
-                stage_bgnd_set_module_offset(s_move_name,
-                                             s_move_runtime_ox + dx,
-                                             s_move_runtime_oy + dy);
+                /* BGND.ASM only: no BDB rectangle moves, so no object changes
+                   module and runtime placements are free to overlap. */
+                if (stage_bgnd_set_module_offset(s_move_name,
+                                                 s_move_runtime_ox + dx,
+                                                 s_move_runtime_oy + dy)) {
+                    bdd_invalidate_stage_module_cache();
+                    g_view_changed = 1;
+                    char msg[128];
+                    snprintf(msg, sizeof msg, "%s runtime placement %d,%d",
+                             s_move_name, s_move_runtime_ox + dx,
+                             s_move_runtime_oy + dy);
+                    stage_set_toast(msg);
+                }
             } else {
                 undo_save_ex("Move Module Frame");
                 game_view_rewrite_module_bounds(s_move_mod, s_move_name,
@@ -803,12 +763,13 @@ static bool draw_game_view_module_resize_overlay(ImDrawList *dl,
         ImGui::SetTooltip("Drag module edge to resize; drag a corner to resize width and height.");
         return true;
     }
-    if (allow_module_body_move &&
-        hot_body_mod >= 0 && !blocked && hov && g_cur_tool == 0) {
+    if (hot_body_mod >= 0 && !blocked && hov && g_cur_tool == 0) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
         if (ImGui::IsMouseDown(0))
             return true;
-        ImGui::SetTooltip("Drag inside the selected module to move its runtime placement.");
+        ImGui::SetTooltip("Drag to move this module's runtime placement.\n"
+                          "Writes its BGND.ASM offset only -- the BDB rectangle and\n"
+                          "every object stay put, so placements may overlap freely.");
         return true;
     }
     return false;
@@ -939,7 +900,11 @@ void draw_game_view_overlay(void)
     ImVec2      mpos = ImGui::GetIO().MousePos;
     bool        hov  = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 
-    /* hit-test: find topmost object under screen pos (mx, my) */
+    /* hit-test: find topmost object under screen pos (mx, my). The local origin
+       has to be computed exactly the way bdd_object_screen_rect draws it --
+       including bdd_object_game_screen_y, which biases the stage floor by the
+       start camera. Using a plain oy - g_game_view_y here made the floor (and
+       anything else on a runtime floor Y) pick where it is NOT drawn. */
     auto hit_obj = [&](float mx, float my) -> int {
         for (int i = g_no - 1; i >= 0; i--) {
             if (g_obj_hidden[i]) continue;
@@ -950,7 +915,7 @@ void draw_game_view_overlay(void)
             float f  = bdd_object_game_scroll_factor(i);
             gv_object_origin(i, &ox, &oy);
             int local_x = ox - (int)(g_scroll_pos * f);
-            int local_y = oy - g_game_view_y;
+            int local_y = bdd_object_game_screen_y(i, oy);
             int px = (int)((mx - gx) / (float)g_zoom);
             int py = (int)((my - gy) / (float)g_zoom);
             if (bg_editor_object_hit_test_at(i, local_x, local_y, px, py))
@@ -1209,6 +1174,10 @@ void draw_game_view_overlay(void)
                                                           object_cap,
                                                           "Move");
         }
+        if (s_drag && !s_cam_drag && s_moved)
+            game_view_report_module_ownership_changes(s_init_depth.data(),
+                                                      s_init_sy.data(),
+                                                      object_cap);
         s_drag = false;
         s_drag_idx = -1;
         s_use_position_delta = false;
