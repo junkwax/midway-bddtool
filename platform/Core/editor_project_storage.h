@@ -54,6 +54,12 @@ int editor_project_delete_object_slot(int obj_i);
 int editor_project_move_object_slot(int src, int dst);
 int editor_project_sort_objects_by_layer_order(void);
 int editor_project_delete_module_line(int module_i);
+/* True if setting module except_module's line to `line` would overlap some
+ * OTHER existing module's rectangle. Pure query: does not write anything, so
+ * callers can dry-run a batch of moves and only commit if all would succeed
+ * (see the module-drag path, which must keep every rectangle's write in
+ * lockstep with its member objects' positions). */
+int editor_project_module_line_would_overlap(const char *line, int except_module);
 int editor_project_set_module_line(int module_i, const char *line);
 int editor_project_set_single_module_line(const char *line);
 

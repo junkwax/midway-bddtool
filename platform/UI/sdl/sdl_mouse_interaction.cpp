@@ -226,18 +226,25 @@ static int hit_module_drag_edge_at(int wx, int wy, int zoom,
     return best;
 }
 
-/* LOAD2 decides module ownership from rectangle containment alone, so a drag
-   that crosses a module edge re-homes the art. Moving a module never does this
-   any more (runtime placements move in BGND.ASM, source rects stay disjoint),
-   but dragging an object still can -- say so rather than letting it happen
-   silently, since the undo entry is right there if it was not wanted. */
+/* LOAD2 decides module ownership from rectangle containment alone (first
+   module in file order wins), so a drag that crosses a module edge re-homes
+   the art. Source rects are NOT always disjoint -- deliberately nested or
+   overlapping modules are a real, supported pattern (see
+   module_smallest_containing's own comment, and any project with a big
+   module whose box happens to enclose a smaller one placed earlier in file
+   order) -- so this can fire for a module drag exactly as easily as an
+   object drag. Say so rather than letting it happen silently: the undo entry
+   is right there if it was not wanted, and if it WAS wanted, module reorder
+   (Modules panel, "Move Up"/"Move Down" in assignment priority) is how to
+   make it stick without fighting the next drag. */
 static void report_module_ownership_changes(const int *before_depth,
                                             const int *before_sy,
+                                            const int *mask,
                                             int capacity)
 {
     char from_name[64] = "", to_name[64] = "";
     int first = -1;
-    int changed = module_ownership_changes(before_depth, before_sy, g_sel_flags,
+    int changed = module_ownership_changes(before_depth, before_sy, mask,
                                            capacity, from_name, (int)sizeof from_name,
                                            to_name, (int)sizeof to_name, &first);
     if (changed <= 0)
@@ -292,6 +299,7 @@ static int begin_module_drag(BddSdlMouseState *state, int module_idx,
     state->module_drag_y1 = my1;
     state->module_drag_y2 = my2;
     state->module_drag_undo_saved = 0;
+    state->module_drag_blocked = 0;
     return 1;
 }
 
@@ -366,6 +374,37 @@ static void module_drag_apply(BddSdlMouseState *state, int mouse_x, int mouse_y,
         state->module_drag_undo_saved = 1;
     }
 
+    /* Module rectangles must stay disjoint (see editor_project_set_module_line),
+       so a write toward an overlap is rejected and the rectangle stays put. If
+       member objects moved anyway they'd visually separate from a module that
+       silently stopped following the mouse -- the exact "objects get pushed out"
+       complaint. Dry-run every candidate line first so a single rejected module
+       (when several are dragged together) can't leave some rectangles moved and
+       others not; only commit the writes -- and the object positions -- when
+       the whole batch would succeed, so rectangle and objects always move in
+       lockstep: a drag toward an overlap just stops, like hitting a wall. */
+    bool would_reject = false;
+    for (int mi = 0; mi < g_bdb_num_modules && mi < (int)s_module_drag_mask.size() && !would_reject; mi++) {
+        char name[64] = "";
+        if (!s_module_drag_mask[(size_t)mi]) continue;
+        if (!parse_module_bounds(mi, name, NULL, NULL, NULL, NULL)) continue;
+        char line[256];
+        snprintf(line, sizeof line, "%s %d %d %d %d", name,
+                 s_module_drag_x1[(size_t)mi] + dwx,
+                 s_module_drag_x2[(size_t)mi] + dwx,
+                 s_module_drag_y1[(size_t)mi] + dwy,
+                 s_module_drag_y2[(size_t)mi] + dwy);
+        if (editor_project_module_line_would_overlap(line, mi))
+            would_reject = true;
+    }
+    if (would_reject) {
+        if (!state->module_drag_blocked) {
+            stage_set_toast("Module bounds would overlap another module; stopped at the boundary");
+            state->module_drag_blocked = 1;
+        }
+        return;
+    }
+    state->module_drag_blocked = 0;
     for (int mi = 0; mi < g_bdb_num_modules && mi < (int)s_module_drag_mask.size(); mi++) {
         char name[64] = "";
         if (!s_module_drag_mask[(size_t)mi]) continue;
@@ -800,6 +839,23 @@ void bdd_sdl_mouse_button_up(BddSdlMouseState *state,
         if (state->module_drag_undo_saved) {
             g_dirty = 1;
             if (last_obj && g_hl_obj >= 0) *last_obj = g_hl_obj;
+            /* Same silent-reassignment risk a plain object drag already
+               warns about (see the comment on report_module_ownership_changes)
+               - dragging the RECTANGLE moves its member objects by the same
+               delta, and if that now also falls inside an earlier module's
+               box, LOAD2 hands them to that module instead. Widen the byte
+               mask this file tracks module membership with into the int mask
+               the shared comparison expects. */
+            int cap = state->obj_drag_capacity;
+            if (cap > (int)s_module_drag_obj_mask.size())
+                cap = (int)s_module_drag_obj_mask.size();
+            std::vector<int> member_mask((size_t)(cap > 0 ? cap : 0), 0);
+            for (int i = 0; i < cap; i++)
+                member_mask[(size_t)i] = s_module_drag_obj_mask[(size_t)i] ? 1 : 0;
+            report_module_ownership_changes(state->obj_drag_depth_a,
+                                            state->obj_drag_sy_a,
+                                            cap > 0 ? member_mask.data() : NULL,
+                                            cap);
         }
         state->module_drag_idx = -1;
         SDL_CaptureMouse(SDL_FALSE);
@@ -827,6 +883,7 @@ void bdd_sdl_mouse_button_up(BddSdlMouseState *state,
         }
         report_module_ownership_changes(state->obj_drag_depth_a,
                                         state->obj_drag_sy_a,
+                                        g_sel_flags,
                                         state->obj_drag_capacity);
         if (last_obj) *last_obj = state->obj_drag_idx;
         state->obj_drag_idx = -1;

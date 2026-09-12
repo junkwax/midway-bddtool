@@ -73,8 +73,7 @@ static int editor_project_next_capacity(int current, int minimum)
    overlap therefore silently reassigns art based on file order.  Keep authored
    modules disjoint so ownership changes only when an object is explicitly
    dragged out of its current bounds (or otherwise moved individually). */
-static int editor_project_module_line_overlaps_existing(const char *line,
-                                                        int except_module)
+int editor_project_module_line_would_overlap(const char *line, int except_module)
 {
     char name[64] = "";
     int x1 = 0, x2 = 0, y1 = 0, y2 = 0;
@@ -607,7 +606,7 @@ int editor_project_append_module_line(const char *line)
 int editor_project_insert_module_line_before_enclosing(const char *line,
                                                         int x1, int x2, int y1, int y2)
 {
-    if (editor_project_module_line_overlaps_existing(line, -1))
+    if (editor_project_module_line_would_overlap(line, -1))
         return -1;
     if (!editor_project_append_module_line(line))
         return -1;
@@ -633,7 +632,7 @@ int editor_project_set_module_line(int module_i, const char *line)
 {
     if (!line || !editor_project_storage_init() || !g_bdb_modules) return 0;
     if (module_i < 0 || module_i >= g_bdb_num_modules) return 0;
-    if (editor_project_module_line_overlaps_existing(line, module_i))
+    if (editor_project_module_line_would_overlap(line, module_i))
         return 0;
     snprintf(g_bdb_modules[module_i], sizeof g_bdb_modules[module_i], "%s", line);
     return 1;

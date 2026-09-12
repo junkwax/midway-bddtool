@@ -43,6 +43,7 @@ typedef struct BddSdlMouseState {
     int module_drag_y1;
     int module_drag_y2;
     int module_drag_undo_saved; /* lazy undo/member snapshot on first move */
+    int module_drag_blocked;    /* 1 once this drag has hit an overlap wall (toast-once) */
 } BddSdlMouseState;
 
 int bdd_sdl_mouse_state_init(BddSdlMouseState *state);
