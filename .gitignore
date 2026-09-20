@@ -72,6 +72,8 @@ screenshot.*
 !CHANGELOG.md
 !CONTRIBUTING.md
 !mk2_background_deep_dive.md
+!docs/UI_REDESIGN_AUDIT.md
+!docs/STUDIO.md
 
 # Runtime generated
 /cfg/
@@ -79,6 +81,11 @@ screenshot.*
 /snap/
 __pycache__/
 *.pyc
+*.bddstudio
+*.bddstudio-saving
+*.studio-tmp
+*.studio-apply-tmp
+*.studio-backup
 bddview_layout.ini
 bddview_right_panels.cfg
 bddview_sidebar.cfg

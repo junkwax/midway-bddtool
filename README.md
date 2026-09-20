@@ -4,7 +4,21 @@
 Midway BDB/BDD background data. It focuses on background layout, palette use,
 block-image editing, and MK2-style LOAD2 authoring checks.
 
-![midway-bddtool screenshot](screenshot.jpg)
+The default launch now opens **BDD Studio**, the rebuilt stage placement
+workspace. It has a live composition canvas, layers, inspector, asset tray,
+fractional zoom, camera preview, and independent undo history per document.
+Launch `bddview --studio-demo` to try it with generated sample artwork, or
+`bddview path/to/stage.BDB` to edit a background.
+
+Layer transforms are saved in a `.bddstudio` file alongside the BDB/BDD pair.
+**Build & Check** can prepare a reviewed export for an existing game stage,
+apply its source files with backups, and run the checkout's full `build.py`
+with a live log. ROM packaging and emulator verification still use the game's
+workflow. Pixel, palette and IMG/LOD tools remain available through
+`bddview --legacy-ui [file.BDB]`.
+See [the Studio guide](docs/STUDIO.md) for controls, saving, and current limits.
+
+![Original specialist editor, available through --legacy-ui](screenshot.jpg)
 
 This public repository contains code, documentation, and the README screenshot
 only. It intentionally does not include ROMs, proprietary game assets, stock
@@ -14,6 +28,8 @@ working material in ignored folders such as `.local-private/`, `tmp/`, or
 `reference/`.
 
 ## Highlights
+
+The original specialist workspace retains the following tools:
 
 - SDL2 background viewer with zoom, pan, game-preview layout, minimap, rulers,
   grids, object labels, layer filters, and composite PNG export.

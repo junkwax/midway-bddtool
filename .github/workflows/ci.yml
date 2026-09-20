@@ -46,6 +46,15 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel 2
 
+      - name: Studio document tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Studio canvas interaction smoke
+        if: runner.os == 'Linux'
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: ./build/bddview --studio-smoke "${RUNNER_TEMP}/studio-ui"
+
       - name: Smoke test (headless CLI)
         shell: bash
         run: |

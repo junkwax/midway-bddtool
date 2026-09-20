@@ -21,6 +21,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(SDL2 REQUIRED)
 
+# Shared, renderer-independent format and authoring libraries.
+add_library(bdd_core STATIC platform/Core/utils/bdd_core.cpp platform/Core/utils/bdd_metadata.cpp)
+target_include_directories(bdd_core PUBLIC platform)
+add_library(bdd_studio_document STATIC platform/Core/studio_document.cpp platform/Core/studio_game_export.cpp platform/Core/studio_game_build.cpp)
+target_link_libraries(bdd_studio_document PUBLIC bdd_core)
+if(MSVC)
+    target_compile_definitions(bdd_core PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_definitions(bdd_studio_document PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/Core")
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/platform/Core/app_version_resource.h.in"
@@ -34,11 +44,12 @@ endif()
 
 add_executable(bddview
     bddview.cpp
+    platform/UI/studio/studio_app.cpp
+    platform/UI/studio/studio_runtime_adapter.cpp
+    platform/UI/studio/studio_export_smoke.cpp
     platform/bg_editor.cpp
     platform/Core/utils/app_diagnostics.cpp
     platform/Core/mk2_shared_paths.cpp
-    platform/Core/utils/bdd_core.cpp
-    platform/Core/utils/bdd_metadata.cpp
     platform/Core/bdd_metadata_editor.cpp
     platform/Core/utils/command_utils.cpp
     platform/Core/editor_bridge.cpp
@@ -237,6 +248,7 @@ target_include_directories(bddview PRIVATE
 )
 
 target_compile_definitions(bddview PRIVATE BDDVIEW_VERSION="${PROJECT_VERSION}")
+target_link_libraries(bddview PRIVATE bdd_studio_document)
 
 if(TARGET SDL2::SDL2)
     target_link_libraries(bddview PRIVATE SDL2::SDL2)
@@ -300,11 +312,23 @@ if(APPLE)
 endif()
 
 # ── bddtool: headless CLI (no SDL, no ImGui) ──────────────────────────
-add_executable(bddtool platform/bddtool_cli.cpp platform/Core/utils/bdd_core.cpp)
+add_executable(bddtool platform/bddtool_cli.cpp)
+target_link_libraries(bddtool PRIVATE bdd_core)
 target_include_directories(bddtool PRIVATE platform)
 if(MSVC)
     target_compile_options(bddtool PRIVATE /W3)
     target_compile_definitions(bddtool PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
     target_compile_options(bddtool PRIVATE -Wall -Wextra)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(studio_document_tests tests/studio_document_tests.cpp)
+    target_link_libraries(studio_document_tests PRIVATE bdd_studio_document)
+    add_test(NAME studio_document COMMAND studio_document_tests "${CMAKE_CURRENT_BINARY_DIR}/studio-test-data")
+    add_executable(studio_game_export_tests tests/studio_game_export_tests.cpp)
+    target_link_libraries(studio_game_export_tests PRIVATE bdd_studio_document)
+    add_test(NAME studio_game_export COMMAND studio_game_export_tests "${CMAKE_CURRENT_BINARY_DIR}/studio-export-test-data")
+    add_test(NAME studio_runtime_export COMMAND bddview --studio-export-smoke "${CMAKE_CURRENT_BINARY_DIR}/studio-runtime-test-data")
 endif()

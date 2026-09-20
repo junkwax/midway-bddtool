@@ -1204,6 +1204,19 @@ static void bdd_parse_stage_dlists(const char *path, const char *dlists_label,
             rank += 10;
             continue;
         }
+        /* Additional actor lists (for example ghost_lst) are ordinary
+           list/world-coordinate pairs. They consume a slot too; stopping
+           here would leave later background planes with an unknown rank. */
+        const char *operand = bdd_bgnd_asm_active_directive(line, ".long");
+        const char *coordinate = operand ? strchr(operand, ',') : NULL;
+        if (coordinate) {
+            coordinate++;
+            while (isspace((unsigned char)*coordinate)) coordinate++;
+            if (strncasecmp(coordinate, "worldtlx", 8) == 0) {
+                rank += 10;
+                continue;
+            }
+        }
         /* 0 or any non-display-list entry ends the background. */
         break;
     }

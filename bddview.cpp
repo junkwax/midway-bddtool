@@ -31,6 +31,7 @@
 #include "Core/viewer_cli_commands.h"
 #include "Core/viewer_stage_io.h"
 #include "Core/path_utils.h"
+#include "UI/studio/studio_app.h"
 #include "UI/overlays/sdl_alignment_guides.h"
 #include "UI/assets/app_icon.h"
 #include "UI/sdl/sdl_path_input.h"
@@ -665,6 +666,17 @@ void BddViewApp::shutdown()
 
 int main(int argc, char *argv[])
 {
+    if (argc == 3 && strcmp(argv[1], "--studio-export-smoke") == 0)
+        return studio::game_export_smoke(argv[2], "", "");
+    if (argc == 5 && strcmp(argv[1], "--studio-export-smoke") == 0)
+        return studio::game_export_smoke(argv[2], argv[3], argv[4]);
+    if (argc <= 1 || argv[1][0] != '-' || strcmp(argv[1], "--studio-smoke") == 0 ||
+        strcmp(argv[1], "--studio-demo") == 0)
+        return studio::run(argc, argv);
+    if (strcmp(argv[1], "--legacy-ui") == 0) {
+        --argc;
+        ++argv;
+    }
     BddViewApp app;
     int ret = app.init(argc, argv);
     if (ret != 0 || !app.should_run()) return ret;
