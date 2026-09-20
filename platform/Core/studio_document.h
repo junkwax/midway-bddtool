@@ -8,6 +8,9 @@
 #include <vector>
 
 namespace studio {
+struct OptimizationPlan;
+struct PatternOptions;
+struct PatternPlan;
 
 using ObjectId = uint64_t;
 struct Point {
@@ -111,10 +114,13 @@ class Document {
     bool set_start(int x, int y, int ground);
     bool import_rgba(const std::string &name, int width, int height, const uint8_t *rgba,
                      std::string &error, int &image_id);
+    bool apply_optimization(const OptimizationPlan &plan, std::string &error);
+    bool apply_pattern(const PatternPlan &plan, std::string &error);
     // Read-only legacy runtime adapter seeds defaults once, before any editing.
     void seed_runtime(const std::vector<Plane> &planes, int start_x, int start_y, int ground);
 
   private:
+    friend PatternPlan preview_pattern(const Document &, const PatternOptions &);
     struct Edit {
         std::string label;
         State before, after;

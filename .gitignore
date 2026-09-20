@@ -74,6 +74,7 @@ screenshot.*
 !mk2_background_deep_dive.md
 !docs/UI_REDESIGN_AUDIT.md
 !docs/STUDIO.md
+!docs/OPTIMIZE.md
 
 # Runtime generated
 /cfg/

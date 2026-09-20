@@ -415,7 +415,7 @@ bool prepare_game_export(const Document &document, const std::string &game_root,
         const auto root = fs::canonical(fs::u8path(game_root));
         const auto folder = fs::weakly_canonical(fs::u8path(package_folder));
         check(!fs::exists(root / ".bddstudio-applying"),
-              "The game checkout has an unfinished Studio apply. Follow "
+              "The game checkout has an unfinished bddtool apply. Follow "
               ".bddstudio-applying/RECOVERY.txt first.");
         const auto name = document.state().name;
         check(std::regex_match(name, std::regex("[A-Za-z_][A-Za-z0-9_]{0,7}")),
@@ -498,7 +498,7 @@ bool prepare_game_export(const Document &document, const std::string &game_root,
             << "\nApply updates these source files with backups. Then run the game's full build.py "
                "(LOAD2 + assembly), followed by its normal ROM packaging and emulator check.\n"
             << "A BBB> entry was found in data/*.LOD; the chosen game build must actually include "
-               "that LOD. No ROM addresses or deployment paths are invented by Studio.\n";
+               "that LOD. No ROM addresses or deployment paths are invented by bddtool.\n";
         out.report = report.str();
         write(folder / "REVIEW.txt", out.report);
         std::ostringstream diff;
@@ -523,7 +523,7 @@ bool apply_game_export(GameExport &package, std::string &error) {
         const auto root = fs::canonical(fs::u8path(package.root)),
                    folder = fs::canonical(fs::u8path(package.folder));
         auto lock = root / ".bddstudio-applying";
-        check(!fs::exists(lock), "Another Studio apply is active or unfinished in this checkout.");
+        check(!fs::exists(lock), "Another bddtool apply is active or unfinished in this checkout.");
         check(!fs::exists(folder / "APPLYING.txt"),
               "This export has an unfinished apply transaction. Restore its backups first.");
         for (const auto &file : package.files) {
@@ -547,7 +547,7 @@ bool apply_game_export(GameExport &package, std::string &error) {
             journal << (file.existed ? "RESTORE " : "NEW ") << std::quoted(dest.u8string()) << ' '
                     << std::quoted(backup.u8string()) << '\n';
         }
-        check(fs::create_directory(lock), "Another Studio apply is active in this checkout.");
+        check(fs::create_directory(lock), "Another bddtool apply is active in this checkout.");
         size_t installed = 0;
         try {
             write(lock / "RECOVERY.txt",

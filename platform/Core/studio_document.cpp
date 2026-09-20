@@ -1,4 +1,5 @@
 #include "Core/studio_document.h"
+#include "Core/studio_optimizer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -691,6 +692,44 @@ bool Document::import_rgba(const std::string &name, int w, int h, const uint8_t 
     return true;
 }
 
+bool Document::apply_optimization(const OptimizationPlan &plan, std::string &error) {
+    if (active_ || plan.before.revision != state_.revision || plan.before.assets != state_.assets) {
+        error = "The document changed since analysis. Scan again before applying.";
+        return false;
+    }
+    if (!plan.verified || plan.changes.empty() || !verify_optimization(plan, error)) {
+        if (error.empty())
+            error = "No verified optimization to apply.";
+        return false;
+    }
+    begin("Optimize stage losslessly");
+    state_ = plan.after;
+    for (const auto &object : state_.objects)
+        next_id_ = std::max(next_id_, object.id + 1);
+    touch();
+    commit();
+    return true;
+}
+
+bool Document::apply_pattern(const PatternPlan &plan, std::string &error) {
+    if (active_ || plan.before.revision != state_.revision || plan.before.assets != state_.assets) {
+        error = "The document changed. Preview the pattern again before applying.";
+        return false;
+    }
+    if (!plan.valid || !verify_pattern(plan, error)) {
+        if (error.empty())
+            error = "No valid pattern preview to apply.";
+        return false;
+    }
+    begin("Repeat or mirror artwork");
+    state_ = plan.packing.after;
+    for (const auto &object : state_.objects)
+        next_id_ = std::max(next_id_, object.id + 1);
+    touch();
+    commit();
+    return true;
+}
+
 BddCoreStage Document::export_stage(std::vector<Plane> &planes) const {
     BddCoreStage out;
     out.has_bdb = state_.has_bdb;
@@ -915,7 +954,7 @@ bool Document::save(const std::string &path, std::string &error, bool recovery) 
                 fs::copy_file(f.target, f.backup, fs::copy_options::overwrite_existing);
         {
             std::ofstream out(journal);
-            out << "BDD Studio interrupted-save recovery. Restore each existing target from its "
+            out << "bddtool interrupted-save recovery. Restore each existing target from its "
                    "backup.\n";
             for (const auto &f : files)
                 out << std::quoted(f.target.u8string()) << ' ' << f.existed << ' '

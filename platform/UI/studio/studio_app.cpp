@@ -5,6 +5,8 @@
 #include "Core/studio_game_export.h"
 #include "Core/studio_game_build.h"
 #include "Core/studio_animation.h"
+#include "Core/studio_optimizer.h"
+#include <future>
 #include <fstream>
 #include "libs/stb_image.h"
 #include "libs/stb_image_write.h"
@@ -59,6 +61,27 @@ struct Tab {
     std::string animation_root;
     bool show_animation = true, play_animation = true;
     double animation_seconds = 0;
+    OptimizeOptions optimize_options;
+    std::shared_ptr<OptimizeProgress> optimize_progress;
+    std::future<OptimizationPlan> optimize_job;
+    std::unique_ptr<OptimizationPlan> optimize_plan;
+    int optimize_choice = 0, optimize_palette = 0;
+    bool optimize_static_palettes = false, optimize_cuts = true;
+    int optimize_mode = 0, pattern_palette = 0;
+    PatternOptions pattern_options;
+    std::future<PatternPlan> pattern_job;
+    std::unique_ptr<PatternPlan> pattern_plan;
+    bool pattern_differences = false;
+    float pattern_zoom = 1.0f;
+    State pattern_source_cache;
+    std::shared_ptr<const AssetBank> pattern_input;
+    uint64_t pattern_revision = 0;
+    int pattern_source_plane = -2;
+    std::string pattern_source_error;
+    ~Tab() {
+        if (optimize_progress)
+            optimize_progress->cancel = true;
+    }
 };
 struct AssetPayload {
     uint64_t tab;
@@ -109,6 +132,7 @@ class App {
     SDL_Renderer *renderer = nullptr;
     TextureCache textures;
     TextureCache animation_textures;
+    TextureCache optimize_before_textures, optimize_after_textures;
     std::vector<std::unique_ptr<Tab>> tabs;
     int active = -1, page = 0, select_tab = -1;
     uint64_t next_tab = 1;
@@ -367,7 +391,7 @@ class App {
     }
     void menu() {
         if (ImGui::BeginMenuBar()) {
-            ImGui::TextColored(accent, "BDD STUDIO");
+            ImGui::TextColored(accent, "bddtool");
             ImGui::Separator();
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("New stage", "Ctrl+N"))
@@ -453,21 +477,22 @@ class App {
             t->document.redo();
         }
         ImGui::EndDisabled();
-        float right = ImGui::GetWindowWidth() - 335;
+        float right = ImGui::GetWindowWidth() - 425;
         if (right > ImGui::GetCursorPosX() + 320)
             ImGui::SameLine(right);
         else
             ImGui::SameLine(0, 22);
-        const char *pages[] = {"Stage", "Assets", "Build & Check"};
-        for (int i = 0; i < 3; i++) {
+        const char *pages[] = {"Stage", "Assets", "Optimize", "Build & Check"};
+        const int page_ids[] = {0, 1, 3, 2};
+        for (int i = 0; i < 4; i++) {
             if (i)
                 ImGui::SameLine(0, 4);
-            bool selected = page == i;
+            bool selected = page == page_ids[i];
             if (selected)
                 ImGui::PushStyleColor(ImGuiCol_Button, accent_surface(.45f));
-            if (ImGui::Button(pages[i], ImVec2(i == 2 ? 126.0f : 80.0f, 30))) {
+            if (ImGui::Button(pages[i], ImVec2(i == 3 ? 126.0f : 80.0f, 30))) {
                 cancel_gesture();
-                page = i;
+                page = page_ids[i];
             }
             if (selected)
                 ImGui::PopStyleColor();
@@ -1175,6 +1200,506 @@ class App {
         }
         ImGui::Separator();
     }
+    void start_optimization(Tab &t) {
+        t.optimize_progress = std::make_shared<OptimizeProgress>();
+        auto progress = t.optimize_progress;
+        auto doc = t.document;
+        auto options = t.optimize_options;
+        t.optimize_static_palettes = false;
+        t.optimize_job =
+            std::async(std::launch::async, [doc = std::move(doc), options, progress]() {
+                return find_lossless_savings(doc, options, progress.get());
+            });
+    }
+    void optimize(Tab &t) {
+        if (ImGui::RadioButton("Lossless savings", t.optimize_mode == 0))
+            t.optimize_mode = 0;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Repeat & Mirror", t.optimize_mode == 1))
+            t.optimize_mode = 1;
+        ImGui::Separator();
+        if (t.optimize_mode == 1) {
+            pattern_workshop(t);
+            return;
+        }
+        heading("Find lossless savings",
+                "Explore smaller representations of exactly the same artwork.");
+        bool busy = t.optimize_job.valid();
+        ImGui::BeginDisabled(busy || t.pattern_job.valid() || t.document.transaction_active() ||
+                             !t.document.state().has_bdb);
+        if (ImGui::Button("Find savings"))
+            start_optimization(t);
+        ImGui::SameLine();
+        ImGui::Checkbox("Deep search", &t.optimize_options.deep);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(175);
+        ImGui::Combo("##opt-policy", &t.optimize_options.policy,
+                     "Smallest video data\0Balanced\0Fewer placements\0");
+        if (ImGui::CollapsingHeader("Search limits")) {
+            ImGui::Checkbox("Try compact palette copies", &t.optimize_options.compact_palettes);
+            ImGui::SetNextItemWidth(180);
+            ImGui::SliderInt("Pieces per image", &t.optimize_options.max_pieces, 1, 16);
+            ImGui::SetNextItemWidth(180);
+            ImGui::SliderInt("Additional placements", &t.optimize_options.max_added_objects, 0,
+                             256);
+            ImGui::SetNextItemWidth(180);
+            ImGui::SliderInt("Total palette cap", &t.optimize_options.max_palettes, 1, 256);
+            ImGui::TextWrapped("The default palette cap is 45 from the reviewed game budget. "
+                               "This counts stored palettes, not measured runtime usage. "
+                               "Increasing it needs a game-specific budget check.");
+        }
+        ImGui::EndDisabled();
+        if (busy) {
+            int done = t.optimize_progress->done, total = t.optimize_progress->total;
+            ImGui::ProgressBar(total ? (float)done / total : 0, ImVec2(280, 0));
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel scan"))
+                t.optimize_progress->cancel = true;
+        }
+        if (!t.optimize_plan) {
+            ImGui::Spacing();
+            ImGui::TextWrapped(
+                "Searches palette-aware cuts, cropped regions, repeated subdivisions, "
+                "and horizontal/vertical mirror reuse. Review a reconstruction before applying; "
+                "the original artwork stays editable while the scan runs.");
+            return;
+        }
+        auto &plan = *t.optimize_plan;
+        if (!plan.error.empty()) {
+            ImGui::TextWrapped("%s", plan.error.c_str());
+            return;
+        }
+        bool current = plan.before.assets == t.document.state().assets &&
+                       plan.before.revision == t.document.state().revision;
+        if (!current)
+            ImGui::TextColored(accent, "Document changed. Scan again to apply a new proposal.");
+        double saved = (double)(plan.baseline.video_bits - plan.proposed.video_bits) / 8;
+        ImGui::TextColored(
+            accent, "Estimated video data: %.1f KB -> %.1f KB  |  %.1f KB saved (%.1f%%)",
+            plan.baseline.video_bits / 8192.0, plan.proposed.video_bits / 8192.0, saved / 1024.0,
+            plan.baseline.video_bits ? saved * 800 / plan.baseline.video_bits : 0);
+        ImGui::Text("Placements %d -> %d    Images %d -> %d    Palettes %d -> %d",
+                    plan.baseline.objects, plan.proposed.objects, plan.baseline.images,
+                    plan.proposed.images, plan.baseline.palettes, plan.proposed.palettes);
+        ImGui::Text("Table estimate %llu -> %llu B    Palette data %llu -> %llu B",
+                    (unsigned long long)plan.baseline.table_bytes,
+                    (unsigned long long)plan.proposed.table_bytes,
+                    (unsigned long long)plan.baseline.palette_bytes,
+                    (unsigned long long)plan.proposed.palette_bytes);
+        ImGui::TextWrapped(
+            "Video estimates assume auto BPP, zero compression and 16-bit alignment. "
+            "LOAD2 output, bank space, and runtime object/DMA peaks still need build "
+            "verification.");
+        if (ImGui::Button("Copy analysis report"))
+            ImGui::SetClipboardText(optimization_report(plan).c_str());
+        bool reindexed = std::any_of(plan.changes.begin(), plan.changes.end(),
+                                     [](const auto &c) { return c.reindexed; });
+        if (reindexed) {
+            ImGui::Checkbox("Affected palettes are static (not cycled or swapped by game code)",
+                            &t.optimize_static_palettes);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Exact RGB555 pixels are proven for every current placement palette. "
+                    "Runtime palette animation cannot be inferred from BDB/BDD alone. Disable "
+                    "compact palette copies for index-preserving proposals.");
+        }
+        ImGui::BeginDisabled(busy || !current || !plan.verified || plan.changes.empty() ||
+                             (reindexed && !t.optimize_static_palettes));
+        if (ImGui::Button("Apply verified proposal")) {
+            if (t.document.apply_optimization(plan, error)) {
+                t.selected.clear();
+                t.asset = 0;
+                toast("Optimization applied. Undo restores all artwork, palettes and placements.");
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", plan.verified ? "Exact reconstruction passed"
+                                                : "Reconstruction not verified");
+        if (plan.changes.empty()) {
+            ImGui::TextWrapped("No net savings found within these limits. Try Deep search or a "
+                               "different placement/palette budget.");
+            return;
+        }
+        t.optimize_choice = std::clamp(t.optimize_choice, 0, (int)plan.changes.size() - 1);
+        ImGui::BeginChild("opt-candidates", ImVec2(215, 280), ImGuiChildFlags_Border);
+        for (size_t i = 0; i < plan.changes.size(); i++) {
+            const auto &c = plan.changes[i];
+            char label[100];
+            std::snprintf(label, sizeof label, "Image %d: %zu pieces##%zu", c.source_image,
+                          c.pieces.size(), i);
+            if (ImGui::Selectable(label, t.optimize_choice == (int)i)) {
+                t.optimize_choice = (int)i;
+                t.optimize_palette = 0;
+            }
+        }
+        ImGui::EndChild();
+        ImGui::SameLine();
+        ImGui::BeginChild("opt-preview", ImVec2(0, 280), ImGuiChildFlags_Border);
+        const auto &change = plan.changes[t.optimize_choice];
+        std::vector<int> variants;
+        for (const auto &kv : change.pieces.front().palettes)
+            variants.push_back(kv.first);
+        t.optimize_palette = std::clamp(t.optimize_palette, 0, (int)variants.size() - 1);
+        int pi = variants[t.optimize_palette];
+        ImGui::Text("Source palette %d: %s", pi, plan.before.assets->data.palettes[pi].name);
+        if (variants.size() > 1) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Next palette"))
+                t.optimize_palette = (t.optimize_palette + 1) % (int)variants.size();
+        }
+        ImGui::Checkbox("Show cuts, BPP and shared tile IDs", &t.optimize_cuts);
+        const auto &images = plan.before.assets->data.images;
+        auto it = std::find_if(images.begin(), images.end(),
+                               [&](const auto &im) { return im.idx == change.source_image; });
+        int trimmed = it->w * it->h;
+        for (const auto &piece : change.pieces)
+            trimmed -= piece.w * piece.h;
+        ImGui::TextDisabled("%d transparent pixels trimmed from stored regions", trimmed);
+        float half = (ImGui::GetContentRegionAvail().x - 18) / 2;
+        auto origin = ImGui::GetCursorScreenPos();
+        float scale = std::min(half / it->w, 190.0f / it->h);
+        auto draw = ImGui::GetWindowDrawList();
+        optimize_before_textures.renderer = optimize_after_textures.renderer = renderer;
+        auto tex = optimize_before_textures.get(plan.before, (int)(it - images.begin()), pi);
+        ImVec2 a(origin.x, origin.y + 20), b(a.x + it->w * scale, a.y + it->h * scale);
+        draw->AddText(origin, IM_COL32_WHITE, "Original");
+        draw->AddRectFilled(a, b, IM_COL32(30, 35, 43, 255));
+        if (tex)
+            draw->AddImage((ImTextureID)(intptr_t)tex, a, b);
+        origin.x += half + 18;
+        a.x += half + 18;
+        b.x += half + 18;
+        draw->AddText(origin, IM_COL32_WHITE, "Exact reconstruction");
+        draw->AddRectFilled(a, b, IM_COL32(30, 35, 43, 255));
+        for (const auto &p : change.pieces) {
+            const auto &after = plan.after.assets->data.images;
+            auto tile = std::find_if(after.begin(), after.end(),
+                                     [&](const auto &im) { return im.idx == p.image; });
+            auto image = optimize_after_textures.get(plan.after, (int)(tile - after.begin()),
+                                                     p.palettes.at(pi));
+            ImVec2 lo(a.x + p.x * scale, a.y + p.y * scale),
+                hi(lo.x + p.w * scale, lo.y + p.h * scale);
+            if (image)
+                draw->AddImage((ImTextureID)(intptr_t)image, lo, hi,
+                               ImVec2(p.flip_x ? 1.0f : 0.0f, p.flip_y ? 1.0f : 0.0f),
+                               ImVec2(p.flip_x ? 0.0f : 1.0f, p.flip_y ? 0.0f : 1.0f));
+            int bpp = bdd_core_load2_bpp_for_max_pixel(
+                bdd_core_image_max_pixel(tile->pix.data(), tile->w, tile->h));
+            if (t.optimize_cuts) {
+                ImU32 color = IM_COL32(70 + (p.image * 37) % 150, 110 + (p.image * 17) % 140,
+                                       150 + (p.image * 11) % 100, 255);
+                draw->AddRect(lo, hi, color, 0, 0, 1.5f);
+                char tag[48];
+                std::snprintf(tag, sizeof tag, "%d:%db %s%s", p.image, bpp, p.flip_x ? "X" : "",
+                              p.flip_y ? "Y" : "");
+                draw->PushClipRect(lo, hi, true);
+                draw->AddText(ImVec2(lo.x + 3, lo.y + 2), color, tag);
+                draw->PopClipRect();
+            }
+            if (ImGui::IsMouseHoveringRect(lo, hi))
+                ImGui::SetTooltip("Shared tile %d | %d x %d | %d BPP\n%s%s", p.image, p.w, p.h, bpp,
+                                  p.flip_x ? "X flip " : "", p.flip_y ? "Y flip" : "");
+        }
+        ImGui::Dummy(ImVec2(half * 2 + 18, 220));
+        ImGui::EndChild();
+        if (ImGui::CollapsingHeader("Skipped artwork and model details"))
+            ImGui::TextWrapped("%s", optimization_report(plan).c_str());
+    }
+    void start_pattern(Tab &t, bool suggest = false) {
+        auto doc = t.document;
+        t.pattern_job = std::async(
+            std::launch::async, [doc = std::move(doc), options = t.pattern_options, suggest]() {
+                return suggest ? suggest_pattern(doc, options) : preview_pattern(doc, options);
+            });
+        t.pattern_plan.reset();
+    }
+    void pattern_workshop(Tab &t) {
+        heading("Repeat & Mirror", "Try a reusable spike group or a mirrored pillar side.");
+        ImGui::TextWrapped(
+            "This changes artwork. Review the silhouette and shading before applying. "
+            "Use a whole layer to replace unique spike objects with a repeated group.");
+        const auto &state = t.document.state();
+        if (!state.assets || state.assets->data.images.empty())
+            return;
+        if (!ImGui::BeginTable("pattern-workspace", 2,
+                               ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable))
+            return;
+        ImGui::TableSetupColumn("Controls", ImGuiTableColumnFlags_WidthFixed, 330);
+        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        auto &o = t.pattern_options;
+        bool busy = t.pattern_job.valid(), changed = false;
+        ImGui::BeginDisabled(busy || t.optimize_job.valid());
+        int scope = o.plane < 0 ? 0 : 1;
+        ImGui::SetNextItemWidth(270);
+        if (ImGui::Combo("Scope", &scope, "One image (all uses)\0Whole layer\0")) {
+            o.plane =
+                scope ? std::clamp(t.plane, 0, std::max(0, (int)state.planes.size() - 1)) : -1;
+            changed = true;
+        }
+        const State *source_state = &state;
+        if (o.plane >= 0) {
+            ImGui::SetNextItemWidth(270);
+            if (ImGui::BeginCombo("Layer", o.plane < (int)state.planes.size()
+                                               ? state.planes[o.plane].name.c_str()
+                                               : "Choose layer")) {
+                for (size_t i = 0; i < state.planes.size(); i++)
+                    if (ImGui::Selectable(state.planes[i].name.c_str(), o.plane == (int)i)) {
+                        o.plane = (int)i;
+                        changed = true;
+                    }
+                ImGui::EndCombo();
+            }
+            if (t.pattern_input != state.assets || t.pattern_revision != state.revision ||
+                t.pattern_source_plane != o.plane) {
+                t.pattern_source_error.clear();
+                t.pattern_source_cache = pattern_source(state, o.plane, t.pattern_source_error);
+                t.pattern_input = state.assets;
+                t.pattern_revision = state.revision;
+                t.pattern_source_plane = o.plane;
+                changed = true;
+            }
+            if (!t.pattern_source_cache.assets) {
+                ImGui::EndDisabled();
+                ImGui::TextWrapped("%s", t.pattern_source_error.c_str());
+                ImGui::EndTable();
+                return;
+            }
+            source_state = &t.pattern_source_cache;
+            o.image = source_state->assets->data.images.back().idx;
+            ImGui::TextWrapped(
+                "The layer is composed in draw order. The chosen group repeats over "
+                "its full artwork bounds. Other layers keep their original artwork.");
+        }
+        auto find_source = [&]() -> const BddCoreImage * {
+            for (const auto &im : source_state->assets->data.images)
+                if (im.idx == o.image)
+                    return &im;
+            return nullptr;
+        };
+        auto source = find_source();
+        if (!source) {
+            t.pattern_plan.reset();
+            o.image = state.assets->data
+                          .images[std::clamp(t.asset, 0, (int)state.assets->data.images.size() - 1)]
+                          .idx;
+            source = find_source();
+        }
+        if (o.plane < 0) {
+            ImGui::SetNextItemWidth(270);
+            auto label = "Image " + std::to_string(o.image) + "  (" + std::to_string(source->w) +
+                         " x " + std::to_string(source->h) + ")";
+            if (ImGui::BeginCombo("Artwork", label.c_str())) {
+                for (const auto &im : state.assets->data.images) {
+                    auto name = "Image " + std::to_string(im.idx) + "  (" + std::to_string(im.w) +
+                                " x " + std::to_string(im.h) + ")";
+                    if (ImGui::Selectable(name.c_str(), im.idx == o.image)) {
+                        o.image = im.idx;
+                        changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::Button("Use selected artwork")) {
+                const auto *selected =
+                    t.selected.empty() ? nullptr : t.document.object(t.selected[0]);
+                o.image = selected ? selected->object.ii
+                                   : state.assets->data
+                                         .images[std::clamp(
+                                             t.asset, 0, (int)state.assets->data.images.size() - 1)]
+                                         .idx;
+                changed = true;
+            }
+        }
+        source = find_source();
+        int mode = (int)o.mode;
+        ImGui::SetNextItemWidth(270);
+        if (ImGui::Combo(
+                "Method", &mode,
+                "Repeat across X\0Repeat across Y\0Mirror left/right\0Mirror top/bottom\0")) {
+            o.mode = (PatternMode)mode;
+            changed = true;
+        }
+        bool vertical = mode == 1 || mode == 3, repeat = mode < 2;
+        int length = vertical ? source->h : source->w, unit = vertical ? 1 : 4;
+        int span = std::clamp(o.span / unit, 1, std::max(1, length / unit));
+        int offset = std::clamp(o.offset / unit, 0, std::max(0, length / unit - span));
+        if (repeat) {
+            int pixels = span * unit;
+            ImGui::SetNextItemWidth(205);
+            if (ImGui::SliderInt(vertical ? "Group height" : "Group width", &pixels, unit,
+                                 std::max(unit, length / unit * unit), "%d px")) {
+                span = std::max(1, (pixels + unit / 2) / unit);
+                changed = true;
+            }
+            offset = std::min(offset, std::max(0, length / unit - span));
+            pixels = offset * unit;
+            ImGui::SetNextItemWidth(205);
+            if (ImGui::SliderInt(vertical ? "Source Y" : "Source X", &pixels, 0,
+                                 std::max(0, length - span * unit), "%d px")) {
+                offset = (pixels + unit / 2) / unit;
+                changed = true;
+            }
+            changed |= ImGui::Checkbox("Alternate mirrored groups", &o.alternate_flip);
+            ImGui::TextWrapped("Use %d pixels starting at %d; repeat to fill the artwork bounds.",
+                               span * unit, offset * unit);
+        } else
+            changed |=
+                ImGui::Checkbox(vertical ? "Keep bottom side" : "Keep right side", &o.use_far_side);
+        changed |= o.span != span * unit || o.offset != offset * unit;
+        o.span = span * unit;
+        o.offset = offset * unit;
+        if (changed) {
+            t.pattern_plan.reset();
+            t.pattern_palette = 0;
+        }
+        if (ImGui::Button("Preview pattern & savings")) {
+            start_pattern(t);
+        }
+        if (repeat) {
+            if (ImGui::Button("Find closest group"))
+                start_pattern(t, true);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Samples source groups at this size and favors fewer changed pixels, "
+                    "with extra weight for silhouette changes. Review the result before applying.");
+        }
+        ImGui::EndDisabled();
+        if (busy)
+            ImGui::TextDisabled("Building preview and checking reusable pieces...");
+        ImGui::TableSetColumnIndex(1);
+        auto *plan = t.pattern_plan.get();
+        if (plan && !plan->valid)
+            ImGui::TextWrapped("%s", plan->error.c_str());
+        bool current =
+            plan && plan->before.assets == state.assets && plan->before.revision == state.revision;
+        if (plan && plan->valid) {
+            auto original = optimization_budget(plan->before);
+            const auto &packed = plan->packing.proposed;
+            double delta = ((double)original.video_bits - packed.video_bits) / 8;
+            ImGui::TextColored(accent, "%llu changed pixels (%.1f%%)",
+                               (unsigned long long)plan->changed_pixels,
+                               100.0 * plan->changed_pixels / (source->w * source->h));
+            ImGui::Text("%llu silhouette pixels | %d placements affected",
+                        (unsigned long long)plan->silhouette_pixels, plan->uses);
+            ImGui::Text("Estimated stage video: %.1f -> %.1f KB | %+.0f bytes saved",
+                        original.video_bits / 8192.0, packed.video_bits / 8192.0, delta);
+            ImGui::TextWrapped(
+                "Placements %d -> %d | Tables %llu -> %llu B | Palette indices preserved",
+                original.objects, packed.objects, (unsigned long long)original.table_bytes,
+                (unsigned long long)packed.table_bytes);
+            ImGui::TextWrapped(
+                "Savings include the proposed split and reuse. These are modeled bytes; "
+                "packed ROM and runtime costs still need build verification.");
+            if (!current)
+                ImGui::TextColored(accent, "Document changed. Generate a fresh preview to apply.");
+            ImGui::BeginDisabled(busy || t.optimize_job.valid() || !current ||
+                                 t.document.transaction_active() ||
+                                 (!plan->changed_pixels && plan->packing.changes.empty()));
+            if (ImGui::Button("Apply artwork change + reuse")) {
+                if (t.document.apply_pattern(*plan, error)) {
+                    t.selected.clear();
+                    t.asset = 0;
+                    toast("Pattern and reuse applied. Undo restores the original artwork and "
+                          "placements.");
+                }
+            }
+            ImGui::EndDisabled();
+        }
+        // The unpacked preview has the same geometry; the packing verifier proves its
+        // reconstruction.
+        const State &before = plan && plan->valid ? plan->source : *source_state;
+        auto it = std::find_if(before.assets->data.images.begin(), before.assets->data.images.end(),
+                               [&](const auto &im) { return im.idx == o.image; });
+        if (it == before.assets->data.images.end()) {
+            ImGui::EndTable();
+            return;
+        }
+        int slot = (int)(it - before.assets->data.images.begin());
+        std::vector<int> variants;
+        for (const auto &p : before.objects)
+            if (p.object.ii == o.image && p.object.fl >= 0 &&
+                p.object.fl < (int)before.assets->data.palettes.size() &&
+                std::find(variants.begin(), variants.end(), p.object.fl) == variants.end())
+                variants.push_back(p.object.fl);
+        if (variants.empty()) {
+            ImGui::EndTable();
+            return;
+        }
+        t.pattern_palette = std::clamp(t.pattern_palette, 0, (int)variants.size() - 1);
+        int pi = variants[t.pattern_palette];
+        ImGui::Text("Palette %d: %s", pi, before.assets->data.palettes[pi].name);
+        if (variants.size() > 1) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Next palette"))
+                t.pattern_palette = (t.pattern_palette + 1) % (int)variants.size();
+        }
+        ImGui::Checkbox("Highlight changed pixels", &t.pattern_differences);
+        ImGui::SetNextItemWidth(150);
+        ImGui::SliderFloat("Preview zoom", &t.pattern_zoom, 1, 4, "%.1fx");
+        bool stacked = it->w > it->h * 4;
+        float available = std::max(1.0f, ImGui::GetContentRegionAvail().x - 12);
+        float half = stacked ? available : (available - 18) / 2;
+        float scale = std::min(half / it->w, 220.0f / it->h) * t.pattern_zoom;
+        half = std::max(half, it->w * scale);
+        ImGui::BeginChild("pattern-images", ImVec2(0, 290), ImGuiChildFlags_Border,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        auto origin = ImGui::GetCursorScreenPos();
+        auto draw = ImGui::GetWindowDrawList();
+        optimize_before_textures.renderer = optimize_after_textures.renderer = renderer;
+        for (int side = 0; side < 2; side++) {
+            ImVec2 a(origin.x + (stacked ? 0 : side * (half + 18)),
+                     origin.y + 22 + (stacked ? side * (it->h * scale + 40) : 0));
+            ImVec2 b(a.x + it->w * scale, a.y + it->h * scale);
+            draw->AddText(ImVec2(a.x, a.y - 22), IM_COL32_WHITE,
+                          side ? "Proposed artwork" : "Original / source group");
+            draw->AddRectFilled(a, b, IM_COL32(30, 35, 43, 255));
+            bool proposed = side && plan && plan->valid;
+            auto &cache = side ? optimize_after_textures : optimize_before_textures;
+            auto tex = cache.get(proposed ? plan->packing.before : before, slot, pi);
+            if (tex)
+                draw->AddImage((ImTextureID)(intptr_t)tex, a, b);
+            if (!side) {
+                float start = repeat ? (float)o.offset : o.use_far_side ? length / 2.0f : 0;
+                float span_px = repeat ? (float)o.span : length / 2.0f;
+                ImVec2 lo = a, hi = b;
+                if (vertical) {
+                    lo.y += start * scale;
+                    hi.y = lo.y + span_px * scale;
+                } else {
+                    lo.x += start * scale;
+                    hi.x = lo.x + span_px * scale;
+                }
+                draw->AddRect(lo, hi, selection_color, 0, 0, 2.0f);
+            }
+            if (proposed && t.pattern_differences) {
+                const auto &painted = plan->packing.before.assets->data.images[slot];
+                const auto &pal = before.assets->data.palettes[pi];
+                auto different = [&](size_t pos) {
+                    auto p = it->pix[pos], q = painted.pix[pos];
+                    return (p == 0) != (q == 0) || (p && q && pal.rgb555[p] != pal.rgb555[q]);
+                };
+                for (int y = 0; y < it->h; y++)
+                    for (int x = 0; x < it->w; x++) {
+                        if (!different((size_t)y * it->w + x))
+                            continue;
+                        int end = x + 1;
+                        while (end < it->w && different((size_t)y * it->w + end))
+                            end++;
+                        draw->AddRectFilled(ImVec2(a.x + x * scale, a.y + y * scale),
+                                            ImVec2(a.x + end * scale, a.y + (y + 1) * scale),
+                                            IM_COL32(255, 90, 160, 150));
+                        x = end - 1;
+                    }
+            }
+        }
+        ImGui::Dummy(
+            ImVec2(stacked ? half : half * 2 + 18, (stacked ? 2 : 1) * (40 + it->h * scale)));
+        ImGui::EndChild();
+        ImGui::EndTable();
+    }
     void checks(Tab &t) {
         heading("Build & Check", "Review your layout, apply it to the game, and follow the build.");
         if (!t.document.notice().empty())
@@ -1548,8 +2073,32 @@ class App {
     }
     uint64_t session_stamp = 0;
     void frame() {
-        for (auto &t : tabs)
+        for (auto &t : tabs) {
             t->game_build.poll();
+            if (t->pattern_job.valid() &&
+                t->pattern_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                try {
+                    auto result = t->pattern_job.get();
+                    if (result.options.image == t->pattern_options.image) {
+                        if (result.valid)
+                            t->pattern_options = result.options;
+                        t->pattern_plan = std::make_unique<PatternPlan>(std::move(result));
+                    }
+                } catch (const std::exception &e) {
+                    error = e.what();
+                }
+            }
+            if (t->optimize_job.valid() &&
+                t->optimize_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                try {
+                    t->optimize_plan = std::make_unique<OptimizationPlan>(t->optimize_job.get());
+                    t->optimize_choice = 0;
+                    t->optimize_palette = 0;
+                } catch (const std::exception &e) {
+                    error = e.what();
+                }
+            }
+        }
         if (auto *t = tab())
             if (page == 0 && !t->source && t->show_animation && t->play_animation &&
                 t->animation.ready() && t->animation_root == t->game_root)
@@ -1558,7 +2107,7 @@ class App {
         clean_selection();
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-        ImGui::Begin("Studio", nullptr,
+        ImGui::Begin("bddtool", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar |
                          ImGuiWindowFlags_NoBringToFrontOnFocus);
@@ -1572,6 +2121,8 @@ class App {
                 stage(*t);
             else if (page == 1)
                 assets(*t, true);
+            else if (page == 3)
+                optimize(*t);
             else
                 checks(*t);
         } else
@@ -1659,13 +2210,14 @@ struct InteractionSmoke {
         auto *p = app.tab()->document.object(id);
         int expected = initial_x + (frame == 20 ? 0 : 32);
         if (!p || p->object.depth != expected) {
-            std::fprintf(stderr, "Studio interaction failed at frame %d: expected X %d, got %d\n",
+            std::fprintf(stderr, "bddtool interaction failed at frame %d: expected X %d, got %d\n",
                          frame, expected, p ? p->object.depth : -999);
             return false;
         }
         if (frame == 27)
             std::fprintf(
-                stderr, "Studio canvas drag, keyboard undo/redo and Escape cancellation passed.\n");
+                stderr,
+                "bddtool canvas drag, keyboard undo/redo and Escape cancellation passed.\n");
         return true;
     }
 };
@@ -1780,7 +2332,7 @@ int run(int argc, char **argv) {
                             std::chrono::system_clock::now().time_since_epoch())
                             .count();
     app.window =
-        SDL_CreateWindow("BDD Studio", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1440, 900,
+        SDL_CreateWindow("bddtool", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1440, 900,
                          SDL_WINDOW_RESIZABLE | (smoke ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
     if (!app.window) {
         SDL_Quit();
@@ -1834,6 +2386,32 @@ int run(int argc, char **argv) {
     InteractionSmoke interactions;
     AnimationSmoke animation_smoke;
     bool test_animation = smoke && argc >= 5 && std::string(argv[4]) == "--animations";
+    bool test_optimize = smoke && argc >= 5 && std::string(argv[4]) == "--optimize";
+    bool test_pattern_suggest = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-suggest";
+    bool test_pattern = test_pattern_suggest || (smoke && argc >= 5 && std::string(argv[4]) == "--pattern");
+    if (test_pattern && app.tab()) {
+        auto &t = *app.tab();
+        t.pattern_options.plane = (int)t.document.state().planes.size() - 1;
+        t.pattern_options.span = 128;
+        t.pattern_options.offset = 128;
+        t.pattern_input = t.document.state().assets;
+        t.pattern_revision = t.document.state().revision;
+        t.pattern_source_plane = t.pattern_options.plane;
+        t.pattern_source_cache = pattern_source(t.document.state(), t.pattern_options.plane,
+                                                t.pattern_source_error);
+        if (t.pattern_source_cache.assets)
+            t.pattern_options.image = t.pattern_source_cache.assets->data.images.back().idx;
+        t.optimize_mode = 1;
+        app.start_pattern(t, test_pattern_suggest);
+        app.page = 3;
+    }
+    if (test_optimize && app.tab()) {
+        auto &t = *app.tab();
+        t.optimize_options.deep = true;
+        app.start_optimization(t);
+        app.page = 3;
+    }
+    auto optimize_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(40);
     while (app.running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -1881,11 +2459,13 @@ int run(int argc, char **argv) {
             int w, h;
             SDL_GetRendererOutputSize(app.renderer, &w, &h);
             std::vector<uint8_t> rgba((size_t)w * h * 4);
-            std::string name = frames == 3    ? "stage.png"
-                               : frames == 7  ? "compact.png"
-                               : frames == 11 ? "assets.png"
-                               : frames == 23 ? "animation.png"
-                                              : "game-export.png";
+            std::string name = frames == 3     ? "stage.png"
+                               : frames == 7   ? "compact.png"
+                               : frames == 11  ? "assets.png"
+                               : frames == 23  ? "animation.png"
+                               : test_optimize ? "optimize.png"
+                               : test_pattern  ? "pattern.png"
+                                               : "game-export.png";
             auto path = (fs::u8path(app.smoke_dir) / name).u8string();
             if (SDL_RenderReadPixels(app.renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, rgba.data(),
                                      w * 4) != 0 ||
@@ -1894,15 +2474,43 @@ int run(int argc, char **argv) {
         }
         SDL_RenderPresent(app.renderer);
         if (smoke) {
+            if (test_pattern && app.tab() && app.tab()->pattern_job.valid()) {
+                if (std::chrono::steady_clock::now() > optimize_deadline) {
+                    rc = 1;
+                    app.running = false;
+                }
+                SDL_Delay(10);
+                continue;
+            }
+            if (test_pattern && (!app.tab() || !app.tab()->pattern_plan || !app.tab()->pattern_plan->valid)) {
+                std::fprintf(stderr, "Pattern UI did not produce a valid proposal.\n");
+                rc = 1;
+                app.running = false;
+            }
+            if (test_optimize && app.tab() && app.tab()->optimize_job.valid()) {
+                if (std::chrono::steady_clock::now() > optimize_deadline) {
+                    app.tab()->optimize_progress->cancel = true;
+                    rc = 1;
+                    app.running = false;
+                }
+                SDL_Delay(10);
+                continue;
+            }
+            if (test_optimize &&
+                (!app.tab() || !app.tab()->optimize_plan || !app.tab()->optimize_plan->verified)) {
+                std::fprintf(stderr, "Optimizer UI did not produce a verified proposal.\n");
+                rc = 1;
+                app.running = false;
+            }
             frames++;
             if (frames == 4) {
                 SDL_SetWindowSize(app.window, 1000, 720);
                 if (app.tab())
                     app.tab()->fit = true;
             }
-            if (frames == 8)
+            if (frames == 8 && !test_optimize && !test_pattern)
                 app.page = 1;
-            if (frames == 29) {
+            if (frames == 29 && !test_optimize && !test_pattern) {
                 app.page = 2;
                 if (argc >= 5 && std::string(argv[4]) == "--prepare" && app.tab())
                     app.prepare_game(*app.tab());
@@ -1913,6 +2521,8 @@ int run(int argc, char **argv) {
     }
     app.textures.clear();
     app.animation_textures.clear();
+    app.optimize_before_textures.clear();
+    app.optimize_after_textures.clear();
     editor_project_storage_shutdown();
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();

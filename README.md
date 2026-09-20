@@ -4,7 +4,7 @@
 Midway BDB/BDD background data. It focuses on background layout, palette use,
 block-image editing, and MK2-style LOAD2 authoring checks.
 
-The default launch now opens **BDD Studio**, the rebuilt stage placement
+The default launch now opens **bddtool**, the rebuilt stage placement
 workspace. It has a live composition canvas, layers, inspector, asset tray,
 fractional zoom, camera preview, and independent undo history per document.
 Forest stages also preview the animated tree faces from the game's local
@@ -18,7 +18,14 @@ apply its source files with backups, and run the checkout's full `build.py`
 with a live log. ROM packaging and emulator verification still use the game's
 workflow. Pixel, palette and IMG/LOD tools remain available through
 `bddview --legacy-ui [file.BDB]`.
-See [the Studio guide](docs/STUDIO.md) for controls, saving, and current limits.
+See [the bddtool guide](docs/STUDIO.md) for controls, saving, and current limits.
+
+**Optimize** searches lossless palette-aware cuts, cropping, repeated tiles and
+X/Y mirror reuse. Review exact reconstructions and separate video, palette and
+placement costs, then apply the proposal as one undoable edit. **Repeat & Mirror**
+also previews deliberate art changes: repeat a group across a whole spike layer,
+or mirror one side of a pillar, with changed-pixel overlays and combined reuse.
+Byte figures are estimates pending a game build. See [the optimizer guide](docs/OPTIMIZE.md).
 
 ![Original specialist editor, available through --legacy-ui](screenshot.jpg)
 

@@ -1,7 +1,7 @@
-# BDD Studio — first implementation
+# bddtool — first implementation
 
 The application now opens in a new stage placement workspace. The existing
-format code is shared by Studio, the original editor, and `bddtool`. The
+format code is shared by the new workspace, the original editor, and the `bddtool` CLI. The
 [redesign audit](UI_REDESIGN_AUDIT.md) remains the architectural assessment of
 the pre-rebuild code.
 
@@ -47,7 +47,7 @@ external BLKS table while editing a different set of placements.
 
 ## Camera and runtime interpretation
 
-On opening an unmodified stage, Studio reads runtime plane offsets, camera
+On opening an unmodified stage, bddtool reads runtime plane offsets, camera
 origins, scroll factors and draw ranks when the stage has an adjacent draft or
 is inside a game source tree with `src/BGND.ASM` or
 `src-refactor/src/BGND.ASM`. This interpretation reuses the existing parser
@@ -99,6 +99,14 @@ used by the legacy plane importer is not used for actor preview.
 
 ## Save and recovery
 
+The **Optimize** workspace adds background analysis, cut/reuse previews,
+palette and placement budgets, exact pixel verification and an undoable Apply.
+Its **Repeat & Mirror** workshop also previews deliberate artwork changes,
+including repeated groups across a whole layer and mirrored pillar sides.
+Apply combines the art edit and tile reuse in one undo step.
+See [Stage optimization and pattern editing](OPTIMIZE.md) for scope, controls and the
+distinction between estimated video savings and verified packed-ROM savings.
+
 Save writes the BDB/BDD pair, BDD image metadata, and a `.bddstudio` layout.
 Keep that layout beside the pair when moving the project. It holds layer
 transforms, display order, camera start, visibility, locks and asset palette
@@ -110,7 +118,7 @@ before a repack can be saved safely.
 
 Normal Save does not write shared game assembly. Use the explicit game export
 workflow below to apply the layout before building. The original editor does not understand `.bddstudio`
-layer transforms; use it for its specialist operations, then review Studio's
+layer transforms; use it for its specialist operations, then review bddtool's
 layout warning if it has changed the pair.
 
 Each save prepares all output files and backups before replacing any targets.
@@ -132,14 +140,14 @@ closing or quitting.
 
 Open **Build & Check** and use the game integration controls:
 
-1. Choose the game checkout. Studio detects it when opening `data/STAGE.BDB`
+1. Choose the game checkout. bddtool detects it when opening `data/STAGE.BDB`
    beneath a folder containing `src/BGND.ASM`.
 2. Click **Prepare game export**. This takes a snapshot of the current live
    document, including unsaved edits, and creates a new export package. It
    does not modify the game checkout or mark the document saved.
 3. Review the report. **Copy export folder** locates `REVIEW.txt`, `BGND.diff`,
    the BDB/BDD pair, metadata, `.bddstudio`, and the patched `src/BGND.ASM`.
-4. Click **Apply reviewed export**. Studio checks that the document revision,
+4. Click **Apply reviewed export**. bddtool checks that the document revision,
    selected destination, staged files, and existing game sources still match
    the reviewed snapshot. It backs up the five target files before replacing
    them. Other source files are not part of this apply transaction.
@@ -158,7 +166,7 @@ and lists the originals to restore. Failed replacement attempts roll back.
 The multi-file apply is not atomic across a machine crash. Do not remove an
 unfinished journal until its listed files have been recovered.
 A checkout-level `.bddstudio-applying/RECOVERY.txt` points to the package
-when an apply is interrupted. Studio refuses further exports to that checkout
+when an apply is interrupted. bddtool refuses further exports to that checkout
 until recovery is complete and the marker is removed.
 
 The exporter updates the chosen stage's plane offsets, parallax table,
@@ -181,7 +189,7 @@ This integration updates existing stages. It requires a matching pair in the
 game's `data/`, a DOS-compatible stage name of at most eight characters, and a
 `BBB>` reference in `data/*.LOD`. The full game build must actually consume
 that LOD and promote its regenerated tables. For the tested NUPOOL checkout,
-`build.py` already performs complete BLKS/BMOD promotion. Studio does not
+`build.py` already performs complete BLKS/BMOD promotion. bddtool does not
 invent ROM allocation or promote unverified assembly skeletons.
 
 Module names identify the stage definition. If several match, enter an exact

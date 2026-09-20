@@ -24,11 +24,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName", "junkwax"
-            VALUE "FileDescription", "bddview"
+            VALUE "FileDescription", "bddtool"
             VALUE "FileVersion", BDDVIEW_RC_VERSION_STRING
             VALUE "InternalName", "bddview"
             VALUE "OriginalFilename", "bddview.exe"
-            VALUE "ProductName", "midway-bddtool"
+            VALUE "ProductName", "bddtool"
             VALUE "ProductVersion", BDDVIEW_RC_VERSION_STRING
         END
     END

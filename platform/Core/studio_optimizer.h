@@ -1,0 +1,70 @@
+#pragma once
+#include "Core/studio_document.h"
+#include <atomic>
+#include <map>
+
+namespace studio {
+struct OptimizeOptions {
+    bool deep = false, compact_palettes = true;
+    int max_pieces = 8, max_added_objects = 64, max_palettes = 45;
+    // 0: prioritize bytes, 1: balanced, 2: prioritize fewer placements.
+    int policy = 1;
+    int source_image = -1; // -1: whole stage; otherwise restrict changes to this image.
+};
+struct OptimizeProgress {
+    std::atomic<bool> cancel{false};
+    std::atomic<int> done{0}, total{0};
+};
+struct OptimizeBudget {
+    uint64_t video_bits = 0, raw_bits = 0, table_bytes = 0, palette_bytes = 0;
+    int images = 0, palettes = 0, objects = 0;
+};
+struct OptimizePiece {
+    int x = 0, y = 0, w = 0, h = 0, image = 0;
+    bool flip_x = false, flip_y = false;
+    std::map<int, int> palettes;
+};
+struct OptimizeChange {
+    int source_image = 0, uses = 0;
+    uint64_t before_bits = 0, added_bits = 0;
+    bool reindexed = false;
+    std::vector<OptimizePiece> pieces;
+};
+struct OptimizationPlan {
+    State before, after;
+    OptimizeOptions options;
+    OptimizeBudget baseline, proposed;
+    std::vector<OptimizeChange> changes;
+    std::vector<std::string> notes;
+    std::string error;
+    bool verified = false, cancelled = false;
+};
+OptimizeBudget optimization_budget(const State &state);
+OptimizationPlan find_lossless_savings(const Document &document, const OptimizeOptions &options,
+                                       OptimizeProgress *progress = nullptr);
+bool verify_optimization(const OptimizationPlan &plan, std::string &error);
+std::string optimization_report(const OptimizationPlan &plan);
+
+enum class PatternMode { RepeatX, RepeatY, MirrorX, MirrorY };
+struct PatternOptions {
+    int image = -1;
+    int plane = -1; // -1: one image; otherwise compose this layer into a source strip.
+    PatternMode mode = PatternMode::RepeatX;
+    int offset = 0, span = 16;
+    bool alternate_flip = false, use_far_side = false;
+};
+// Deliberate artwork edits are separate from verified lossless representations.
+struct PatternPlan {
+    State before, source;
+    PatternOptions options;
+    OptimizationPlan packing;
+    uint64_t changed_pixels = 0, silhouette_pixels = 0;
+    int uses = 0;
+    bool valid = false;
+    std::string error;
+};
+PatternPlan preview_pattern(const Document &document, const PatternOptions &options);
+PatternPlan suggest_pattern(const Document &document, const PatternOptions &options);
+bool verify_pattern(const PatternPlan &plan, std::string &error);
+State pattern_source(const State &state, int plane, std::string &error);
+} // namespace studio
