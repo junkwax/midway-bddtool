@@ -60,11 +60,42 @@ frame is 400×254; areas outside it are shaded. Scrub the camera horizontally or
 change its Y coordinate, return to **Start**, or choose **Set start**. Layer
 editing remains available in camera preview.
 
-This is an authoring preview. Runtime actors, animated palette effects,
-game-specific floor deformation, and compiled ROM output are not reproduced
-or emulator-verified. Inferred runtime bindings do not establish complete
+This is an authoring preview. Forest tree faces are supported as described below.
+Other runtime actors, animated palette effects, game-specific floor deformation,
+and compiled ROM output are not reproduced or emulator-verified.
+Inferred runtime bindings do not establish complete
 game fidelity. Stages opened without runtime source need their layer positions
 arranged manually in this first implementation.
+
+## Forest animation preview
+
+Forest stages automatically show the tree-face animation when their checkout
+contains `data/MKBGANI.IMG` and a supported Forest definition in `src/BGND.ASM`
+(or `src-refactor/src/BGND.ASM`). The loader matches the Forest's source modules,
+reads its actor spawn positions, insertion list, frame table and frame duration,
+then decodes the referenced IMG frames with their palettes and signed animation
+offsets. It does not assume the filename must be `FOREST.BDB`; `FOREST2` works too.
+
+Use **Animations**, **Pause/Play**, the arrow buttons, or the sequence slider
+above the canvas. Stepping pauses playback. Each tab owns its animation assets
+and playback position. Source layout and layer solo hide the actor overlays.
+The preview repeats the roar at 60 preview ticks per second, using the source's
+ticks-per-frame. It deliberately omits the game's randomized idle pauses and
+does not claim exact emulator timing.
+
+The faces remain at their source-defined positions while artwork moves, so
+you can align the trees around them. They are read-only overlays: picking,
+undo, save, the asset tray and game export still operate on authored BDB/BDD
+artwork. Animation frames never get baked into the background. Layer export
+preserves actor-only display-list slots while rearranging background entries.
+
+After changing the checkout or editing its assembly/IMG externally, use
+**Build & Check → Reload animation sources**. This also works for files with
+an existing `.bddstudio` layout. A changed checkout hides the old overlay until
+reloaded. The panel identifies the source and explains missing, malformed or
+unsupported data instead of substituting guessed frames. The selected
+checkout's assembly is authoritative for animation; adjacent draft assembly
+used by the legacy plane importer is not used for actor preview.
 
 ## Save and recovery
 
@@ -190,6 +221,8 @@ studio_document_tests tmp/fixture-test path/to/fixture.BDB
 studio_game_export_tests tmp/export-test [path/to/fixture.BDB path/to/BGND.ASM]
 bddview --studio-export-smoke tmp/runtime-test
 bddview --studio-export-smoke tmp/new-runtime-test path/to/fixture.BDB path/to/game-checkout
+studio_animation_tests tmp/animation-test [path/to/FOREST2.BDB path/to/game-checkout]
+bddview --studio-smoke tmp/forest-ui path/to/FOREST2.BDB --animations
 python tools/roundtrip_smoke.py --bddview path/to/bddview --bddtool path/to/bddtool
 ```
 
@@ -217,6 +250,16 @@ re-imports it through the legacy runtime parser. It supplies regenerated BMOD
 dimensions for that parser; it does not simulate LOAD2 compression or ROM data.
 CTest runs this path with generated artwork and an afterimage-list regression
 fixture, without requiring private game data.
+
+Animation tests generate their own IMG and assembly fixtures and cover source
+sequence decoding, raw/trimmed pixels, palettes, signed frame offsets, camera
+projection, playback wrapping, actor-slot preservation, missing/unsupported
+sources, independent ownership and exclusion from document saves. The optional
+Forest UI smoke clicks pause, next frame and resume through ImGui and captures
+a paused animation view. Local Forest2 tests loaded seven images, twenty
+sequence steps and three actors; a scratch export/re-import preserved its
+placement and ordering at three camera positions. No live game files were
+changed, and no new emulator comparison was performed for the animation preview.
 
 Windows Release build, document tests, both local DEDPOOL and NUPOOL fixture
 tests, UI screenshots, input smoke, existing round-trip/RGB555 tests, and legacy

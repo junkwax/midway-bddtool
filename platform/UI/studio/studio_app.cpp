@@ -4,6 +4,7 @@
 #include "Core/editor_project_storage.h"
 #include "Core/studio_game_export.h"
 #include "Core/studio_game_build.h"
+#include "Core/studio_animation.h"
 #include <fstream>
 #include "libs/stb_image.h"
 #include "libs/stb_image_write.h"
@@ -34,6 +35,10 @@ ImVec4 accent_surface(float strength) {
 const char *stage_filter = "Midway backgrounds\0*.BDB;*.BDD;*.bdb;*.bdd\0All files\0*.*\0";
 ImVec2 vec(Point p) { return ImVec2((float)p.x, (float)p.y); }
 Point point(ImVec2 p) { return {p.x, p.y}; }
+Point item_center() {
+    auto a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    return {(a.x + b.x) / 2, (a.y + b.y) / 2};
+}
 bool has(const std::vector<ObjectId> &ids, ObjectId id) {
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
@@ -50,6 +55,10 @@ struct Tab {
     char game_root[1024] = {}, game_label[96] = {};
     std::unique_ptr<GameExport> game_export;
     GameBuild game_build;
+    AnimationPreview animation;
+    std::string animation_root;
+    bool show_animation = true, play_animation = true;
+    double animation_seconds = 0;
 };
 struct AssetPayload {
     uint64_t tab;
@@ -99,6 +108,7 @@ class App {
     SDL_Window *window = nullptr;
     SDL_Renderer *renderer = nullptr;
     TextureCache textures;
+    TextureCache animation_textures;
     std::vector<std::unique_ptr<Tab>> tabs;
     int active = -1, page = 0, select_tab = -1;
     uint64_t next_tab = 1;
@@ -113,6 +123,7 @@ class App {
     Point drag_start, drag_last;
     std::vector<ObjectId> drag_selection;
     Rect canvas_rect;
+    Point animation_pause_point, animation_next_point;
     Tab *tab() { return active >= 0 && active < (int)tabs.size() ? tabs[active].get() : nullptr; }
     void toast(const std::string &text) {
         message = text;
@@ -130,11 +141,14 @@ class App {
         t->next_recovery = ImGui::GetTime() + 60;
         if (!t->document.path().empty()) {
             auto root = fs::u8path(t->document.path()).parent_path().parent_path();
-            if (fs::is_regular_file(root / "src" / "BGND.ASM"))
+            if (fs::is_regular_file(root / "src" / "BGND.ASM") ||
+                fs::is_regular_file(root / "src-refactor" / "src" / "BGND.ASM"))
                 std::snprintf(t->game_root, sizeof t->game_root, "%s", root.u8string().c_str());
         }
         if (t->document.state().planes.empty())
             t->plane = -1;
+        t->animation = load_animation_preview(t->document, t->game_root);
+        t->animation_root = t->game_root;
         bool assets = !t->document.state().has_bdb;
         tabs.push_back(std::move(t));
         active = (int)tabs.size() - 1;
@@ -886,7 +900,29 @@ class App {
             }
         }
         auto items = t.document.scene(cam, t.source, t.solo);
+        bool animation_drawn = false;
+        auto draw_animation = [&]() {
+            animation_drawn = true;
+            if (t.source || t.solo >= 0 || !t.show_animation || !t.animation.ready() ||
+                t.animation_root != t.game_root)
+                return;
+            animation_textures.renderer = renderer;
+            auto step = t.animation.frame_at(t.animation_seconds);
+            const auto &frame = t.animation.frames[t.animation.sequence[step]];
+            auto tex = animation_textures.get(t.animation.artwork, frame.image, frame.palette);
+            if (!tex)
+                return;
+            for (size_t i = 0; i < t.animation.anchors.size(); i++) {
+                auto r = t.animation.rect(i, step, cam);
+                auto a = vec(t.view.to_screen({r.x, r.y}, point(origin)));
+                auto b = vec(t.view.to_screen({r.x + r.w, r.y + r.h}, point(origin)));
+                draw->AddImage((ImTextureID)(intptr_t)tex, a, b);
+            }
+        };
+        auto animation_rank = t.animation.draw_rank(t.document);
         for (const auto &p : items) {
+            if (!animation_drawn && p.rank > animation_rank)
+                draw_animation();
             ImVec2 a = vec(t.view.to_screen({p.rect.x, p.rect.y}, point(origin))),
                    b = vec(
                        t.view.to_screen({p.rect.x + p.rect.w, p.rect.y + p.rect.h}, point(origin)));
@@ -897,6 +933,8 @@ class App {
             if (has(t.selected, p.id))
                 draw->AddRect(a, b, selection_color, 0, 0, 1.5f);
         }
+        if (!animation_drawn)
+            draw_animation();
         if (t.selected.empty() && t.plane >= 0) {
             bool first = true;
             Rect bounds;
@@ -1146,6 +1184,21 @@ class App {
                            "ROM output are not verified in this workspace.");
         ImGui::Spacing();
         game_integration(t);
+        ImGui::TextUnformatted("Runtime animation preview");
+        if (t.animation_root != t.game_root)
+            ImGui::TextColored(accent, "Checkout changed. Reload animations to use this source.");
+        ImGui::TextWrapped("%s", t.animation.notice.c_str());
+        if (ImGui::Button("Reload animation sources")) {
+            t.animation = load_animation_preview(t.document, t.game_root);
+            t.animation_root = t.game_root;
+            t.animation_seconds = 0;
+        }
+        if (!t.animation.source.empty())
+            ImGui::TextWrapped("Source: %s", t.animation.source.c_str());
+        if (t.animation.ready())
+            ImGui::TextWrapped("Faces stay at their game-defined positions when artwork moves. "
+                               "They are preview overlays and are not saved into your background.");
+        ImGui::Separator();
         auto issues = t.document.validate();
         ImGui::Text("%zu authoring issues", issues.size());
         for (size_t i = 0; i < issues.size(); i++) {
@@ -1209,6 +1262,54 @@ class App {
             t.fit = true;
         }
         ImGui::EndDisabled();
+        if (t.animation.ready() && !t.source && t.animation_root == t.game_root) {
+            ImGui::Checkbox("Animations", &t.show_animation);
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!t.show_animation);
+            if (ImGui::Button(t.play_animation ? "Pause" : "Play"))
+                t.play_animation = !t.play_animation;
+            animation_pause_point = item_center();
+            int step = (int)t.animation.frame_at(t.animation_seconds);
+            bool seek = false;
+            ImGui::SameLine();
+            if (ImGui::Button("<##animation")) {
+                step--;
+                seek = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(">##animation")) {
+                step++;
+                seek = true;
+            }
+            animation_next_point = item_center();
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(160);
+            seek |= ImGui::SliderInt("##animation-frame", &step, 0,
+                                     (int)t.animation.sequence.size() - 1, "Step %d");
+            if (seek) {
+                int count = (int)t.animation.sequence.size();
+                step = (step + count) % count;
+                t.animation_seconds = step * t.animation.frame_ticks / 60.0 + .000001;
+                t.play_animation = false;
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", t.animation.frames[t.animation.sequence[step]].label.c_str());
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", t.animation.notice.c_str());
+            ImGui::EndDisabled();
+        } else if (t.animation_root != t.game_root) {
+            if (ImGui::Button("Reload animation preview")) {
+                t.animation = load_animation_preview(t.document, t.game_root);
+                t.animation_root = t.game_root;
+                t.animation_seconds = 0;
+            }
+        } else if (!t.source && (t.document.state().name.find("FOREST") != std::string::npos ||
+                                 t.document.state().name.find("forest") != std::string::npos)) {
+            if (ImGui::Button("Animation sources unavailable"))
+                page = 2;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", t.animation.notice.c_str());
+        }
         float avail = ImGui::GetContentRegionAvail().y;
         float tray_h = tray ? std::min(164.0f, avail * .28f) : 0;
         float body_h = std::max(120.0f, avail - tray_h - 43);
@@ -1449,6 +1550,10 @@ class App {
     void frame() {
         for (auto &t : tabs)
             t->game_build.poll();
+        if (auto *t = tab())
+            if (page == 0 && !t->source && t->show_animation && t->play_animation &&
+                t->animation.ready() && t->animation_root == t->game_root)
+                t->animation_seconds += ImGui::GetIO().DeltaTime;
         shortcuts();
         clean_selection();
         ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -1565,6 +1670,59 @@ struct InteractionSmoke {
     }
 };
 
+struct AnimationSmoke {
+    std::shared_ptr<const AssetBank> bank;
+    uint64_t revision = 0;
+    size_t paused_step = 0;
+    double paused_time = 0;
+    void input(App &app, int frame) {
+        auto *t = app.tab();
+        if (!t)
+            return;
+        auto &io = ImGui::GetIO();
+        io.ConfigInputTrickleEventQueue = false;
+        io.AddFocusEvent(true);
+        if (frame == 0) {
+            bank = t->document.state().assets;
+            revision = t->document.state().revision;
+        }
+        if (frame == 14)
+            app.page = 0;
+        if (frame == 16 || frame == 20 || frame == 24) {
+            auto p = frame == 20 ? app.animation_next_point : app.animation_pause_point;
+            io.AddMousePosEvent((float)p.x, (float)p.y);
+        }
+        if (frame == 17 || frame == 21 || frame == 25)
+            io.AddMouseButtonEvent(0, true);
+        if (frame == 18 || frame == 22 || frame == 26)
+            io.AddMouseButtonEvent(0, false);
+    }
+    bool check(App &app, int frame) {
+        auto *t = app.tab();
+        if (!t || !t->animation.ready() || t->document.state().assets != bank ||
+            t->document.state().revision != revision)
+            return false;
+        if (frame == 18) {
+            if (t->play_animation)
+                return false;
+            paused_step = t->animation.frame_at(t->animation_seconds);
+            paused_time = t->animation_seconds;
+        }
+        if (frame == 19 && t->animation_seconds != paused_time)
+            return false;
+        if (frame == 22 &&
+            (t->play_animation || t->animation.frame_at(t->animation_seconds) !=
+                                      (paused_step + 1) % t->animation.sequence.size()))
+            return false;
+        if (frame == 26 && !t->play_animation)
+            return false;
+        if (frame == 27)
+            std::fprintf(
+                stderr, "Animation pause, frame stepping, resume and document isolation passed.\n");
+        return true;
+    }
+};
+
 void theme() {
     ImGui::StyleColorsDark();
     auto &s = ImGui::GetStyle();
@@ -1674,6 +1832,8 @@ int run(int argc, char **argv) {
         app.open(argv[1]);
     int frames = 0, rc = 0;
     InteractionSmoke interactions;
+    AnimationSmoke animation_smoke;
+    bool test_animation = smoke && argc >= 5 && std::string(argv[4]) == "--animations";
     while (app.running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -1699,9 +1859,16 @@ int run(int argc, char **argv) {
         ImGui_ImplSDL2_NewFrame();
         if (smoke && argc < 4)
             interactions.input(app, frames);
+        if (test_animation)
+            animation_smoke.input(app, frames);
         ImGui::NewFrame();
         app.frame();
         if (smoke && argc < 4 && !interactions.check(app, frames)) {
+            rc = 1;
+            app.running = false;
+        }
+        if (test_animation && !animation_smoke.check(app, frames)) {
+            std::fprintf(stderr, "Animation UI smoke failed at frame %d.\n", frames);
             rc = 1;
             app.running = false;
         }
@@ -1709,13 +1876,15 @@ int run(int argc, char **argv) {
         SDL_SetRenderDrawColor(app.renderer, 17, 20, 25, 255);
         SDL_RenderClear(app.renderer);
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), app.renderer);
-        if (smoke && (frames == 3 || frames == 7 || frames == 11 || frames == 31)) {
+        if (smoke && (frames == 3 || frames == 7 || frames == 11 || frames == 31 ||
+                      (test_animation && frames == 23))) {
             int w, h;
             SDL_GetRendererOutputSize(app.renderer, &w, &h);
             std::vector<uint8_t> rgba((size_t)w * h * 4);
             std::string name = frames == 3    ? "stage.png"
                                : frames == 7  ? "compact.png"
                                : frames == 11 ? "assets.png"
+                               : frames == 23 ? "animation.png"
                                               : "game-export.png";
             auto path = (fs::u8path(app.smoke_dir) / name).u8string();
             if (SDL_RenderReadPixels(app.renderer, nullptr, SDL_PIXELFORMAT_ABGR8888, rgba.data(),
@@ -1743,6 +1912,7 @@ int run(int argc, char **argv) {
         }
     }
     app.textures.clear();
+    app.animation_textures.clear();
     editor_project_storage_shutdown();
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();

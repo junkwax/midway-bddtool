@@ -7,6 +7,8 @@ block-image editing, and MK2-style LOAD2 authoring checks.
 The default launch now opens **BDD Studio**, the rebuilt stage placement
 workspace. It has a live composition canvas, layers, inspector, asset tray,
 fractional zoom, camera preview, and independent undo history per document.
+Forest stages also preview the animated tree faces from the game's local
+`MKBGANI.IMG` and assembly, with play/pause and frame stepping.
 Launch `bddview --studio-demo` to try it with generated sample artwork, or
 `bddview path/to/stage.BDB` to edit a background.
 

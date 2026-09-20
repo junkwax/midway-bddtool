@@ -111,6 +111,7 @@ struct Stage {
     std::string name, scroll, dlists;
     std::vector<size_t> words;
     std::vector<Binding> bindings;
+    std::set<int> actor_slots;
 };
 Stage parse_stage(const Source &source, const std::string &name) {
     Stage stage;
@@ -163,8 +164,10 @@ Stage parse_stage(const Source &source, const std::string &name) {
             continue;
         }
         check(l.size() == 1 && ++slot <= 8, "Unsupported background plane list in " + name);
-        if (token == "SKIP_BAKMOD")
+        if (token == "SKIP_BAKMOD") {
+            stage.actor_slots.insert(slot);
             continue;
+        }
         check(ends(token, "BMOD"), "Unsupported stage initialization directive: " + token);
         std::string module = token.substr(0, token.size() - 4);
         check(modules.insert(module).second, "Repeated runtime module: " + module);
@@ -285,6 +288,14 @@ bool export_game_assembly(const Document &doc, const std::string &bytes, Assembl
             std::smatch match;
             if (std::regex_match(token, match, bak)) {
                 int slot = std::stoi(match[1]);
+                // Slots without BMOD artwork carry runtime actors (Forest faces,
+                // secrets, etc.). Keep these in place, like fighter/floor entries.
+                if (std::none_of(stage.bindings.begin(), stage.bindings.end(),
+                                 [&](const Binding &b) { return b.slot == slot; })) {
+                    check(stage.actor_slots.count(slot) != 0,
+                          "Display list references an undeclared background slot.");
+                    continue;
+                }
                 check(l.size() == 2 && draw_rows.emplace(slot, i).second,
                       "Repeated/malformed background draw row.");
                 slots.push_back(i);

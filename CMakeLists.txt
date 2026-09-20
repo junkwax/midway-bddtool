@@ -22,9 +22,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(SDL2 REQUIRED)
 
 # Shared, renderer-independent format and authoring libraries.
-add_library(bdd_core STATIC platform/Core/utils/bdd_core.cpp platform/Core/utils/bdd_metadata.cpp)
+add_library(bdd_core STATIC platform/Core/utils/bdd_core.cpp platform/Core/utils/bdd_metadata.cpp platform/Core/utils/img_format.cpp)
 target_include_directories(bdd_core PUBLIC platform)
-add_library(bdd_studio_document STATIC platform/Core/studio_document.cpp platform/Core/studio_game_export.cpp platform/Core/studio_game_build.cpp)
+add_library(bdd_studio_document STATIC platform/Core/studio_document.cpp platform/Core/studio_game_export.cpp platform/Core/studio_game_build.cpp platform/Core/studio_animation.cpp)
 target_link_libraries(bdd_studio_document PUBLIC bdd_core)
 if(MSVC)
     target_compile_definitions(bdd_core PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -56,7 +56,6 @@ add_executable(bddview
     platform/Core/editor_commands.cpp
     platform/Core/editor_project_globals.cpp
     platform/Core/editor_project_storage.cpp
-    platform/Core/utils/img_format.cpp
     platform/Core/image_lookup.cpp
     platform/Core/image_processing.cpp
     platform/Core/import_export.cpp
@@ -331,4 +330,7 @@ if(BUILD_TESTING)
     target_link_libraries(studio_game_export_tests PRIVATE bdd_studio_document)
     add_test(NAME studio_game_export COMMAND studio_game_export_tests "${CMAKE_CURRENT_BINARY_DIR}/studio-export-test-data")
     add_test(NAME studio_runtime_export COMMAND bddview --studio-export-smoke "${CMAKE_CURRENT_BINARY_DIR}/studio-runtime-test-data")
+    add_executable(studio_animation_tests tests/studio_animation_tests.cpp)
+    target_link_libraries(studio_animation_tests PRIVATE bdd_studio_document)
+    add_test(NAME studio_animation COMMAND studio_animation_tests "${CMAKE_CURRENT_BINARY_DIR}/studio-animation-test-data")
 endif()
