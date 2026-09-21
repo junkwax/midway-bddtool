@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Restored file information in the modern editor's top-right menu bar: document
+  name, object/image/palette counts, estimated video ROM, and document checks.
+  Click the summary for layer/world details, BDB/BDD paths and disk sizes, budget
+  estimates, and shortcuts to Optimize and Build & Check.
 - Module rectangles in Runtime Layout and Game Preview are now picked where they
   are drawn. Drawing projected a module one way and the canvas hit-test another,
   so clicks landed on rectangles that were nowhere on screen -- in Runtime Layout
@@ -96,6 +100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Snap Panels to Rails" is now "Reset Sidebar Width".
 
 ### Added
+- Repeat & Mirror can discover group sizes, offsets and mirrored variants, with
+  selectable proposals showing full-resolution visual changes and estimated savings.
+- Shared-base optimization can reuse one base across up to eight source images,
+  retaining each member's unique details and exact rendered pixels.
 - `bddview --module-pick-smoke FILE.BDB` -- headless check that the module
   rectangle the canvas draws is the rectangle its pickers test. Requires each
   module's view rect to be non-empty and to pick itself back at its own centre,

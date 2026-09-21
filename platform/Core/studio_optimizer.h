@@ -76,6 +76,19 @@ struct PatternPlan {
 };
 PatternPlan preview_pattern(const Document &document, const PatternOptions &options);
 PatternPlan suggest_pattern(const Document &document, const PatternOptions &options);
+struct PatternSearch {
+    State before;
+    OptimizeBudget baseline;
+    PatternOptions options;
+    std::vector<PatternPlan> proposals;
+    int sampled = 0, packed = 0;
+    bool cancelled = false;
+    std::string error;
+};
+// Bounded search over sizes, offsets, alternating flips and mirrored sides on the chosen axis.
+// Results are deliberately changed artwork; each result still needs visual review.
+PatternSearch discover_patterns(const Document &document, const PatternOptions &options,
+                                OptimizeProgress *progress = nullptr);
 bool verify_pattern(const PatternPlan &plan, std::string &error);
 State pattern_source(const State &state, int plane, std::string &error);
 } // namespace studio

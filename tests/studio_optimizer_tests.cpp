@@ -417,6 +417,120 @@ int main(int argc, char **argv) {
         require(details.proposed.palettes == details.baseline.palettes,
                 "Shared bases remapped palettes");
         check_roundtrip(detail_doc, details, reuse_root);
+        // Three independently translated/flipped images must share ONE base, retaining all details.
+        auto family_root = root / "shared-family";
+        fs::create_directories(family_root);
+        BddCoreImage family_images[3] = {bases[0], bases[1], {}};
+        auto &third = family_images[2];
+        third.idx = 42;
+        third.w = 136;
+        third.h = 80;
+        third.pix.resize(136 * 80);
+        for (int y = 0; y < 64; y++)
+            for (int x = 0; x < 128; x++)
+                third.pix[(y + 8) * 136 + 135 - x - 4] =
+                    x >= 32 && x < 64 ? (uint8_t)(48 + (x + y * 3) % 7) : bases[0].pix[y * 128 + x];
+        require(bdd_core_save_bdd((family_root / "fixture.BDD").u8string().c_str(), family_images,
+                                  3, palettes, 2, &saved) != 0,
+                saved.error);
+        std::ofstream family_bdb(family_root / "fixture.BDB");
+        family_bdb << "FAMILY 1000 500 255 1 2 12\nFAMILY1 0 1000 0 499\n";
+        for (int i = 0; i < 12; i++)
+            family_bdb << std::hex << (0x4000 | ((i % 4) << 4)) << std::dec << ' '
+                       << (20 + (i % 4) * 200) << ' ' << (20 + (i / 4) * 120) << ' ' << std::hex
+                       << (40 + i / 4) << std::dec << ' ' << i % 2 << '\n';
+        family_bdb.close();
+        Document family_doc;
+        require(family_doc.load((family_root / "fixture.BDB").u8string(), error), error);
+        auto family_plan = find_shared_savings(family_doc, detail_options);
+        require(family_plan.verified && family_plan.changes.size() == 3,
+                "Three-image family was limited to a pair: " + family_plan.error);
+        int shared_id = family_plan.changes.front().pieces.front().image;
+        for (const auto &change : family_plan.changes)
+            require(change.pieces.front().role == 1 && change.pieces.front().image == shared_id,
+                    "Family stored more than one common base");
+        check_roundtrip(family_doc, family_plan, family_root);
+        auto family_cap = detail_options;
+        family_cap.max_added_objects = 8;
+        auto capped_family = find_shared_savings(family_doc, family_cap);
+        require(capped_family.verified && capped_family.changes.size() == 2 &&
+                    capped_family.proposed.objects <= capped_family.baseline.objects + 8,
+                "Family did not fall back to a pair within the placement cap");
+
+        // Unknown 12-pixel period: discover it without supplying a group size.
+        auto discovery_root = root / "pattern-discovery";
+        fs::create_directories(discovery_root);
+        BddCoreImage periodic;
+        periodic.idx = 7;
+        periodic.w = 192;
+        periodic.h = 24;
+        periodic.pix.resize(192 * 24);
+        for (int y = 0; y < 24; y++)
+            for (int x = 0; x < 192; x++)
+                periodic.pix[y * 192 + x] =
+                    (uint8_t)(1 + ((x % 12) * 13 + y * 7 + (x % 12) * y) % 55);
+        require(bdd_core_save_bdd((discovery_root / "fixture.BDD").u8string().c_str(), &periodic, 1,
+                                  palettes, 2, &saved) != 0,
+                saved.error);
+        std::ofstream discovery_bdb(discovery_root / "fixture.BDB");
+        discovery_bdb << "PERIOD 800 254 255 1 2 4\nPERIOD1 0 800 0 253\n"
+                         "4000 0 0 7 0\n4010 200 0 7 1\n4020 0 100 7 0\n4030 200 100 7 1\n";
+        discovery_bdb.close();
+        Document discovery_doc;
+        require(discovery_doc.load((discovery_root / "fixture.BDB").u8string(), error), error);
+        PatternOptions discovery_options;
+        discovery_options.image = 7;
+        discovery_options.span = 32;
+        auto discoveries = discover_patterns(discovery_doc, discovery_options);
+        require(discoveries.error.empty() && !discoveries.proposals.empty(), discoveries.error);
+        require(std::any_of(discoveries.proposals.begin(), discoveries.proposals.end(),
+                            [](const auto &p) {
+                                return p.changed_pixels == 0 && p.options.span == 12 &&
+                                       p.options.mode == PatternMode::RepeatX;
+                            }),
+                "Unknown exact repeat period was missed");
+        for (const auto &p : discoveries.proposals) {
+            require(p.valid && verify_pattern(p, error), error);
+            require(p.packing.proposed.video_bits < discoveries.baseline.video_bits,
+                    "Discovery proposed a ROM increase");
+        }
+        auto exact_discovery =
+            std::find_if(discoveries.proposals.begin(), discoveries.proposals.end(),
+                         [](const auto &p) { return p.changed_pixels == 0; });
+        auto before_discovery = render(discovery_doc, discovery_doc.bounds());
+        require(discovery_doc.apply_pattern(*exact_discovery, error), error);
+        require(render(discovery_doc, discovery_doc.bounds()) == before_discovery,
+                "Exact discovered pattern changed the stage");
+        require(discovery_doc.undo() &&
+                    render(discovery_doc, discovery_doc.bounds()) == before_discovery,
+                "Discovered pattern undo failed");
+        require(discovery_doc.redo(), "Discovered pattern redo failed");
+        require(discovery_doc.save((discovery_root / "discovered.BDB").u8string(), error), error);
+        Document discovery_reopened;
+        require(discovery_reopened.load((discovery_root / "discovered.BDB").u8string(), error),
+                error);
+        require(render(discovery_reopened, discovery_reopened.bounds()) == before_discovery,
+                "Discovered pattern save/reopen changed pixels");
+        auto stale_discovery = discovery_reopened;
+        require(!stale_discovery.apply_pattern(*exact_discovery, error),
+                "Discovered proposal applied to a different asset snapshot");
+        PatternOptions vertical_search;
+        vertical_search.image = 7;
+        vertical_search.mode = PatternMode::RepeatY;
+        auto vertical_discoveries = discover_patterns(artistic, vertical_search);
+        require(vertical_discoveries.error.empty(), vertical_discoveries.error);
+        for (const auto &p : vertical_discoveries.proposals) {
+            require(p.options.mode == PatternMode::RepeatY ||
+                        p.options.mode == PatternMode::MirrorY,
+                    "Vertical discovery changed the wrong axis");
+            require(verify_pattern(p, error), error);
+        }
+        OptimizeProgress cancel_discovery;
+        cancel_discovery.cancel = true;
+        auto cancelled_discovery =
+            discover_patterns(discovery_doc, discovery_options, &cancel_discovery);
+        require(cancelled_discovery.cancelled && cancelled_discovery.proposals.empty(),
+                "Cancelled pattern search returned proposals");
         auto constrained = detail_options;
         constrained.max_pieces = 1;
         auto no_details = find_shared_savings(detail_doc, constrained);
@@ -529,6 +643,31 @@ int main(int argc, char **argv) {
                 require(reopened.load((dir / "pattern.BDB").u8string(), error), error);
                 require(render(modified, real.bounds()) == render(reopened, real.bounds()),
                         "Cave pattern save/reopen failed");
+                auto discovered = discover_patterns(real, cave);
+                require(discovered.error.empty() && !discovered.proposals.empty(), discovered.error);
+                std::ofstream discovery_report(root / "discovered-patterns.txt");
+                discovery_report << discovered.sampled << " sampled windows; " << discovered.packed
+                                 << " packed candidates; " << discovered.proposals.size()
+                                 << " tradeoffs\n";
+                for (size_t i = 0; i < discovered.proposals.size(); i++) {
+                    const auto &p = discovered.proposals[i];
+                    discovery_report << "mode=" << (int)p.options.mode << " span=" << p.options.span
+                                     << " offset=" << p.options.offset
+                                     << " alternating=" << p.options.alternate_flip
+                                     << " far=" << p.options.use_far_side
+                                     << " changed=" << p.changed_pixels
+                                     << " silhouette=" << p.silhouette_pixels
+                                     << " video_bytes=" << p.packing.proposed.video_bits / 8
+                                     << " objects=" << p.packing.proposed.objects << '\n';
+                    auto candidate_doc = real;
+                    require(candidate_doc.apply_pattern(p, error), error);
+                    auto candidate_path = dir / ("discovered-" + std::to_string(i) + ".BDB");
+                    require(candidate_doc.save(candidate_path.u8string(), error), error);
+                    Document checked;
+                    require(checked.load(candidate_path.u8string(), error), error);
+                    require(render(candidate_doc, real.bounds()) == render(checked, real.bounds()),
+                            "Discovered cave proposal changed during save/reopen");
+                }
             }
         }
         std::cout << "Lossless optimizer: palette variants, XY flips, exact pixels, undo/redo, "

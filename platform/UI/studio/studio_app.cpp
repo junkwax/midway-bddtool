@@ -48,6 +48,11 @@ bool has(const std::vector<ObjectId> &ids, ObjectId id) {
 struct Tab {
     uint64_t id = 0;
     Document document;
+    std::shared_ptr<const AssetBank> info_assets;
+    OptimizeBudget info_budget;
+    uint64_t info_revision = UINT64_MAX;
+    int info_errors = 0, info_warnings = 0;
+    std::vector<std::pair<std::string, std::string>> info_files;
     Viewport view;
     std::vector<ObjectId> selected;
     int plane = 0, solo = -1, asset = 0;
@@ -81,6 +86,10 @@ struct Tab {
     PatternOptions pattern_options;
     std::future<PatternPlan> pattern_job;
     std::unique_ptr<PatternPlan> pattern_plan;
+    std::future<PatternSearch> pattern_search_job;
+    std::shared_ptr<OptimizeProgress> pattern_progress;
+    std::unique_ptr<PatternSearch> pattern_search;
+    int pattern_proposal = 0;
     bool pattern_differences = false;
     float pattern_zoom = 1.0f;
     State pattern_source_cache;
@@ -91,6 +100,8 @@ struct Tab {
     ~Tab() {
         if (optimize_progress)
             optimize_progress->cancel = true;
+        if (pattern_progress)
+            pattern_progress->cancel = true;
     }
 };
 struct AssetPayload {
@@ -400,6 +411,115 @@ class App {
         ImGui::Separator();
         ImGui::Spacing();
     }
+    void file_info(Tab &t) {
+        const auto &s = t.document.state();
+        bool assets_changed = t.info_assets != s.assets;
+        // Pixel compression estimates only change when the immutable artwork bank changes.
+        if (assets_changed) {
+            t.info_assets = s.assets;
+            t.info_budget = optimization_budget(s);
+        }
+        if (assets_changed || t.info_revision != s.revision) {
+            t.info_revision = s.revision;
+            t.info_errors = t.info_warnings = 0;
+            for (const auto &issue : t.document.validate())
+                issue.error ? ++t.info_errors : ++t.info_warnings;
+        }
+        auto &b = t.info_budget;
+        b.objects = (int)s.objects.size();
+        b.table_bytes =
+            (uint64_t)b.images * 10 + (uint64_t)b.objects * 8 + (uint64_t)s.planes.size() * 8;
+        std::string checks = t.info_errors     ? std::to_string(t.info_errors) + " errors"
+                             : t.info_warnings ? std::to_string(t.info_warnings) + " warnings"
+                                               : "Checks clear";
+        char detail[240];
+        std::snprintf(
+            detail, sizeof detail, "%zu objects  %d images  %d palettes  |  ROM ~%.1f KiB  |  %s",
+            s.objects.size(), b.images, b.palettes, b.video_bits / 8192.0, checks.c_str());
+        std::string label = (t.document.dirty() ? "* " : "") + s.name + "  |  " + detail;
+        float right = ImGui::GetWindowContentRegionMax().x;
+        float available = right - ImGui::GetCursorPosX() - 24;
+        if (ImGui::CalcTextSize(label.c_str()).x > available)
+            label = detail;
+        if (ImGui::CalcTextSize(label.c_str()).x > available) {
+            std::snprintf(detail, sizeof detail,
+                          "File info  |  %zu obj  %d img  %d pal  |  ~%.1f KiB", s.objects.size(),
+                          b.images, b.palettes, b.video_bits / 8192.0);
+            label = detail;
+        }
+        if (ImGui::CalcTextSize(label.c_str()).x > available)
+            label = "File info";
+        float width = ImGui::CalcTextSize(label.c_str()).x;
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), right - width - 12));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(.60f, .78f, 1.0f, 1));
+        bool open = ImGui::BeginMenu((label + "###file-info").c_str());
+        ImGui::PopStyleColor();
+        if (!open) {
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("File information and estimated video ROM. Click for details.");
+            return;
+        }
+        if (ImGui::IsWindowAppearing()) {
+            t.info_files.clear();
+            if (!t.document.path().empty()) {
+                for (const char *ext : {".BDB", ".BDD"}) {
+                    if (!s.has_bdb && std::string(ext) == ".BDB")
+                        continue;
+                    auto path = fs::u8path(t.document.path());
+                    path.replace_extension(ext);
+                    std::error_code ec;
+                    if (!fs::exists(path, ec))
+                        path.replace_extension(std::string(ext) == ".BDB" ? ".bdb" : ".bdd");
+                    auto bytes = fs::file_size(path, ec);
+                    char size[80];
+                    if (ec)
+                        std::snprintf(size, sizeof size, "Unavailable");
+                    else
+                        std::snprintf(size, sizeof size, "%.1f KiB (%llu bytes)", bytes / 1024.0,
+                                      (unsigned long long)bytes);
+                    t.info_files.emplace_back(path.u8string(), size);
+                }
+            }
+        }
+        ImGui::TextUnformatted(s.name.c_str());
+        ImGui::TextDisabled("%s  |  %s", s.has_bdb ? "BDB + BDD stage" : "BDD artwork",
+                            t.document.dirty() ? "Unsaved changes" : "Saved");
+        ImGui::Separator();
+        ImGui::Text("%zu objects   %d images   %d palettes   %zu layers", s.objects.size(),
+                    b.images, b.palettes, s.planes.size());
+        if (s.has_bdb)
+            ImGui::Text("World %d x %d   |   Start %d, %d   |   Ground %d", s.world_w, s.world_h,
+                        s.start_x, s.start_y, s.ground);
+        ImGui::Separator();
+        ImGui::Text("Video ROM estimate: %.1f KiB", b.video_bits / 8192.0);
+        ImGui::TextDisabled("Before compression: %.1f KiB", b.raw_bits / 8192.0);
+        ImGui::TextDisabled("Palettes: %.1f KiB   |   Tables: %.1f KiB", b.palette_bytes / 1024.0,
+                            b.table_bytes / 1024.0);
+        ImGui::TextDisabled("Current document estimates; measured builds are in ROM receipts.");
+        if (ImGui::MenuItem("Explore savings")) {
+            cancel_gesture();
+            page = 3;
+        }
+        ImGui::Separator();
+        ImGui::Text("Document checks: %d errors, %d warnings", t.info_errors, t.info_warnings);
+        if (ImGui::MenuItem("Open Build & Check")) {
+            cancel_gesture();
+            page = 2;
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Files on disk (size when this panel opened)");
+        if (t.info_files.empty())
+            ImGui::TextDisabled("No saved files yet.");
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 480);
+        for (const auto &file : t.info_files) {
+            ImGui::TextWrapped("%s", file.first.c_str());
+            ImGui::TextDisabled("%s", file.second.c_str());
+        }
+        ImGui::PopTextWrapPos();
+        if (!t.document.path().empty() && ImGui::MenuItem("Copy file path"))
+            ImGui::SetClipboardText(t.document.path().c_str());
+        ImGui::EndMenu();
+    }
     void menu() {
         if (ImGui::BeginMenuBar()) {
             ImGui::TextColored(accent, "bddtool");
@@ -462,6 +582,8 @@ class App {
                     "original editor. Launch bddview --legacy-ui [file.BDB] to use them.");
                 ImGui::EndMenu();
             }
+            if (auto *t = tab())
+                file_info(*t);
             ImGui::EndMenuBar();
         }
     }
@@ -1257,13 +1379,17 @@ class App {
         heading("Find lossless savings",
                 "Explore smaller representations of exactly the same artwork.");
         bool busy = t.optimize_job.valid();
-        ImGui::BeginDisabled(busy || t.pattern_job.valid() || t.document.transaction_active() ||
-                             !t.document.state().has_bdb);
+        ImGui::BeginDisabled(busy || t.pattern_job.valid() || t.pattern_search_job.valid() ||
+                             t.document.transaction_active() || !t.document.state().has_bdb);
         if (ImGui::Button("Find savings"))
             start_optimization(t);
         ImGui::SameLine();
-        if (ImGui::Button("Find shared bases")) start_optimization(t, true);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Search exact common pixels across artwork, retaining unique details as separate pieces. Palette indices are preserved.");
+        if (ImGui::Button("Find shared bases"))
+            start_optimization(t, true);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Find a shared base across up to eight images, retaining each "
+                              "image's unique details. Includes X/Y flips and translated matches; "
+                              "palette indices are preserved.");
         ImGui::SameLine();
         ImGui::Checkbox("Deep search", &t.optimize_options.deep);
         ImGui::SameLine();
@@ -1444,12 +1570,31 @@ class App {
             ImGui::TextWrapped("%s", optimization_report(plan).c_str());
     }
     void start_pattern(Tab &t, bool suggest = false) {
+        t.pattern_search.reset();
         auto doc = t.document;
         t.pattern_job = std::async(
             std::launch::async, [doc = std::move(doc), options = t.pattern_options, suggest]() {
                 return suggest ? suggest_pattern(doc, options) : preview_pattern(doc, options);
             });
         t.pattern_plan.reset();
+    }
+    void start_pattern_search(Tab &t) {
+        auto doc = t.document;
+        t.pattern_progress = std::make_shared<OptimizeProgress>();
+        t.pattern_search_job =
+            std::async(std::launch::async, [doc = std::move(doc), options = t.pattern_options,
+                                            progress = t.pattern_progress]() {
+                return discover_patterns(doc, options, progress.get());
+            });
+        t.pattern_search.reset();
+        t.pattern_plan.reset();
+        t.pattern_proposal = 0;
+    }
+    void choose_pattern(Tab &t, int index) {
+        t.pattern_proposal = index;
+        t.pattern_plan = std::make_unique<PatternPlan>(t.pattern_search->proposals[index]);
+        t.pattern_options = t.pattern_plan->options;
+        t.pattern_palette = 0;
     }
     void pattern_workshop(Tab &t) {
         heading("Repeat & Mirror", "Try a reusable spike group or a mirrored pillar side.");
@@ -1467,7 +1612,7 @@ class App {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         auto &o = t.pattern_options;
-        bool busy = t.pattern_job.valid(), changed = false;
+        bool busy = t.pattern_job.valid() || t.pattern_search_job.valid(), changed = false;
         ImGui::BeginDisabled(busy || t.optimize_job.valid());
         int scope = o.plane < 0 ? 0 : 1;
         ImGui::SetNextItemWidth(270);
@@ -1590,6 +1735,7 @@ class App {
         o.offset = offset * unit;
         if (changed) {
             t.pattern_plan.reset();
+            t.pattern_search.reset();
             t.pattern_palette = 0;
         }
         if (ImGui::Button("Preview pattern & savings")) {
@@ -1603,7 +1749,65 @@ class App {
                     "Samples source groups at this size and favors fewer changed pixels, "
                     "with extra weight for silhouette changes. Review the result before applying.");
         }
+        if (ImGui::Button("Discover sizes & mirrors"))
+            start_pattern_search(t);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Search group sizes, source windows, alternating flips and mirrored "
+                              "sides on this axis. Compare verified proposals before applying.");
         ImGui::EndDisabled();
+        if (t.pattern_search_job.valid()) {
+            int total = std::max(1, t.pattern_progress->total.load());
+            ImGui::ProgressBar((float)t.pattern_progress->done.load() / total, ImVec2(-1, 16));
+            if (ImGui::Button("Cancel discovery"))
+                t.pattern_progress->cancel = true;
+            if (t.pattern_progress->cancel)
+                ImGui::TextDisabled("Cancelling after the current packing pass...");
+        }
+        if (t.pattern_search) {
+            const auto &search = *t.pattern_search;
+            ImGui::TextWrapped("%d windows sampled; %d proposals packed.", search.sampled,
+                               search.packed);
+            if (!search.error.empty())
+                ImGui::TextWrapped("%s", search.error.c_str());
+            else if (search.proposals.empty())
+                ImGui::TextWrapped(
+                    "No saving found within this bounded search. Try a manual group.");
+            else {
+                ImGui::TextDisabled("Choose a tradeoff (fewest changed pixels first)");
+                ImGui::BeginDisabled(busy || t.optimize_job.valid());
+                ImGui::BeginChild("discovered-patterns", ImVec2(0, 150), ImGuiChildFlags_Border);
+                const auto &original = search.baseline;
+                for (size_t i = 0; i < search.proposals.size(); i++) {
+                    const auto &p = search.proposals[i];
+                    const char *methods[] = {"Repeat X", "Repeat Y", "Mirror X", "Mirror Y"};
+                    char label[180];
+                    std::snprintf(label, sizeof label, "%s%s | %d px @ %d###proposal%zu",
+                                  methods[(int)p.options.mode],
+                                  p.options.alternate_flip && (int)p.options.mode < 2 ? " + flip"
+                                                                                      : "",
+                                  p.options.span, p.options.offset, i);
+                    if ((int)p.options.mode >= 2)
+                        std::snprintf(label, sizeof label, "%s | keep %s###proposal%zu",
+                                      methods[(int)p.options.mode],
+                                      p.options.use_far_side
+                                          ? ((int)p.options.mode == 2 ? "right" : "bottom")
+                                          : ((int)p.options.mode == 2 ? "left" : "top"),
+                                      i);
+                    if (ImGui::Selectable(label, t.pattern_proposal == (int)i))
+                        choose_pattern(t, (int)i);
+                    if (!p.changed_pixels)
+                        ImGui::TextColored(accent, "Exact appearance");
+                    ImGui::TextDisabled(
+                        "Save %llu B | changed %llu | silhouette %llu",
+                        (unsigned long long)((original.video_bits - p.packing.proposed.video_bits) /
+                                             8),
+                        (unsigned long long)p.changed_pixels,
+                        (unsigned long long)p.silhouette_pixels);
+                }
+                ImGui::EndChild();
+                ImGui::EndDisabled();
+            }
+        }
         if (busy)
             ImGui::TextDisabled("Building preview and checking reusable pieces...");
         ImGui::TableSetColumnIndex(1);
@@ -1877,7 +2081,7 @@ class App {
     void savings_map(Tab &t) {
         heading("Savings map",
                 "Inspect the regions found by your latest lossless or shared-base scan.");
-        ImGui::BeginDisabled(t.optimize_job.valid() || t.pattern_job.valid());
+        ImGui::BeginDisabled(t.optimize_job.valid() || t.pattern_job.valid() || t.pattern_search_job.valid());
         if (ImGui::Button("Scan cuts & palettes"))
             start_optimization(t);
         ImGui::SameLine();
@@ -2473,6 +2677,21 @@ class App {
                 try { t->receipt_after = std::make_unique<RomReceipt>(t->receipt_job.get()); }
                 catch (const std::exception &e) { error = e.what(); }
             }
+            if (t->pattern_search_job.valid() &&
+                t->pattern_search_job.wait_for(std::chrono::seconds(0)) ==
+                    std::future_status::ready) {
+                try {
+                    auto result = t->pattern_search_job.get();
+                    if (result.options.image == t->pattern_options.image &&
+                        result.options.plane == t->pattern_options.plane) {
+                        t->pattern_search = std::make_unique<PatternSearch>(std::move(result));
+                        if (!t->pattern_search->proposals.empty())
+                            choose_pattern(*t, 0);
+                    }
+                } catch (const std::exception &e) {
+                    error = e.what();
+                }
+            }
             if (t->pattern_job.valid() &&
                 t->pattern_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 try {
@@ -2788,9 +3007,12 @@ int run(int argc, char **argv) {
     bool test_animation = smoke && argc >= 5 && std::string(argv[4]) == "--animations";
     bool test_review = smoke && argc >= 5 && std::string(argv[4]) == "--optimize-review";
     bool test_shared = smoke && argc >= 5 && std::string(argv[4]) == "--shared";
-    bool test_optimize = test_review || test_shared || (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
+    bool test_optimize =
+        test_review || test_shared || (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
     bool test_pattern_suggest = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-suggest";
-    bool test_pattern = test_pattern_suggest || (smoke && argc >= 5 && std::string(argv[4]) == "--pattern");
+    bool test_pattern_discover = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-discover";
+    bool test_pattern = test_pattern_discover || test_pattern_suggest ||
+                        (smoke && argc >= 5 && std::string(argv[4]) == "--pattern");
     if (test_pattern && app.tab()) {
         auto &t = *app.tab();
         t.pattern_options.plane = (int)t.document.state().planes.size() - 1;
@@ -2799,12 +3021,15 @@ int run(int argc, char **argv) {
         t.pattern_input = t.document.state().assets;
         t.pattern_revision = t.document.state().revision;
         t.pattern_source_plane = t.pattern_options.plane;
-        t.pattern_source_cache = pattern_source(t.document.state(), t.pattern_options.plane,
-                                                t.pattern_source_error);
+        t.pattern_source_cache =
+            pattern_source(t.document.state(), t.pattern_options.plane, t.pattern_source_error);
         if (t.pattern_source_cache.assets)
             t.pattern_options.image = t.pattern_source_cache.assets->data.images.back().idx;
         t.optimize_mode = 1;
-        app.start_pattern(t, test_pattern_suggest);
+        if (test_pattern_discover)
+            app.start_pattern_search(t);
+        else
+            app.start_pattern(t, test_pattern_suggest);
         app.page = 3;
     }
     if (test_optimize && app.tab()) {
@@ -2813,7 +3038,8 @@ int run(int argc, char **argv) {
         app.start_optimization(t, test_shared);
         app.page = 3;
     }
-    auto optimize_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(40);
+    auto optimize_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(test_pattern_discover ? 120 : 40);
     while (app.running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -2837,6 +3063,14 @@ int run(int argc, char **argv) {
         }
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
+        if (smoke && argc >= 5 && std::string(argv[4]) == "--file-info") {
+            if (frames == 9)
+                io.AddMousePosEvent(io.DisplaySize.x - 50, 12);
+            if (frames == 10 || frames == 11)
+                io.AddMouseButtonEvent(0, frames == 10);
+            if (frames == 15 || frames == 16)
+                io.AddKeyEvent(ImGuiKey_Escape, frames == 15);
+        }
         if (smoke && argc < 4)
             interactions.input(app, frames);
         if (test_animation)
@@ -2881,7 +3115,7 @@ int run(int argc, char **argv) {
                 if (std::chrono::steady_clock::now() > optimize_deadline) { rc = 1; app.running = false; }
                 SDL_Delay(10); continue;
             }
-            if (test_pattern && app.tab() && app.tab()->pattern_job.valid()) {
+            if (test_pattern && app.tab() && (app.tab()->pattern_job.valid() || app.tab()->pattern_search_job.valid())) {
                 if (std::chrono::steady_clock::now() > optimize_deadline) {
                     rc = 1;
                     app.running = false;

@@ -600,6 +600,196 @@ PatternPlan suggest_pattern(const Document &document, const PatternOptions &opti
     }
 }
 
+PatternSearch discover_patterns(const Document &document, const PatternOptions &options,
+                                OptimizeProgress *progress) {
+    PatternSearch result;
+    result.before = document.state();
+    result.options = options;
+    try {
+        auto checkpoint = [&]() {
+            if (progress && progress->cancel)
+                throw std::runtime_error("Pattern search cancelled.");
+        };
+        checkpoint();
+        std::string error;
+        auto source = pattern_source(result.before, options.plane, error);
+        require(source.assets != nullptr, error);
+        auto effective = options;
+        if (options.plane >= 0)
+            effective.image = source.assets->data.images.back().idx;
+        const auto &im = get_image(source, effective.image);
+        bool vertical =
+            options.mode == PatternMode::RepeatY || options.mode == PatternMode::MirrorY;
+        int unit = vertical ? 1 : 4, length = vertical ? im.h : im.w;
+        // Validate geometry, palette references and every consumer once before the sampled scan.
+        auto identity = effective;
+        identity.mode = vertical ? PatternMode::RepeatY : PatternMode::RepeatX;
+        identity.offset = 0;
+        identity.span = length;
+        identity.alternate_flip = false;
+        uint64_t changed = 0, silhouette = 0;
+        int uses = 0;
+        pattern_bank(source, identity, changed, silhouette, uses);
+        std::array<std::array<bool, 256>, 256> different{};
+        std::set<int> palettes;
+        for (const auto &p : source.objects)
+            if (p.object.ii == effective.image)
+                palettes.insert(p.object.fl);
+        for (int a = 0; a < 256; a++)
+            for (int b = 0; b < 256; b++) {
+                different[a][b] = (a == 0) != (b == 0);
+                for (int pi : palettes) {
+                    const auto &pal = source.assets->data.palettes[pi];
+                    if (a && b && a < pal.count && b < pal.count)
+                        different[a][b] = different[a][b] || pal.rgb555[a] != pal.rgb555[b];
+                }
+            }
+        std::vector<size_t> samples;
+        size_t count = std::min<size_t>(4096, im.pix.size());
+        for (size_t i = 0; i < count; i++) {
+            size_t begin = i * im.pix.size() / count, end = (i + 1) * im.pix.size() / count;
+            // One deterministic sample per stratum avoids repeatedly sampling the same phase.
+            samples.push_back(begin + ((i * 2654435761ULL + 1013904223ULL) % (end - begin)));
+        }
+        struct Candidate {
+            PatternOptions options;
+            double distortion = 0, fraction = 0;
+        };
+        auto score = [&](const PatternOptions &o) {
+            checkpoint();
+            result.sampled++;
+            uint64_t difference = 0;
+            bool repeat = o.mode == PatternMode::RepeatX || o.mode == PatternMode::RepeatY;
+            for (auto pos : samples) {
+                int x = (int)(pos % im.w), y = (int)(pos / im.w), p = vertical ? y : x;
+                int from;
+                if (repeat) {
+                    from = p % o.span;
+                    if (o.alternate_flip && (p / o.span) % 2)
+                        from = o.span - 1 - from;
+                    from += o.offset;
+                } else
+                    from =
+                        o.use_far_side ? std::max(p, length - 1 - p) : std::min(p, length - 1 - p);
+                auto a = im.pix[pos];
+                auto b = im.pix[vertical ? (size_t)from * im.w + x : (size_t)y * im.w + from];
+                difference += different[a][b] + 2 * ((a == 0) != (b == 0));
+            }
+            return Candidate{o, (double)difference / count, repeat ? (double)o.span / length : .5};
+        };
+        std::set<int> sizes;
+        auto add_size = [&](int size) {
+            size = size / unit * unit;
+            if (size >= unit && size <= length / 2 && size * 16 >= length)
+                sizes.insert(size);
+        };
+        add_size(options.span);
+        for (int divisions = 2; divisions <= 16; divisions++)
+            add_size((length / divisions + unit - 1) / unit * unit);
+        for (int size = unit; size <= length / 2; size *= 2)
+            add_size(size);
+        if (progress) {
+            progress->done = 0;
+            progress->total = (int)sizes.size() * 2 + 2 + 12;
+        }
+        std::vector<Candidate> candidates;
+        for (int size : sizes)
+            for (int flip = 0; flip < 2; flip++) {
+                auto o = effective;
+                o.mode = identity.mode;
+                o.span = size;
+                o.alternate_flip = flip != 0;
+                int positions = (length - size) / unit;
+                int stride = std::max(1, (positions + 31) / 32);
+                Candidate best;
+                best.distortion = std::numeric_limits<double>::infinity();
+                for (int pos = 0;; pos = std::min(positions, pos + stride)) {
+                    o.offset = pos * unit;
+                    auto candidate = score(o);
+                    if (candidate.distortion < best.distortion)
+                        best = candidate;
+                    if (pos == positions)
+                        break;
+                }
+                candidates.push_back(best);
+                if (progress)
+                    ++progress->done;
+            }
+        for (int side = 0; side < 2; side++) {
+            auto o = effective;
+            o.mode = vertical ? PatternMode::MirrorY : PatternMode::MirrorX;
+            o.use_far_side = side != 0;
+            candidates.push_back(score(o));
+            if (progress)
+                ++progress->done;
+        }
+        // Keep four candidates from each preference, then do full-resolution packing/verification.
+        std::set<size_t> shortlist;
+        for (double weight : {0.0, .5, 2.0}) {
+            std::vector<size_t> order(candidates.size());
+            std::iota(order.begin(), order.end(), 0);
+            std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+                return candidates[a].distortion + weight * candidates[a].fraction <
+                       candidates[b].distortion + weight * candidates[b].fraction;
+            });
+            for (size_t i = 0; i < std::min<size_t>(4, order.size()); i++)
+                shortlist.insert(order[i]);
+        }
+        result.baseline = optimization_budget(result.before);
+        for (size_t index : shortlist) {
+            checkpoint();
+            auto o = candidates[index].options;
+            o.image = options.image; // Layer composition resolves its temporary ID in preview.
+            auto plan = preview_pattern(document, o);
+            result.packed++;
+            if (progress)
+                ++progress->done;
+            if (plan.valid && plan.packing.proposed.video_bits < result.baseline.video_bits)
+                result.proposals.push_back(std::move(plan));
+        }
+        checkpoint();
+        // Keep the tradeoffs: no survivor is worse in bytes, changed pixels, silhouette AND
+        // objects.
+        auto dominates = [](const PatternPlan &a, const PatternPlan &b) {
+            const auto &ab = a.packing.proposed, &bb = b.packing.proposed;
+            return ab.video_bits <= bb.video_bits && a.changed_pixels <= b.changed_pixels &&
+                   a.silhouette_pixels <= b.silhouette_pixels && ab.objects <= bb.objects &&
+                   (ab.video_bits < bb.video_bits || a.changed_pixels < b.changed_pixels ||
+                    a.silhouette_pixels < b.silhouette_pixels || ab.objects < bb.objects);
+        };
+        std::vector<PatternPlan> frontier;
+        for (const auto &p : result.proposals)
+            if (std::none_of(result.proposals.begin(), result.proposals.end(),
+                             [&](const auto &other) { return dominates(other, p); })) {
+                bool duplicate = std::any_of(frontier.begin(), frontier.end(), [&](const auto &q) {
+                    return q.changed_pixels == p.changed_pixels &&
+                           q.silhouette_pixels == p.silhouette_pixels &&
+                           q.packing.proposed.video_bits == p.packing.proposed.video_bits &&
+                           q.packing.proposed.objects == p.packing.proposed.objects &&
+                           get_image(q.packing.before, q.packing.options.source_image).pix ==
+                               get_image(p.packing.before, p.packing.options.source_image).pix;
+                });
+                if (!duplicate)
+                    frontier.push_back(p);
+            }
+        std::stable_sort(frontier.begin(), frontier.end(), [](const auto &a, const auto &b) {
+            if (a.changed_pixels != b.changed_pixels)
+                return a.changed_pixels < b.changed_pixels;
+            if (a.silhouette_pixels != b.silhouette_pixels)
+                return a.silhouette_pixels < b.silhouette_pixels;
+            return a.packing.proposed.video_bits < b.packing.proposed.video_bits;
+        });
+        result.proposals = std::move(frontier);
+        if (progress)
+            progress->done = progress->total.load();
+    } catch (const std::exception &e) {
+        result.error = e.what();
+        result.cancelled = progress && progress->cancel;
+        result.proposals.clear();
+    }
+    return result;
+}
+
 bool verify_pattern(const PatternPlan &plan, std::string &error) {
     try {
         uint64_t changed = 0, silhouette = 0;
@@ -1060,21 +1250,75 @@ OptimizationPlan find_shared_savings(const Document &document, const OptimizeOpt
                         proposals.resize(128);
                 }
             }
+        struct Family {
+            std::map<int, std::vector<Tile>> members;
+            int extra = 0;
+            int64_t saving = 0;
+        };
+        auto score_family = [&](Family &family) {
+            std::set<std::string> originals, pieces;
+            int64_t before = 0, after = 0;
+            family.extra = 0;
+            for (const auto &member : family.members) {
+                const auto &im = get_image(plan.before, member.first);
+                if (originals.insert(key(im)).second)
+                    before += bits(im);
+                family.extra += ((int)member.second.size() - 1) * (int)uses[im.idx].size();
+                for (const auto &part : member.second)
+                    if (pieces.insert(part.key).second)
+                        after += bits(part.image);
+            }
+            int penalty = options.policy == 0 ? 0 : options.policy == 1 ? 24 : 128;
+            family.saving = before - after - (int64_t)family.extra * penalty * 8;
+        };
+        std::vector<Family> families;
+        for (const auto &seed : proposals) {
+            checkpoint();
+            Family family;
+            family.members[seed.a] = seed.first;
+            family.members[seed.b] = seed.second;
+            score_family(family);
+            families.push_back(family); // Keep the pair if a larger family exceeds remaining caps.
+            for (const auto &other : proposals) {
+                if (other.first.front().key != seed.first.front().key ||
+                    get_image(plan.before, other.a).flags != get_image(plan.before, seed.a).flags)
+                    continue;
+                auto extended = family;
+                extended.members.emplace(other.a, other.first);
+                extended.members.emplace(other.b, other.second);
+                if (extended.members.size() == family.members.size() || extended.members.size() > 8)
+                    continue;
+                score_family(extended);
+                if (extended.extra <= options.max_added_objects && extended.saving > family.saving)
+                    family = std::move(extended);
+            }
+            if (family.members.size() > 2)
+                families.push_back(std::move(family));
+        }
+        std::stable_sort(families.begin(), families.end(),
+                         [](const auto &a, const auto &b) { return a.saving > b.saving; });
         std::set<int> consumed;
         std::map<std::string, int> shared;
         int added = 0;
-        for (const auto &pair : proposals) {
+        int family_count = 0, largest_family = 0;
+        for (const auto &family : families) {
             checkpoint();
-            if (consumed.count(pair.a) || consumed.count(pair.b) ||
-                added + pair.extra > options.max_added_objects)
+            if (added + family.extra > options.max_added_objects ||
+                std::any_of(family.members.begin(), family.members.end(),
+                            [&](const auto &member) { return consumed.count(member.first) != 0; }))
                 continue;
-            int worst_new = (int)(pair.first.size() + pair.second.size());
-            if (bank->data.images.size() + worst_new - 2 > BDD_CORE_MK2_LOAD2_MAX_IMAGE_HEADERS ||
+            int worst_new = 0;
+            for (const auto &member : family.members)
+                worst_new += (int)member.second.size();
+            if (bank->data.images.size() + worst_new - family.members.size() >
+                    BDD_CORE_MK2_LOAD2_MAX_IMAGE_HEADERS ||
                 next_id + worst_new > 65536)
                 continue;
-            for (int side = 0; side < 2; side++) {
-                int id = side ? pair.b : pair.a;
-                const auto &tiles = side ? pair.second : pair.first;
+            family_count++;
+            largest_family = std::max(largest_family, (int)family.members.size());
+            for (const auto &member : family.members) {
+                int id = member.first;
+                const auto &tiles = member.second;
                 OptimizeChange change;
                 change.source_image = id;
                 change.uses = (int)uses[id].size();
@@ -1114,7 +1358,7 @@ OptimizationPlan find_shared_savings(const Document &document, const OptimizeOpt
                 consumed.insert(id);
                 plan.changes.push_back(std::move(change));
             }
-            added += pair.extra;
+            added += family.extra;
         }
         plan.after.assets = bank;
         plan.after.objects.clear();
@@ -1159,7 +1403,10 @@ OptimizationPlan find_shared_savings(const Document &document, const OptimizeOpt
         plan.notes.push_back("Shared-base search: exact index matches, X/Y flips and sampled 8x4 "
                              "translation anchors; up to " +
                              std::to_string(pair_limit) +
-                             " pairs. Unique opaque details retained. Rectangles may overlap; "
+                             " pairs; families of up to 8 images sharing an identical base. " +
+                             std::to_string(family_count) + " groups selected; largest family " +
+                             std::to_string(largest_family) +
+                             ". Unique opaque details retained. Rectangles may overlap; "
                              "opaque pixels must not.");
         plan.verified = verify_optimization(plan, plan.error);
     } catch (const std::exception &e) {

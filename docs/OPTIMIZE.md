@@ -80,9 +80,14 @@ Palette indices remain unchanged.
 
 The search uses sampled 8x4 windows to suggest translations, then compares the
 actual pixels. Quick search uses an eight-pixel anchor grid; Deep uses four.
-It considers up to 1,024/4,096 source pairs and keeps up to 128 candidates before
-choosing disjoint pairs within the placement/header limits. It is bounded,
-not exhaustive. Sparse common pixels may cost more to encode than they save;
+It considers up to 1,024/4,096 source pairs and keeps up to 128 profitable candidates.
+Candidates with the same canonical common base can join a family of up to eight
+source images. Each member retains its own details, palette assignments and
+translated/mirrored placement. Families are scored together, counting the base
+once. Pair alternatives remain available if a family exceeds the remaining
+placement/header limits. Each source belongs to at most one selected group.
+This is bounded: family discovery depends on those profitable pair candidates
+and does not search every possible common mask. Sparse common pixels may cost more to encode than they save;
 those proposals are rejected. Animated/LOD and locked artwork remains excluded.
 
 The local MK3CAVE test found pairs involving 16 source images and modeled
@@ -121,6 +126,10 @@ it can change both shading and silhouette. Nothing changes until you click
   suggests the one with the lowest changed-pixel score, adding extra weight to
   silhouette changes. It samples up to roughly 130 windows; it does not prove
   visual quality or choose an art direction for you.
+- **Discover sizes & mirrors** searches multiple group sizes, source offsets,
+  alternating flips and both mirrored sides on the selected X/Y axis. It works
+  on one image or a whole layer. Select a result to load its controls, preview,
+  difference counts and packing proposal; use **Compare full stage** before Apply.
 - **Mirror left/right** or **Mirror top/bottom** keeps the chosen side and
   reflects it across the center. Odd center rows are retained.
 
@@ -141,6 +150,32 @@ palette slot and draw mode. Animation/LOD metadata is excluded. The composed
 extent is bounded to 4096 pixels per axis and one million pixels, and must pack
 within 16 pieces. Increase the group size if it cannot fit those limits. This
 is an authoring choice, not an automatic search for visually acceptable edits.
+
+### Automatic discovery
+
+Discovery runs in the background and can be cancelled. It considers aligned
+sizes from powers of two, divisions into 2–16 groups and the current group size,
+bounded between one sixteenth and one half of the source extent. Each repeat
+variant samples up to roughly 34 source offsets. Ranking uses up to 4,096
+stratified pixel samples, with extra weight for silhouette changes. Up to twelve
+shortlisted candidates receive full-resolution packing and verification.
+Cancellation completes after the current packing pass.
+
+The result list shows only candidates that reduce estimated stage video bytes.
+It retains tradeoffs in bytes, changed pixels, silhouette changes and placement
+count, ordered by fewest changed pixels first. All displayed change counts are
+full-resolution counts across every current palette variant; they are not sample
+estimates. **Exact appearance** appears only when no rendered pixels change.
+Other results deliberately alter artwork and require visual review. The search
+does not guarantee the best partition or an aesthetically acceptable result.
+
+The local MK3CAVE spike-layer check sampled 1,072 variants, packed ten candidates
+and retained six tradeoffs. Mirroring the left half modeled 203,238 → 200,602
+video bytes, with 7,606 changed pixels and 64 → 54 stage placements. An 80-pixel
+alternating group at offset 288 modeled 203,238 → 186,360 bytes, with 12,709 changed
+pixels, 6,935 silhouette changes and 64 → 54 placements. These are alternative
+art edits, not additive savings or measured build receipts. All six proposals
+passed Apply and save/reopen comparison in a scratch directory.
 
 On the local MK3CAVE input, repeating a 128-pixel group starting 128 pixels into
 the final layer replaced 26 spike placements with 12. Stage totals changed from
