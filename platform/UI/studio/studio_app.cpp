@@ -7,6 +7,7 @@
 #include "Core/studio_animation.h"
 #include "Core/studio_optimizer.h"
 #include "Core/studio_rom_receipt.h"
+#include "Core/studio_art_audit.h"
 #include <future>
 #include <fstream>
 #include "libs/stb_image.h"
@@ -82,6 +83,11 @@ struct Tab {
     std::vector<OptimizeRegion> heat_regions;
     std::future<RomReceipt> receipt_job;
     std::unique_ptr<RomReceipt> receipt_before, receipt_after;
+    std::future<ArtAudit> audit_job;
+    std::shared_ptr<OptimizeProgress> audit_progress;
+    std::unique_ptr<ArtAudit> art_audit;
+    int audit_choice = -1;
+    bool audit_unplaced_only = true;
     int optimize_mode = 0, pattern_palette = 0;
     PatternOptions pattern_options;
     std::future<PatternPlan> pattern_job;
@@ -102,6 +108,8 @@ struct Tab {
             optimize_progress->cancel = true;
         if (pattern_progress)
             pattern_progress->cancel = true;
+        if (audit_progress)
+            audit_progress->cancel = true;
     }
 };
 struct AssetPayload {
@@ -1333,15 +1341,22 @@ class App {
         }
         ImGui::Separator();
     }
-    void start_optimization(Tab &t, bool shared = false) {
+    void start_optimization(Tab &t, int mode = 0) {
         t.optimize_progress = std::make_shared<OptimizeProgress>();
         auto progress = t.optimize_progress;
         auto doc = t.document;
         auto options = t.optimize_options;
+        if (mode == 2) {
+            options.compact_palettes = true;
+            options.palette_reuse_only = true;
+            options.max_pieces = 1;
+            options.max_added_objects = 0;
+            options.policy = 0;
+        }
         t.optimize_static_palettes = false;
         t.optimize_job =
-            std::async(std::launch::async, [doc = std::move(doc), options, progress, shared]() {
-                return shared ? find_shared_savings(doc, options, progress.get())
+            std::async(std::launch::async, [doc = std::move(doc), options, progress, mode]() {
+                return mode == 1 ? find_shared_savings(doc, options, progress.get())
                               : find_lossless_savings(doc, options, progress.get());
             });
     }
@@ -1357,6 +1372,9 @@ class App {
         ImGui::SameLine();
         if (ImGui::RadioButton("ROM receipts", t.optimize_mode == 3))
             t.optimize_mode = 3;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Unused art", t.optimize_mode == 4))
+            t.optimize_mode = 4;
         ImGui::Separator();
         if (t.optimize_mode == 1)
             pattern_workshop(t);
@@ -1364,6 +1382,8 @@ class App {
             savings_map(t);
         else if (t.optimize_mode == 3)
             rom_receipts(t);
+        else if (t.optimize_mode == 4)
+            unused_art(t);
         else
             lossless_optimizer(t);
         stage_comparison(t);
@@ -1390,6 +1410,13 @@ class App {
             ImGui::SetTooltip("Find a shared base across up to eight images, retaining each "
                               "image's unique details. Includes X/Y flips and translated matches; "
                               "palette indices are preserved.");
+        ImGui::SameLine();
+        if (ImGui::Button("Find palette reuse"))
+            start_optimization(t, 2);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Normalize compatible static colors and reuse whole images, including "
+                              "mirrors. Merges equivalent opaque indices across every used palette "
+                              "variant. No extra placements; uses the palette limit below.");
         ImGui::SameLine();
         ImGui::Checkbox("Deep search", &t.optimize_options.deep);
         ImGui::SameLine();
@@ -1426,6 +1453,8 @@ class App {
             return;
         }
         auto &plan = *t.optimize_plan;
+        if (plan.options.palette_reuse_only)
+            ImGui::TextColored(accent, "Palette-aware whole-image reuse | no extra placements");
         if (!plan.error.empty()) {
             ImGui::TextWrapped("%s", plan.error.c_str());
             return;
@@ -2200,6 +2229,110 @@ class App {
             draw->AddText(ImVec2(origin.x + 12, origin.y + 12), IM_COL32_WHITE,
                           "No regions found within the scan limits.");
     }
+    void start_art_audit(Tab &t) {
+        t.audit_progress = std::make_shared<OptimizeProgress>();
+        auto doc = t.document;
+        t.audit_job = std::async(std::launch::async,
+            [doc = std::move(doc), root = std::string(t.game_root), progress = t.audit_progress]() {
+                return audit_art(doc, root, progress.get());
+            });
+        t.art_audit.reset();
+        t.audit_choice = -1;
+    }
+    void unused_art(Tab &t) {
+        heading("Unused-art audit", "Trace placements, metadata and game reference evidence.");
+        ImGui::TextWrapped("Unplaced artwork can still be used by animation or game code. "
+                           "This audit gathers evidence for review; it does not delete assets or renumber palettes.");
+        bool busy = t.audit_job.valid();
+        ImGui::BeginDisabled(busy);
+        ImGui::SetNextItemWidth(std::max(150.f, ImGui::GetContentRegionAvail().x - 155));
+        ImGui::InputTextWithHint("##audit-root", "Game checkout folder (optional)", t.game_root,
+                                 sizeof t.game_root);
+        ImGui::SameLine();
+        if (ImGui::Button("Choose checkout"))
+            folder_dialog_open("Choose game checkout for reference audit", t.game_root, sizeof t.game_root);
+        if (ImGui::Button("Scan references"))
+            start_art_audit(t);
+        ImGui::EndDisabled();
+        if (busy) {
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel audit")) t.audit_progress->cancel = true;
+            ImGui::ProgressBar((float)t.audit_progress->done.load() /
+                              std::max(1, t.audit_progress->total.load()), ImVec2(-1, 16));
+        }
+        if (!t.art_audit) return;
+        const auto &audit = *t.art_audit;
+        bool stale = t.document.state().assets != audit.before.assets ||
+                     t.document.state().revision != audit.before.revision ||
+                     fs::u8path(t.game_root).lexically_normal() != fs::u8path(audit.root).lexically_normal();
+        if (stale) ImGui::TextColored(accent, "Snapshot changed. Scan again for current evidence.");
+        if (!audit.error.empty()) ImGui::TextWrapped("Audit incomplete: %s", audit.error.c_str());
+        ImGui::Text("%d unplaced images | %d palettes without placements | %d source files scanned",
+                    audit.unplaced_images, audit.unplaced_palettes, audit.source_files);
+        ImGui::TextDisabled("Unplaced video estimate: %.1f KiB upper bound, not verified recoverable space",
+                            audit.unplaced_video_bytes / 1024.0);
+        ImGui::Checkbox("Only assets without placements", &t.audit_unplaced_only);
+        ImGui::SameLine();
+        if (ImGui::Button("Copy report")) ImGui::SetClipboardText(art_audit_report(audit).c_str());
+        ImGui::SameLine();
+        if (ImGui::Button("Save report")) {
+            char path[2048] = {};
+            std::snprintf(path, sizeof path, "%s-art-audit.txt", audit.before.name.c_str());
+            if (file_dialog_save_ext("Save unused-art audit", "Text report\0*.txt\0All files\0*.*\0",
+                                     "txt", path, sizeof path)) {
+                std::ofstream out(fs::u8path(path), std::ios::binary);
+                out << art_audit_report(audit);
+                out.close();
+                if (!out) error = "Could not save the art audit report.";
+            }
+        }
+        if (ImGui::BeginTable("audit-entries", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable, ImVec2(0, 230))) {
+            ImGui::TableSetupColumn("Asset", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Evidence", ImGuiTableColumnFlags_WidthFixed, 150);
+            ImGui::TableSetupColumn("Placements", ImGuiTableColumnFlags_WidthFixed, 80);
+            ImGui::TableSetupColumn("Estimate (B)", ImGuiTableColumnFlags_WidthFixed, 95);
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableHeadersRow();
+            int shown = 0;
+            for (size_t i = 0; i < audit.entries.size(); i++) {
+                const auto &entry = audit.entries[i];
+                if (t.audit_unplaced_only && entry.placements) continue;
+                ++shown;
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                std::string label = (entry.palette ? "Palette " : "Image ") +
+                    std::to_string(entry.id) + "  " + entry.label + "###audit" + std::to_string(i);
+                if (ImGui::Selectable(label.c_str(), t.audit_choice == (int)i,
+                                       ImGuiSelectableFlags_SpanAllColumns)) t.audit_choice = (int)i;
+                ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(entry.status.c_str());
+                ImGui::TableSetColumnIndex(2); ImGui::Text("%d", entry.placements);
+                ImGui::TableSetColumnIndex(3); ImGui::Text("%llu", (unsigned long long)entry.estimated_bytes);
+            }
+            if (!shown) {
+                ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0);
+                ImGui::TextDisabled("Every asset has a placement. Uncheck the filter to inspect references.");
+            }
+            ImGui::EndTable();
+        }
+        if (t.audit_choice >= 0 && t.audit_choice < (int)audit.entries.size()) {
+            const auto &entry = audit.entries[t.audit_choice];
+            ImGui::Text("%s %d: %s", entry.palette ? "Palette" : "Image", entry.id, entry.label.c_str());
+            for (const auto &reference : entry.evidence) ImGui::TextWrapped("%s", reference.c_str());
+            if (!entry.palette) {
+                ImGui::BeginDisabled(stale);
+                if (ImGui::Button("View artwork in Assets")) {
+                    for (size_t i = 0; i < t.document.state().assets->data.images.size(); i++)
+                        if (t.document.state().assets->data.images[i].idx == entry.id) {
+                            cancel_gesture(); t.asset = (int)i; page = 1; break;
+                        }
+                }
+                ImGui::EndDisabled();
+            }
+        }
+        if (ImGui::CollapsingHeader("Coverage and interpretation", ImGuiTreeNodeFlags_DefaultOpen))
+            for (const auto &note : audit.notes) ImGui::TextWrapped("%s", note.c_str());
+    }
     void start_receipt(Tab &t, const std::string &root, bool successful = false) {
         t.receipt_job = std::async(std::launch::async, [root, successful]() {
             return capture_rom_receipt(root, successful);
@@ -2670,6 +2803,11 @@ class App {
     void frame() {
         for (auto &t : tabs) {
             bool was_building = t->game_build.running();
+            if (t->audit_job.valid() && t->audit_job.wait_for(std::chrono::seconds(0)) ==
+                                          std::future_status::ready) {
+                try { t->art_audit = std::make_unique<ArtAudit>(t->audit_job.get()); }
+                catch (const std::exception &e) { error = e.what(); }
+            }
             t->game_build.poll();
             if (was_building && !t->game_build.running() && t->game_build.exit_code() == 0 &&
                 t->game_export && !t->receipt_job.valid()) start_receipt(*t, t->game_export->root, true);
@@ -3007,8 +3145,10 @@ int run(int argc, char **argv) {
     bool test_animation = smoke && argc >= 5 && std::string(argv[4]) == "--animations";
     bool test_review = smoke && argc >= 5 && std::string(argv[4]) == "--optimize-review";
     bool test_shared = smoke && argc >= 5 && std::string(argv[4]) == "--shared";
+    bool test_palette_reuse = smoke && argc >= 5 && std::string(argv[4]) == "--palette-reuse";
+    bool test_art_audit = smoke && argc >= 5 && std::string(argv[4]) == "--art-audit";
     bool test_optimize =
-        test_review || test_shared || (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
+        test_review || test_shared || test_palette_reuse || (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
     bool test_pattern_suggest = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-suggest";
     bool test_pattern_discover = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-discover";
     bool test_pattern = test_pattern_discover || test_pattern_suggest ||
@@ -3035,7 +3175,12 @@ int run(int argc, char **argv) {
     if (test_optimize && app.tab()) {
         auto &t = *app.tab();
         t.optimize_options.deep = true;
-        app.start_optimization(t, test_shared);
+        app.start_optimization(t, test_palette_reuse ? 2 : test_shared ? 1 : 0);
+        app.page = 3;
+    }
+    if (test_art_audit && app.tab()) {
+        app.start_art_audit(*app.tab());
+        app.tab()->optimize_mode = 4;
         app.page = 3;
     }
     auto optimize_deadline =
@@ -3100,6 +3245,7 @@ int run(int argc, char **argv) {
                                : frames == 7   ? "compact.png"
                                : frames == 11  ? "assets.png"
                                : frames == 23  ? "animation.png"
+                               : test_art_audit ? "art-audit.png"
                                : test_optimize ? "optimize.png"
                                : test_pattern  ? "pattern.png"
                                                : "game-export.png";
@@ -3111,6 +3257,18 @@ int run(int argc, char **argv) {
         }
         SDL_RenderPresent(app.renderer);
         if (smoke) {
+            if (test_art_audit && app.tab()) {
+                auto &t = *app.tab();
+                if (t.audit_job.valid()) {
+                    if (std::chrono::steady_clock::now() > optimize_deadline) { rc = 1; app.running = false; }
+                    SDL_Delay(10); continue;
+                }
+                if (!t.art_audit || !t.art_audit->error.empty()) {
+                    std::fprintf(stderr, "Art audit failed: %s\n", t.art_audit ? t.art_audit->error.c_str() : "no result");
+                    rc = 1; app.running = false;
+                }
+                if (frames == 8) { t.audit_unplaced_only = false; t.audit_choice = 0; }
+            }
             if (test_review && app.tab() && app.tab()->receipt_job.valid()) {
                 if (std::chrono::steady_clock::now() > optimize_deadline) { rc = 1; app.running = false; }
                 SDL_Delay(10); continue;
@@ -3161,9 +3319,9 @@ int run(int argc, char **argv) {
                 if (app.tab())
                     app.tab()->fit = true;
             }
-            if (frames == 8 && !test_optimize && !test_pattern)
+            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit)
                 app.page = 1;
-            if (frames == 29 && !test_optimize && !test_pattern) {
+            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit) {
                 app.page = 2;
                 if (argc >= 5 && std::string(argv[4]) == "--prepare" && app.tab())
                     app.prepare_game(*app.tab());

@@ -157,6 +157,34 @@ BddCorePalette remap(const BddCorePalette &p, const Tile &t, bool compact) {
     }
     return out;
 }
+// An opaque index may collapse only if every current palette variant agrees on RGB555.
+// Index zero stays separate even when an opaque entry is also black.
+BddCoreImage equivalent_colors(const BddCoreImage &source, const AssetBank &bank,
+                               const std::vector<int> &palettes, int &merged) {
+    std::array<bool, 256> used{};
+    for (auto p : source.pix)
+        used[p] = true;
+    std::array<uint8_t, 256> map{};
+    std::map<std::vector<uint16_t>, uint8_t> representatives;
+    merged = 0;
+    for (int p = 1; p < 256; p++) {
+        if (!used[p])
+            continue;
+        std::vector<uint16_t> colors;
+        for (int pi : palettes) {
+            const auto &pal = bank.data.palettes.at(pi);
+            require(p < pal.count, "Artwork uses a missing palette entry.");
+            colors.push_back(pal.rgb555[p]);
+        }
+        auto found = representatives.emplace(colors, (uint8_t)p);
+        map[p] = found.first->second;
+        merged += !found.second;
+    }
+    auto normalized = source;
+    for (auto &p : normalized.pix)
+        p = map[p];
+    return normalized;
+}
 struct Candidate {
     std::vector<Tile> tiles;
     int64_t score = INT64_MAX;
@@ -832,6 +860,7 @@ bool verify_pattern(const PatternPlan &plan, std::string &error) {
     }
 }
 
+uint64_t optimization_image_bits(const BddCoreImage &image) { return bits(image); }
 OptimizeBudget optimization_budget(const State &state) {
     OptimizeBudget b;
     if (!state.assets)
@@ -919,11 +948,21 @@ OptimizationPlan find_lossless_savings(const Document &document, const OptimizeO
                 continue;
             }
             std::vector<int> palettes(used_palettes.begin(), used_palettes.end());
-            Search search{
-                *source, palettes, *bank, shared, options, progress, (int)placements.size(), added};
+            int equivalent = 0;
+            auto normalized = options.compact_palettes
+                                  ? equivalent_colors(*source, *bank, palettes, equivalent)
+                                  : *source;
+            auto search_options = options;
+            if (options.palette_reuse_only) {
+                search_options.max_pieces = 1;
+                search_options.max_added_objects = 0;
+                search_options.policy = 0;
+            }
+            Search search{normalized, palettes, *bank, shared, search_options, progress,
+                          (int)placements.size(), added};
             auto candidate = search.run();
             bool compact = options.compact_palettes;
-            if (compact) {
+            if (compact && !options.palette_reuse_only) {
                 auto keep_options = options;
                 keep_options.compact_palettes = false;
                 Search keep{*source,
@@ -941,11 +980,11 @@ OptimizationPlan find_lossless_savings(const Document &document, const OptimizeO
                 }
             }
             // Neutral canonicalization seeds reuse for later whole-image mirrors.
-            bool seed =
-                !compact && candidate.tiles.size() == 1 && candidate.new_bits == bits(*source);
+            bool seed = (!compact || options.palette_reuse_only) &&
+                        candidate.tiles.size() == 1 && candidate.new_bits == bits(*source);
             if (candidate.score == INT64_MAX || (candidate.new_bits >= bits(*source) && !seed))
                 continue;
-            int penalty = options.policy == 0 ? 0 : options.policy == 1 ? 24 : 128;
+            int penalty = search_options.policy == 0 ? 0 : search_options.policy == 1 ? 24 : 128;
             if (candidate.score >= (int64_t)bits(*source) && penalty && !seed)
                 continue;
             auto tentative = std::make_shared<AssetBank>(*bank);
@@ -957,6 +996,7 @@ OptimizationPlan find_lossless_savings(const Document &document, const OptimizeO
             change.before_bits = bits(*source);
             change.added_bits = candidate.new_bits;
             change.reindexed = compact;
+            change.equivalent_indices = compact ? equivalent : 0;
             for (const auto &t : candidate.tiles) {
                 OptimizePiece p;
                 p.x = t.box.x;
@@ -1067,6 +1107,9 @@ OptimizationPlan find_lossless_savings(const Document &document, const OptimizeO
             plan.notes.push_back(
                 "No net modeled saving after exact-payload sharing. No changes proposed.");
         }
+        if (options.compact_palettes)
+            plan.notes.push_back("Equivalent opaque indices merge only when RGB555 matches across "
+                                 "every current palette variant. Transparent zero remains separate.");
         plan.verified = verify_optimization(plan, plan.error);
     } catch (const std::exception &e) {
         plan.error = e.what();
@@ -1549,6 +1592,9 @@ std::string optimization_report(const OptimizationPlan &p) {
                            : std::to_string((uint64_t)original.w * original.h - covered) +
                                  " transparent pixels trimmed")
             << "\n";
+        if (c.equivalent_indices)
+            out << "  " << c.equivalent_indices << " equivalent opaque indices merged across all "
+                << "current palette variants.\n";
     }
     for (const auto &n : p.notes)
         out << n << '\n';

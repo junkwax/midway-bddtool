@@ -6,6 +6,7 @@
 namespace studio {
 struct OptimizeOptions {
     bool deep = false, compact_palettes = true;
+    bool palette_reuse_only = false; // Canonical whole-image reuse; no extra placements.
     int max_pieces = 8, max_added_objects = 64, max_palettes = 45;
     // 0: prioritize bytes, 1: balanced, 2: prioritize fewer placements.
     int policy = 1;
@@ -30,6 +31,7 @@ struct OptimizeChange {
     uint64_t before_bits = 0, added_bits = 0;
     bool reindexed = false;
     bool residual = false;
+    int equivalent_indices = 0;
     std::vector<OptimizePiece> pieces;
 };
 struct OptimizationPlan {
@@ -42,6 +44,7 @@ struct OptimizationPlan {
     bool verified = false, cancelled = false;
 };
 OptimizeBudget optimization_budget(const State &state);
+uint64_t optimization_image_bits(const BddCoreImage &image);
 OptimizationPlan find_lossless_savings(const Document &document, const OptimizeOptions &options,
                                        OptimizeProgress *progress = nullptr);
 OptimizationPlan find_shared_savings(const Document &document, const OptimizeOptions &options,

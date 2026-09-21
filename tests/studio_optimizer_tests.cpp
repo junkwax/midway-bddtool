@@ -593,6 +593,89 @@ int main(int argc, char **argv) {
         require(std::any_of(palette_regions.begin(), palette_regions.end(),
                             [](const auto &r) { return r.kinds & 2; }),
                 "Palette heatmap missing");
+        {
+            auto color_root = root / "equivalent-colors";
+            fs::create_directories(color_root);
+            BddCorePalette variants[2]{};
+            for (int p = 0; p < 2; p++) {
+                std::snprintf(variants[p].name, sizeof variants[p].name, "COLORS%d", p);
+                variants[p].count = 64;
+                for (int c = 0; c < 64; c++) variants[p].rgb555[c] = (uint16_t)(c + p * 100);
+                for (int c : {1, 9, 17, 25}) variants[p].rgb555[c] = 0; // Opaque black, never transparent.
+                for (int c : {2, 10, 18, 26}) variants[p].rgb555[c] = (uint16_t)(512 + p);
+                for (int c : {3, 11, 19, 27}) variants[p].rgb555[c] = (uint16_t)(800 + p);
+                for (int c = 0; c < 64; c++) variants[p].argb[c] = bdd_core_rgb555_to_argb(variants[p].rgb555[c]);
+            }
+            BddCoreImage colored[2];
+            for (int i = 0; i < 2; i++) {
+                colored[i].idx = 7 + i;
+                colored[i].w = 96; colored[i].h = 32;
+                colored[i].pix.resize(96 * 32);
+                for (int y = 0; y < 32; y++) for (int x = 0; x < 96; x++) {
+                    int klass = (x * 7 + y * 3 + x * y) % 4;
+                    int idx = klass ? klass + (i ? 8 : 0) + ((x / 4 + (y / 4) * (i + 1)) % 2 ? 16 : 0) : 0;
+                    colored[i].pix[y * 96 + x] = (uint8_t)idx;
+                }
+            }
+            auto write_colors = [&]() {
+                require(bdd_core_save_bdd((color_root / "fixture.BDD").u8string().c_str(),
+                        colored, 2, variants, 2, &saved) != 0, saved.error);
+            };
+            write_colors();
+            std::ofstream colors_bdb(color_root / "fixture.BDB");
+            colors_bdb << "COLORS 800 254 255 1 2 8\nCOLORS1 0 799 0 253\n";
+            for (int i = 0; i < 8; i++) colors_bdb << std::hex << (0x4000 | ((i % 4) << 4))
+                << std::dec << ' ' << (i % 4) * 120 << ' ' << (i / 4) * 80 << ' '
+                << std::hex << (7 + i / 4) << std::dec << ' ' << i % 2 << '\n';
+            colors_bdb.close();
+            Document colors_doc;
+            require(colors_doc.load((color_root / "fixture.BDB").u8string(), error), error);
+            OptimizeOptions color_options;
+            color_options.palette_reuse_only = true;
+            auto colors_plan = find_lossless_savings(colors_doc, color_options);
+            require(colors_plan.verified && colors_plan.changes.size() == 2 && colors_plan.proposed.images == 1,
+                    "Equivalent-color artwork did not share one payload: " + optimization_report(colors_plan));
+            require(colors_plan.proposed.objects == colors_plan.baseline.objects,
+                    "Whole-image palette reuse added placements");
+            for (const auto &change : colors_plan.changes)
+                require(change.reindexed && change.equivalent_indices > 0,
+                        "Equivalent-color change lost static-palette review marker");
+            check_roundtrip(colors_doc, colors_plan, color_root);
+            auto capped = color_options;
+            capped.max_palettes = 2;
+            auto capped_colors = find_lossless_savings(colors_doc, capped);
+            require(capped_colors.verified && capped_colors.changes.empty(), "Palette cap ignored");
+            auto preserving = color_options;
+            preserving.compact_palettes = false;
+            auto preserved_colors = find_lossless_savings(colors_doc, preserving);
+            require(preserved_colors.verified && std::none_of(preserved_colors.changes.begin(),
+                    preserved_colors.changes.end(), [](const auto &c) { return c.reindexed || c.equivalent_indices; }),
+                    "Index-preserving scan merged opaque indices");
+            variants[1].rgb555[17] = 999; // Same in one palette, different in the other.
+            variants[1].argb[17] = bdd_core_rgb555_to_argb(999);
+            write_colors();
+            Document different_variant;
+            require(different_variant.load((color_root / "fixture.BDB").u8string(), error), error);
+            auto variant_plan = find_lossless_savings(different_variant, color_options);
+            require(variant_plan.verified && variant_plan.proposed.images == 2,
+                    "Indices merged despite a conflicting palette variant");
+            auto variant_root = color_root / "variants";
+            fs::create_directories(variant_root);
+            check_roundtrip(different_variant, variant_plan, variant_root);
+            // A pure permutation with identical BPP still needs neutral canonicalization to seed sharing.
+            for (auto &image : colored) for (auto &value : image.pix)
+                if (value) value = (uint8_t)(1 + ((value - 1) % 8) % 3);
+            for (auto &value : colored[1].pix) if (value) value = value == 3 ? 1 : value + 1;
+            write_colors();
+            Document permutation;
+            require(permutation.load((color_root / "fixture.BDB").u8string(), error), error);
+            auto permutation_plan = find_lossless_savings(permutation, color_options);
+            require(permutation_plan.verified && permutation_plan.proposed.images == 1,
+                    "Same-BPP index permutations were not shared");
+            auto permutation_root = color_root / "permutation";
+            fs::create_directories(permutation_root);
+            check_roundtrip(permutation, permutation_plan, permutation_root);
+        }
         if (argc >= 3) {
             Document real;
             require(real.load(argv[2], error), error);
@@ -620,6 +703,21 @@ int main(int argc, char **argv) {
                 auto r = root / "real-shared";
                 fs::create_directories(r);
                 check_roundtrip(real, shared_actual, r);
+            }
+            auto palette_options = options;
+            palette_options.palette_reuse_only = true;
+            auto palette_actual = find_lossless_savings(real, palette_options);
+            require(palette_actual.verified, palette_actual.error);
+            std::ofstream palette_report(root / "palette-reuse.txt");
+            palette_report << optimization_report(palette_actual);
+            std::cout << "Palette reuse: " << palette_actual.baseline.video_bits / 8 << " -> "
+                      << palette_actual.proposed.video_bits / 8 << " modeled bytes, palettes "
+                      << palette_actual.baseline.palettes << " -> " << palette_actual.proposed.palettes
+                      << ", placements " << palette_actual.proposed.objects << ".\n";
+            if (!palette_actual.changes.empty()) {
+                auto r = root / "real-palette-reuse";
+                fs::create_directories(r);
+                check_roundtrip(real, palette_actual, r);
             }
             // The final layer in the local MK3CAVE fixture is the jagged spike strip.
             if (real.state().name == "mk3cave") {
