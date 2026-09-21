@@ -25,7 +25,11 @@ X/Y mirror reuse. Review exact reconstructions and separate video, palette and
 placement costs, then apply the proposal as one undoable edit. **Repeat & Mirror**
 also previews deliberate art changes: repeat a group across a whole spike layer,
 or mirror one side of a pillar, with changed-pixel overlays and combined reuse.
-Byte figures are estimates pending a game build. See [the optimizer guide](docs/OPTIMIZE.md).
+Shared-base searches retain unique details, a clickable savings map explains the
+cuts, and a full-stage wipe preview follows the camera and layer parallax.
+Proposal bytes remain estimates. **ROM receipts** compare measured build output
+after checking generated IRWs against every byte in all twelve video chips.
+See [the optimizer guide](docs/OPTIMIZE.md).
 
 ![Original specialist editor, available through --legacy-ui](screenshot.jpg)
 

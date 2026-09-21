@@ -9,6 +9,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace studio {
 namespace {
@@ -25,6 +26,7 @@ struct Tile {
     std::vector<int> original_indices;
     std::string key;
     bool fx = false, fy = false;
+    int role = 0;
 };
 std::string key(const BddCoreImage &im) {
     return std::to_string(im.w) + ":" + std::to_string(im.h) + ":" +
@@ -884,6 +886,290 @@ OptimizationPlan find_lossless_savings(const Document &document, const OptimizeO
     }
     return plan;
 }
+OptimizationPlan find_shared_savings(const Document &document, const OptimizeOptions &options,
+                                     OptimizeProgress *progress) {
+    OptimizationPlan plan;
+    plan.before = plan.after = document.state();
+    plan.options = options;
+    plan.options.compact_palettes = false;
+    try {
+        require(plan.before.assets && plan.before.has_bdb, "Open a paired stage first.");
+        require(options.max_pieces >= 1 && options.max_pieces <= 16 &&
+                    options.max_added_objects >= 0,
+                "Invalid shared-piece limits.");
+        plan.baseline = optimization_budget(plan.before);
+        auto bank = std::make_shared<AssetBank>(*plan.before.assets);
+        auto checkpoint = [&]() {
+            if (progress && progress->cancel)
+                throw std::runtime_error("Scan cancelled.");
+        };
+        std::map<int, std::vector<const Placement *>> uses;
+        for (const auto &p : plan.before.objects)
+            uses[p.object.ii].push_back(&p);
+        std::vector<const BddCoreImage *> sources;
+        int next_id = 0;
+        for (const auto &im : bank->data.images) {
+            next_id = std::max(next_id, im.idx + 1);
+            bool ok = im.w > 0 && im.w <= 248 && im.w % 4 == 0 && im.h > 0 &&
+                      (uint64_t)im.w * im.h <= 65500 && im.pix.size() == (size_t)im.w * im.h &&
+                      !uses[im.idx].empty();
+            for (auto p : uses[im.idx])
+                ok &= p->plane >= 0 && p->plane < (int)plan.before.planes.size() && !p->locked &&
+                      !plan.before.planes[p->plane].locked && p->object.fl >= 0 &&
+                      p->object.fl < (int)bank->data.palettes.size();
+            for (const auto &m : bank->metadata)
+                if (m.idx == im.idx && (m.lod_ref || m.anix || m.aniy || m.anix2 || m.aniy2 ||
+                                        m.aniz2 || m.frm || m.opals || m.pttblnum))
+                    ok = false;
+            // Keep pointers in the immutable source snapshot, not the bank being edited.
+            if (ok)
+                sources.push_back(&get_image(plan.before, im.idx));
+        }
+        struct Pair {
+            int a = 0, b = 0, extra = 0;
+            int64_t saving = 0;
+            std::vector<Tile> first, second;
+        };
+        std::vector<Pair> proposals;
+        int pair_limit = options.deep ? 4096 : 1024, visited = 0;
+        if (progress) {
+            progress->done = 0;
+            progress->total =
+                std::min(pair_limit,
+                         (int)(sources.size() * (sources.size() - (sources.empty() ? 0 : 1)) / 2));
+        }
+        for (size_t ai = 0; ai < sources.size(); ai++)
+            for (size_t bi = ai + 1; bi < sources.size() && visited < pair_limit; bi++) {
+                checkpoint();
+                visited++;
+                if (progress)
+                    ++progress->done;
+                const auto &a = *sources[ai], &b = *sources[bi];
+                if (a.flags != b.flags ||
+                    (options.source_image >= 0 && a.idx != options.source_image &&
+                     b.idx != options.source_image))
+                    continue;
+                Pair best;
+                // Exact 8x4 anchors vote for translations. Blank windows cannot create matches.
+                auto anchor = [](const BddCoreImage &im, int x, int y, int flip) {
+                    std::string value;
+                    int opaque = 0;
+                    for (int yy = 0; yy < 4; yy++)
+                        for (int xx = 0; xx < 8; xx++) {
+                            auto p =
+                                im.pix[(size_t)((flip & 2) ? im.h - 1 - y - yy : y + yy) * im.w +
+                                       ((flip & 1) ? im.w - 1 - x - xx : x + xx)];
+                            value.push_back((char)p);
+                            opaque += p != 0;
+                        }
+                    return opaque >= 8 ? value : std::string{};
+                };
+                std::unordered_map<std::string, std::vector<std::pair<int, int>>> anchors;
+                int stride = options.deep ? 4 : 8;
+                for (int y = 0; y + 4 <= a.h; y += stride)
+                    for (int x = 0; x + 8 <= a.w; x += stride) {
+                        auto k = anchor(a, x, y, 0);
+                        if (!k.empty() && anchors[k].size() < 4)
+                            anchors[k].emplace_back(x, y);
+                    }
+                for (int flip = 0; flip < 4; flip++) {
+                    checkpoint();
+                    std::map<std::pair<int, int>, int> votes;
+                    for (int y = 0; y + 4 <= b.h; y += stride)
+                        for (int x = 0; x + 8 <= b.w; x += stride) {
+                            auto found = anchors.find(anchor(b, x, y, flip));
+                            if (found != anchors.end())
+                                for (auto p : found->second)
+                                    votes[{x - p.first, y - p.second}]++;
+                        }
+                    std::vector<std::pair<int, std::pair<int, int>>> ranked;
+                    for (const auto &vote : votes)
+                        ranked.emplace_back(vote.second, vote.first);
+                    std::sort(ranked.rbegin(), ranked.rend());
+                    std::vector<std::pair<int, int>> offsets{{0, 0}};
+                    for (size_t i = 0; i < ranked.size() && i < 4; i++)
+                        if (ranked[i].second != offsets.front())
+                            offsets.push_back(ranked[i].second);
+                    for (auto offset : offsets) {
+                        BddCoreImage common_a = a, common_b = b, detail_a = a, detail_b = b;
+                        std::fill(common_a.pix.begin(), common_a.pix.end(), 0);
+                        std::fill(common_b.pix.begin(), common_b.pix.end(), 0);
+                        int matched = 0;
+                        for (int y = 0; y < a.h; y++)
+                            for (int x = 0; x < a.w; x++) {
+                                int bx = x + offset.first, by = y + offset.second;
+                                if (bx < 0 || by < 0 || bx >= b.w || by >= b.h)
+                                    continue;
+                                if (flip & 1)
+                                    bx = b.w - 1 - bx;
+                                if (flip & 2)
+                                    by = b.h - 1 - by;
+                                size_t ap = (size_t)y * a.w + x, bp = (size_t)by * b.w + bx;
+                                if (a.pix[ap] && a.pix[ap] == b.pix[bp]) {
+                                    common_a.pix[ap] = common_b.pix[bp] = a.pix[ap];
+                                    detail_a.pix[ap] = detail_b.pix[bp] = 0;
+                                    matched++;
+                                }
+                            }
+                        if (matched < 32)
+                            continue;
+                        Pair pair;
+                        pair.a = a.idx;
+                        pair.b = b.idx;
+                        auto parts = [](const BddCoreImage &common, const BddCoreImage &detail) {
+                            std::vector<Tile> out;
+                            auto c = tile(common, {0, 0, common.w, common.h}, false);
+                            c.role = 1;
+                            auto d = tile(detail, {0, 0, detail.w, detail.h}, false);
+                            d.role = 2;
+                            if (!c.image.pix.empty())
+                                out.push_back(std::move(c));
+                            if (!d.image.pix.empty())
+                                out.push_back(std::move(d));
+                            return out;
+                        };
+                        pair.first = parts(common_a, detail_a);
+                        pair.second = parts(common_b, detail_b);
+                        if (pair.first.empty() || pair.second.empty() ||
+                            pair.first[0].key != pair.second[0].key ||
+                            pair.first.size() > (size_t)options.max_pieces ||
+                            pair.second.size() > (size_t)options.max_pieces)
+                            continue;
+                        pair.extra = ((int)pair.first.size() - 1) * (int)uses[a.idx].size() +
+                                     ((int)pair.second.size() - 1) * (int)uses[b.idx].size();
+                        if (pair.extra > options.max_added_objects)
+                            continue;
+                        std::set<std::string> unique;
+                        uint64_t cost = 0;
+                        for (const auto &list : {pair.first, pair.second})
+                            for (const auto &t : list)
+                                if (unique.insert(t.key).second)
+                                    cost += bits(t.image);
+                        int penalty = options.policy == 0 ? 0 : options.policy == 1 ? 24 : 128;
+                        pair.saving = (int64_t)bits(a) + (key(a) == key(b) ? 0 : (int64_t)bits(b)) -
+                                      (int64_t)cost - (int64_t)pair.extra * penalty * 8;
+                        if (pair.saving > best.saving)
+                            best = std::move(pair);
+                    }
+                }
+                if (best.saving > 0) {
+                    proposals.push_back(std::move(best));
+                    std::sort(proposals.begin(), proposals.end(),
+                              [](const auto &x, const auto &y) { return x.saving > y.saving; });
+                    if (proposals.size() > 128)
+                        proposals.resize(128);
+                }
+            }
+        std::set<int> consumed;
+        std::map<std::string, int> shared;
+        int added = 0;
+        for (const auto &pair : proposals) {
+            checkpoint();
+            if (consumed.count(pair.a) || consumed.count(pair.b) ||
+                added + pair.extra > options.max_added_objects)
+                continue;
+            int worst_new = (int)(pair.first.size() + pair.second.size());
+            if (bank->data.images.size() + worst_new - 2 > BDD_CORE_MK2_LOAD2_MAX_IMAGE_HEADERS ||
+                next_id + worst_new > 65536)
+                continue;
+            for (int side = 0; side < 2; side++) {
+                int id = side ? pair.b : pair.a;
+                const auto &tiles = side ? pair.second : pair.first;
+                OptimizeChange change;
+                change.source_image = id;
+                change.uses = (int)uses[id].size();
+                change.before_bits = bits(get_image(plan.before, id));
+                change.residual = true;
+                for (const auto &t : tiles) {
+                    OptimizePiece piece;
+                    piece.x = t.box.x;
+                    piece.y = t.box.y;
+                    piece.w = t.box.w;
+                    piece.h = t.box.h;
+                    piece.flip_x = t.fx;
+                    piece.flip_y = t.fy;
+                    piece.role = t.role;
+                    if (!shared.count(t.key)) {
+                        auto im = t.image;
+                        im.idx = next_id++;
+                        shared[t.key] = im.idx;
+                        change.added_bits += bits(im);
+                        bank->data.images.push_back(im);
+                        bank->default_palettes.push_back(uses[id].front()->object.fl);
+                        BddImageMetadata m{};
+                        m.idx = im.idx;
+                        std::snprintf(m.label, sizeof m.label, "SHARED_%d", m.idx);
+                        bank->metadata.push_back(m);
+                    }
+                    piece.image = shared.at(t.key);
+                    for (auto use : uses[id])
+                        piece.palettes[use->object.fl] = use->object.fl;
+                    change.pieces.push_back(std::move(piece));
+                }
+                auto pos = std::find_if(bank->data.images.begin(), bank->data.images.end(),
+                                        [&](const auto &im) { return im.idx == id; });
+                bank->default_palettes.erase(bank->default_palettes.begin() +
+                                             (pos - bank->data.images.begin()));
+                bank->data.images.erase(pos);
+                consumed.insert(id);
+                plan.changes.push_back(std::move(change));
+            }
+            added += pair.extra;
+        }
+        plan.after.assets = bank;
+        plan.after.objects.clear();
+        ObjectId next_object = 1;
+        for (const auto &p : plan.before.objects)
+            next_object = std::max(next_object, p.id + 1);
+        for (const auto &old : plan.before.objects) {
+            auto change =
+                std::find_if(plan.changes.begin(), plan.changes.end(),
+                             [&](const auto &c) { return c.source_image == old.object.ii; });
+            if (change == plan.changes.end()) {
+                plan.after.objects.push_back(old);
+                continue;
+            }
+            const auto &im = get_image(plan.before, old.object.ii);
+            bool first = true;
+            for (const auto &piece : change->pieces) {
+                auto p = old;
+                if (!first)
+                    p.id = next_object++;
+                first = false;
+                p.object.depth += (old.object.wx & 0x10) ? im.w - piece.x - piece.w : piece.x;
+                p.object.sy += (old.object.wx & 0x20) ? im.h - piece.y - piece.h : piece.y;
+                p.object.wx ^= (piece.flip_x ? 0x10 : 0) | (piece.flip_y ? 0x20 : 0);
+                p.object.ii = piece.image;
+                plan.after.objects.push_back(p);
+            }
+        }
+        std::stable_sort(
+            plan.after.objects.begin(), plan.after.objects.end(),
+            [](const auto &a, const auto &b) { return a.object.order < b.object.order; });
+        for (size_t i = 0; i < plan.after.objects.size(); i++)
+            plan.after.objects[i].object.order = (int)i;
+        require(plan.after.objects.size() <= BDD_CORE_MK2_LOAD2_MAX_BLOCKS,
+                "Shared pieces exceed the LOAD2 block limit.");
+        plan.proposed = optimization_budget(plan.after);
+        if (plan.proposed.video_bits >= plan.baseline.video_bits) {
+            plan.after = plan.before;
+            plan.proposed = plan.baseline;
+            plan.changes.clear();
+        }
+        plan.notes.push_back("Shared-base search: exact index matches, X/Y flips and sampled 8x4 "
+                             "translation anchors; up to " +
+                             std::to_string(pair_limit) +
+                             " pairs. Unique opaque details retained. Rectangles may overlap; "
+                             "opaque pixels must not.");
+        plan.verified = verify_optimization(plan, plan.error);
+    } catch (const std::exception &e) {
+        plan.error = e.what();
+        if (progress && progress->cancel)
+            plan.cancelled = true;
+    }
+    return plan;
+}
+
 bool verify_optimization(const OptimizationPlan &plan, std::string &error) {
     try {
         require(plan.before.assets && plan.after.assets, "Missing optimization assets.");
@@ -966,10 +1252,14 @@ bool verify_optimization(const OptimizationPlan &plan, std::string &error) {
                     for (int y = 0; y < p.h; y++)
                         for (int x = 0; x < p.w; x++) {
                             size_t i = (size_t)(p.y + y) * original.w + p.x + x;
-                            require(!covered[i], "Overlapping optimization pieces.");
-                            covered[i] = true;
-                            reconstructed[i] = pixel(im, colors, p.flip_x ? p.w - 1 - x : x,
-                                                     p.flip_y ? p.h - 1 - y : y);
+                            auto value = pixel(im, colors, p.flip_x ? p.w - 1 - x : x,
+                                               p.flip_y ? p.h - 1 - y : y);
+                            if (!change.residual || value) {
+                                require(!covered[i], "Overlapping opaque optimization pixels.");
+                                covered[i] = true;
+                            }
+                            if (value)
+                                reconstructed[i] = value;
                         }
                 }
                 for (int y = 0; y < original.h; y++)
@@ -1008,7 +1298,10 @@ std::string optimization_report(const OptimizationPlan &p) {
         const auto &original = get_image(p.before, c.source_image);
         out << "Image " << c.source_image << ": " << c.pieces.size() << " pieces, " << c.uses
             << " uses, " << tiles.size() << " unique tiles, "
-            << (uint64_t)original.w * original.h - covered << " transparent pixels trimmed\n";
+            << (c.residual ? "shared base + unique details"
+                           : std::to_string((uint64_t)original.w * original.h - covered) +
+                                 " transparent pixels trimmed")
+            << "\n";
     }
     for (const auto &n : p.notes)
         out << n << '\n';
@@ -1022,5 +1315,67 @@ std::string optimization_report(const OptimizationPlan &p) {
            "This bounded greedy search is not an exhaustive optimum. Runtime peak objects/DMA and "
            "bank headroom are not measured.\n";
     return out.str();
+}
+std::vector<OptimizeRegion> optimization_regions(const OptimizationPlan &plan) {
+    std::vector<OptimizeRegion> regions;
+    if (!plan.verified)
+        return regions;
+    std::map<int, int> uses;
+    for (const auto &c : plan.changes)
+        for (const auto &p : c.pieces)
+            uses[p.image]++;
+    for (size_t ci = 0; ci < plan.changes.size(); ci++) {
+        const auto &c = plan.changes[ci];
+        const auto &original = get_image(plan.before, c.source_image);
+        int before_bpp = bdd_core_load2_bpp_for_max_pixel(
+            bdd_core_image_max_pixel(original.pix.data(), original.w, original.h));
+        std::vector<bool> stored(original.pix.size());
+        for (const auto &p : c.pieces) {
+            const auto &im = get_image(plan.after, p.image);
+            int bpp = bdd_core_load2_bpp_for_max_pixel(
+                bdd_core_image_max_pixel(im.pix.data(), im.w, im.h));
+            int kinds = (bpp < before_bpp ? 2 : 0) | (uses[p.image] > 1 ? 4 : 0) |
+                        (uses[p.image] > 1 && (p.flip_x || p.flip_y) ? 8 : 0) |
+                        (p.role == 2 ? 16 : 0);
+            if (kinds)
+                regions.push_back({c.source_image,
+                                   (int)ci,
+                                   kinds,
+                                   {(double)p.x, (double)p.y, (double)p.w, (double)p.h},
+                                   before_bpp,
+                                   bpp});
+            for (int y = p.y; y < p.y + p.h; y++)
+                for (int x = p.x; x < p.x + p.w; x++)
+                    stored[(size_t)y * original.w + x] = true;
+        }
+        // Merge matching omitted row spans vertically into exact crop rectangles.
+        std::map<std::pair<int, int>, size_t> active;
+        for (int y = 0; y < original.h; y++) {
+            std::map<std::pair<int, int>, size_t> next;
+            for (int x = 0; x < original.w; x++) {
+                if (stored[(size_t)y * original.w + x])
+                    continue;
+                int start = x;
+                while (x + 1 < original.w && !stored[(size_t)y * original.w + x + 1])
+                    x++;
+                auto span = std::make_pair(start, x - start + 1);
+                if (active.count(span)) {
+                    auto index = active.at(span);
+                    regions[index].rect.h++;
+                    next[span] = index;
+                } else {
+                    next[span] = regions.size();
+                    regions.push_back({c.source_image,
+                                       (int)ci,
+                                       1,
+                                       {(double)start, (double)y, (double)span.second, 1},
+                                       before_bpp,
+                                       0});
+                }
+            }
+            active = std::move(next);
+        }
+    }
+    return regions;
 }
 } // namespace studio

@@ -6,6 +6,7 @@
 #include "Core/studio_game_build.h"
 #include "Core/studio_animation.h"
 #include "Core/studio_optimizer.h"
+#include "Core/studio_rom_receipt.h"
 #include <future>
 #include <fstream>
 #include "libs/stb_image.h"
@@ -67,6 +68,15 @@ struct Tab {
     std::unique_ptr<OptimizationPlan> optimize_plan;
     int optimize_choice = 0, optimize_palette = 0;
     bool optimize_static_palettes = false, optimize_cuts = true;
+    bool compare_open = false, compare_pattern = false, compare_after = true, compare_wipe = true;
+    float compare_split = .5f;
+    Point compare_camera;
+    Viewport heat_view;
+    bool heat_fit = true;
+    int heat_kind = 0;
+    std::vector<OptimizeRegion> heat_regions;
+    std::future<RomReceipt> receipt_job;
+    std::unique_ptr<RomReceipt> receipt_before, receipt_after;
     int optimize_mode = 0, pattern_palette = 0;
     PatternOptions pattern_options;
     std::future<PatternPlan> pattern_job;
@@ -133,6 +143,7 @@ class App {
     TextureCache textures;
     TextureCache animation_textures;
     TextureCache optimize_before_textures, optimize_after_textures;
+    TextureCache compare_before_textures, compare_after_textures;
     std::vector<std::unique_ptr<Tab>> tabs;
     int active = -1, page = 0, select_tab = -1;
     uint64_t next_tab = 1;
@@ -1200,15 +1211,16 @@ class App {
         }
         ImGui::Separator();
     }
-    void start_optimization(Tab &t) {
+    void start_optimization(Tab &t, bool shared = false) {
         t.optimize_progress = std::make_shared<OptimizeProgress>();
         auto progress = t.optimize_progress;
         auto doc = t.document;
         auto options = t.optimize_options;
         t.optimize_static_palettes = false;
         t.optimize_job =
-            std::async(std::launch::async, [doc = std::move(doc), options, progress]() {
-                return find_lossless_savings(doc, options, progress.get());
+            std::async(std::launch::async, [doc = std::move(doc), options, progress, shared]() {
+                return shared ? find_shared_savings(doc, options, progress.get())
+                              : find_lossless_savings(doc, options, progress.get());
             });
     }
     void optimize(Tab &t) {
@@ -1217,11 +1229,31 @@ class App {
         ImGui::SameLine();
         if (ImGui::RadioButton("Repeat & Mirror", t.optimize_mode == 1))
             t.optimize_mode = 1;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Savings map", t.optimize_mode == 2))
+            t.optimize_mode = 2;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("ROM receipts", t.optimize_mode == 3))
+            t.optimize_mode = 3;
         ImGui::Separator();
-        if (t.optimize_mode == 1) {
+        if (t.optimize_mode == 1)
             pattern_workshop(t);
-            return;
+        else if (t.optimize_mode == 2)
+            savings_map(t);
+        else if (t.optimize_mode == 3)
+            rom_receipts(t);
+        else
+            lossless_optimizer(t);
+        stage_comparison(t);
+    }
+    void compare_button(Tab &t, bool pattern) {
+        if (ImGui::Button("Compare full stage")) {
+            t.compare_pattern = pattern;
+            t.compare_camera = t.camera;
+            t.compare_open = true;
         }
+    }
+    void lossless_optimizer(Tab &t) {
         heading("Find lossless savings",
                 "Explore smaller representations of exactly the same artwork.");
         bool busy = t.optimize_job.valid();
@@ -1229,6 +1261,9 @@ class App {
                              !t.document.state().has_bdb);
         if (ImGui::Button("Find savings"))
             start_optimization(t);
+        ImGui::SameLine();
+        if (ImGui::Button("Find shared bases")) start_optimization(t, true);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Search exact common pixels across artwork, retaining unique details as separate pieces. Palette indices are preserved.");
         ImGui::SameLine();
         ImGui::Checkbox("Deep search", &t.optimize_options.deep);
         ImGui::SameLine();
@@ -1269,6 +1304,7 @@ class App {
             ImGui::TextWrapped("%s", plan.error.c_str());
             return;
         }
+        compare_button(t, false);
         bool current = plan.before.assets == t.document.state().assets &&
                        plan.before.revision == t.document.state().revision;
         if (!current)
@@ -1355,7 +1391,8 @@ class App {
         int trimmed = it->w * it->h;
         for (const auto &piece : change.pieces)
             trimmed -= piece.w * piece.h;
-        ImGui::TextDisabled("%d transparent pixels trimmed from stored regions", trimmed);
+        if (change.residual) ImGui::TextDisabled("Shared base + unique details; exact pixels retained");
+        else ImGui::TextDisabled("%d transparent pixels trimmed from stored regions", trimmed);
         float half = (ImGui::GetContentRegionAvail().x - 18) / 2;
         auto origin = ImGui::GetCursorScreenPos();
         float scale = std::min(half / it->w, 190.0f / it->h);
@@ -1576,6 +1613,7 @@ class App {
         bool current =
             plan && plan->before.assets == state.assets && plan->before.revision == state.revision;
         if (plan && plan->valid) {
+            compare_button(t, true);
             auto original = optimization_budget(plan->before);
             const auto &packed = plan->packing.proposed;
             double delta = ((double)original.video_bits - packed.video_bits) / 8;
@@ -1699,6 +1737,359 @@ class App {
             ImVec2(stacked ? half : half * 2 + 18, (stacked ? 2 : 1) * (40 + it->h * scale)));
         ImGui::EndChild();
         ImGui::EndTable();
+    }
+    void draw_snapshot(const State &state, TextureCache &cache, ImVec2 origin, float scale,
+                       Point camera, ImVec2 clip_a, ImVec2 clip_b) {
+        auto *draw = ImGui::GetWindowDrawList();
+        cache.renderer = renderer;
+        draw->PushClipRect(clip_a, clip_b, true);
+        for (const auto &item : scene_items(state, camera)) {
+            ImVec2 a(origin.x + (float)item.rect.x * scale, origin.y + (float)item.rect.y * scale);
+            ImVec2 b(a.x + (float)item.rect.w * scale, a.y + (float)item.rect.h * scale);
+            if (b.x <= clip_a.x || b.y <= clip_a.y || a.x >= clip_b.x || a.y >= clip_b.y)
+                continue;
+            auto texture = cache.get(state, (int)item.image_slot, item.palette);
+            if (texture)
+                draw->AddImage((ImTextureID)(intptr_t)texture, a, b,
+                               ImVec2(item.hflip ? 1.f : 0.f, item.vflip ? 1.f : 0.f),
+                               ImVec2(item.hflip ? 0.f : 1.f, item.vflip ? 0.f : 1.f));
+        }
+        draw->PopClipRect();
+    }
+    void stage_comparison(Tab &t) {
+        if (!t.compare_open)
+            return;
+        const State *before = nullptr, *after = nullptr;
+        if (t.compare_pattern && t.pattern_plan && t.pattern_plan->valid) {
+            before = &t.pattern_plan->before;
+            after = &t.pattern_plan->packing.after;
+        } else if (!t.compare_pattern && t.optimize_plan && t.optimize_plan->verified) {
+            before = &t.optimize_plan->before;
+            after = &t.optimize_plan->after;
+        }
+        auto display = ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowSize(
+            ImVec2(std::min(900.f, display.x - 40), std::min(680.f, display.y - 80)),
+            ImGuiCond_Appearing);
+        ImGui::SetNextWindowPos(ImVec2(display.x / 2, display.y / 2), ImGuiCond_Appearing,
+                                ImVec2(.5f, .5f));
+        if (ImGui::Begin("Stage comparison", &t.compare_open)) {
+            if (!before)
+                ImGui::TextWrapped("Generate a proposal to compare its stage snapshots.");
+            else {
+                ImGui::TextWrapped(
+                    "400 x 254 background preview. Drag to move the camera; layer parallax and "
+                    "draw order follow the document. Runtime actors and effects are excluded.");
+                if (std::any_of(before->planes.begin(), before->planes.end(),
+                                [](const auto &p) { return !p.bound; }))
+                    ImGui::TextDisabled("Some layer positions are estimated. This preview follows "
+                                        "your current document layout.");
+                if (before->assets != t.document.state().assets ||
+                    before->revision != t.document.state().revision)
+                    ImGui::TextColored(
+                        accent, "Comparing the analyzed snapshot; the document has changed.");
+                float camera[2] = {(float)t.compare_camera.x, (float)t.compare_camera.y};
+                ImGui::SetNextItemWidth(280);
+                if (ImGui::DragFloat2("Camera X / Y", camera, 1, -32768, 32767, "%.0f",
+                                      ImGuiSliderFlags_AlwaysClamp))
+                    t.compare_camera = {camera[0], camera[1]};
+                ImGui::SameLine();
+                if (ImGui::Button("Stage start"))
+                    t.compare_camera = {(double)before->start_x, (double)before->start_y};
+                ImGui::SameLine();
+                if (ImGui::Button("Focus proposal")) {
+                    bool found = false;
+                    Rect bounds{};
+                    double scroll = 1;
+                    for (const auto &item : scene_items(*before)) {
+                        const auto &object = before->objects[item.object_index];
+                        bool affected =
+                            t.compare_pattern
+                                ? (t.pattern_plan->options.plane >= 0
+                                       ? object.plane == t.pattern_plan->options.plane
+                                       : object.object.ii == t.pattern_plan->options.image)
+                                : std::any_of(t.optimize_plan->changes.begin(),
+                                              t.optimize_plan->changes.end(), [&](const auto &c) {
+                                                  return c.source_image == object.object.ii;
+                                              });
+                        if (!affected)
+                            continue;
+                        if (!found) {
+                            bounds = item.rect;
+                            if (object.plane >= 0)
+                                scroll = before->planes[object.plane].scroll;
+                            found = true;
+                        } else {
+                            double right = std::max(bounds.x + bounds.w, item.rect.x + item.rect.w),
+                                   bottom =
+                                       std::max(bounds.y + bounds.h, item.rect.y + item.rect.h);
+                            bounds.x = std::min(bounds.x, item.rect.x);
+                            bounds.y = std::min(bounds.y, item.rect.y);
+                            bounds.w = right - bounds.x;
+                            bounds.h = bottom - bounds.y;
+                        }
+                    }
+                    if (found)
+                        t.compare_camera = {
+                            std::abs(scroll) > .001 ? (bounds.x + bounds.w / 2 - 200) / scroll : 0,
+                            bounds.y + bounds.h / 2 - 127};
+                }
+                ImGui::Checkbox("Wipe comparison", &t.compare_wipe);
+                ImGui::SameLine();
+                if (t.compare_wipe) {
+                    ImGui::SetNextItemWidth(220);
+                    ImGui::SliderFloat("Original / proposed", &t.compare_split, 0, 1, "%.2f");
+                } else
+                    ImGui::Checkbox("Show proposed artwork", &t.compare_after);
+                auto size = ImGui::GetContentRegionAvail();
+                float scale = std::max(.1f, std::min(size.x / 400, (size.y - 24) / 254));
+                auto a = ImGui::GetCursorScreenPos();
+                ImVec2 b(a.x + 400 * scale, a.y + 254 * scale);
+                ImGui::InvisibleButton("comparison-camera", ImVec2(400 * scale, 254 * scale));
+                if (ImGui::IsItemHovered() && ImGui::IsMouseDragging(0)) {
+                    auto delta = ImGui::GetIO().MouseDelta;
+                    t.compare_camera.x =
+                        std::clamp(t.compare_camera.x - delta.x / scale, -32768.0, 32767.0);
+                    t.compare_camera.y =
+                        std::clamp(t.compare_camera.y - delta.y / scale, -32768.0, 32767.0);
+                }
+                auto *draw = ImGui::GetWindowDrawList();
+                draw->AddRectFilled(a, b, IM_COL32(10, 12, 16, 255));
+                if (t.compare_wipe) {
+                    float split = a.x + 400 * scale * t.compare_split;
+                    draw_snapshot(*before, compare_before_textures, a, scale, t.compare_camera, a,
+                                  ImVec2(split, b.y));
+                    draw_snapshot(*after, compare_after_textures, a, scale, t.compare_camera,
+                                  ImVec2(split, a.y), b);
+                    draw->AddLine(ImVec2(split, a.y), ImVec2(split, b.y), selection_color, 2);
+                    ImGui::TextDisabled("Original on left | Proposed on right");
+                } else {
+                    draw_snapshot(t.compare_after ? *after : *before,
+                                  t.compare_after ? compare_after_textures
+                                                  : compare_before_textures,
+                                  a, scale, t.compare_camera, a, b);
+                    ImGui::TextDisabled("%s", t.compare_after ? "Proposed" : "Original");
+                }
+            }
+        }
+        ImGui::End();
+    }
+    void savings_map(Tab &t) {
+        heading("Savings map",
+                "Inspect the regions found by your latest lossless or shared-base scan.");
+        ImGui::BeginDisabled(t.optimize_job.valid() || t.pattern_job.valid());
+        if (ImGui::Button("Scan cuts & palettes"))
+            start_optimization(t);
+        ImGui::SameLine();
+        if (ImGui::Button("Scan shared bases"))
+            start_optimization(t, true);
+        ImGui::EndDisabled();
+        if (t.optimize_job.valid())
+            ImGui::TextDisabled("Scan running; the previous map stays visible.");
+        if (!t.optimize_plan || !t.optimize_plan->verified) {
+            ImGui::TextWrapped("Run a scan to see verified proposals. Colors describe "
+                               "opportunities, not additive byte savings.");
+            if (t.optimize_plan)
+                ImGui::TextWrapped("%s", t.optimize_plan->error.c_str());
+            return;
+        }
+        const auto &plan = *t.optimize_plan;
+        if (plan.before.assets != t.document.state().assets ||
+            plan.before.revision != t.document.state().revision)
+            ImGui::TextColored(accent, "Snapshot map: scan again to include document edits.");
+        ImGui::SetNextItemWidth(220);
+        ImGui::Combo("Show", &t.heat_kind,
+                     "All opportunities\0Trimmed blank space\0Lower BPP\0Shared pieces\0Mirror "
+                     "reuse\0Unique details\0");
+        ImGui::SameLine();
+        if (ImGui::Button("Fit stage"))
+            t.heat_fit = true;
+        ImGui::TextWrapped(
+            "Yellow: blank trim | Blue: lower BPP | Purple: shared | Orange: mirror | Gray: "
+            "retained detail. Click a region to inspect its cuts. Wheel zooms; right-drag pans.");
+        auto items = scene_items(plan.before);
+        if (items.empty())
+            return;
+        auto origin = ImGui::GetCursorScreenPos();
+        auto size = ImGui::GetContentRegionAvail();
+        size.y = std::max(260.f, size.y);
+        size.x = std::max(1.f, size.x);
+        if (t.heat_fit) {
+            Rect bounds = items.front().rect;
+            double x2 = bounds.x + bounds.w, y2 = bounds.y + bounds.h;
+            for (const auto &item : items) {
+                bounds.x = std::min(bounds.x, item.rect.x);
+                bounds.y = std::min(bounds.y, item.rect.y);
+                x2 = std::max(x2, item.rect.x + item.rect.w);
+                y2 = std::max(y2, item.rect.y + item.rect.h);
+            }
+            bounds.w = x2 - bounds.x;
+            bounds.h = y2 - bounds.y;
+            t.heat_view.fit(bounds, {0, 0, size.x, size.y});
+            t.heat_fit = false;
+        }
+        ImGui::InvisibleButton("savings-canvas", size,
+                               ImGuiButtonFlags_MouseButtonLeft |
+                                   ImGuiButtonFlags_MouseButtonRight);
+        bool hovered = ImGui::IsItemHovered();
+        auto &io = ImGui::GetIO();
+        if (hovered && io.MouseWheel)
+            t.heat_view.zoom_at(t.heat_view.zoom * std::pow(1.15, io.MouseWheel),
+                                point(io.MousePos), point(origin));
+        if (hovered && ImGui::IsMouseDragging(1)) {
+            t.heat_view.pan.x -= io.MouseDelta.x / t.heat_view.zoom;
+            t.heat_view.pan.y -= io.MouseDelta.y / t.heat_view.zoom;
+        }
+        auto draw = ImGui::GetWindowDrawList();
+        ImVec2 end(origin.x + size.x, origin.y + size.y);
+        draw->AddRectFilled(origin, end, IM_COL32(14, 17, 22, 255));
+        auto zero = t.heat_view.to_screen({}, point(origin));
+        draw_snapshot(plan.before, compare_before_textures, vec(zero), (float)t.heat_view.zoom, {},
+                      origin, end);
+        draw->PushClipRect(origin, end, true);
+        const OptimizeRegion *hit = nullptr;
+        for (const auto &item : items)
+            for (const auto &r : t.heat_regions) {
+                if (r.image != plan.before.assets->data.images[item.image_slot].idx ||
+                    (t.heat_kind && !(r.kinds & (1 << (t.heat_kind - 1)))))
+                    continue;
+                Rect rect = r.rect;
+                if (item.hflip)
+                    rect.x = item.rect.w - rect.x - rect.w;
+                if (item.vflip)
+                    rect.y = item.rect.h - rect.y - rect.h;
+                rect.x += item.rect.x;
+                rect.y += item.rect.y;
+                ImVec2 a = vec(t.heat_view.to_screen({rect.x, rect.y}, point(origin)));
+                ImVec2 b =
+                    vec(t.heat_view.to_screen({rect.x + rect.w, rect.y + rect.h}, point(origin)));
+                int kind = t.heat_kind     ? 1 << (t.heat_kind - 1)
+                           : (r.kinds & 1) ? 1
+                           : (r.kinds & 4) ? 4
+                           : (r.kinds & 8) ? 8
+                           : (r.kinds & 2) ? 2
+                                           : 16;
+                ImU32 color = kind == 1   ? IM_COL32(245, 200, 55, 100)
+                              : kind == 2 ? IM_COL32(37, 128, 222, 100)
+                              : kind == 4 ? IM_COL32(175, 100, 245, 100)
+                              : kind == 8 ? IM_COL32(245, 135, 55, 100)
+                                          : IM_COL32(160, 170, 185, 80);
+                draw->AddRectFilled(a, b, color);
+                draw->AddRect(a, b, color | IM_COL32(0, 0, 0, 255));
+                if (hovered && ImGui::IsMouseHoveringRect(a, b))
+                    hit = &r;
+            }
+        draw->PopClipRect();
+        if (hit) {
+            ImGui::SetTooltip(
+                "Image %d | %d -> %d BPP\n%s%s%s%s%s\nClick to inspect the verified proposal.",
+                hit->image, hit->before_bpp, hit->after_bpp, hit->kinds & 1 ? "Blank trim " : "",
+                hit->kinds & 2 ? "Lower BPP " : "", hit->kinds & 4 ? "Shared " : "",
+                hit->kinds & 8 ? "Mirror " : "", hit->kinds & 16 ? "Unique detail" : "");
+            if (ImGui::IsMouseClicked(0)) {
+                t.optimize_choice = hit->change;
+                t.optimize_palette = 0;
+                t.optimize_mode = 0;
+            }
+        }
+        if (t.heat_regions.empty())
+            draw->AddText(ImVec2(origin.x + 12, origin.y + 12), IM_COL32_WHITE,
+                          "No regions found within the scan limits.");
+    }
+    void start_receipt(Tab &t, const std::string &root, bool successful = false) {
+        t.receipt_job = std::async(std::launch::async, [root, successful]() {
+            return capture_rom_receipt(root, successful);
+        });
+    }
+    void rom_receipts(Tab &t) {
+        heading("ROM receipts", "Compare measured packed video data between builds.");
+        ImGui::TextWrapped("Capture reads the generated IRWs and verifies every byte against all "
+                           "twelve video chips. Save a baseline before editing, then capture again "
+                           "after building the optimized stage.");
+        bool busy = t.receipt_job.valid() || game_build_running();
+        ImGui::BeginDisabled(busy);
+        ImGui::SetNextItemWidth(std::max(150.f, ImGui::GetContentRegionAvail().x - 155));
+        ImGui::InputTextWithHint("##receipt-root", "Game checkout folder", t.game_root,
+                                 sizeof t.game_root);
+        ImGui::SameLine();
+        if (ImGui::Button("Choose checkout"))
+            folder_dialog_open("Choose built game checkout", t.game_root, sizeof t.game_root);
+        ImGui::BeginDisabled(!t.game_root[0]);
+        if (ImGui::Button("Capture current build"))
+            start_receipt(t, t.game_root);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        auto load = [&](std::unique_ptr<RomReceipt> &target) {
+            char path[2048] = {};
+            if (file_dialog_open("Load ROM receipt", "ROM receipt\0*.romreceipt\0All files\0*.*\0",
+                                 path, sizeof path)) {
+                auto receipt = load_rom_receipt(path);
+                if (receipt.valid)
+                    target = std::make_unique<RomReceipt>(std::move(receipt));
+                else
+                    error = receipt.error;
+            }
+        };
+        auto save = [&](const RomReceipt &receipt) {
+            char path[2048] = "build.romreceipt";
+            if (file_dialog_save_ext("Save ROM receipt", "ROM receipt\0*.romreceipt\0",
+                                     "romreceipt", path, sizeof path))
+                save_rom_receipt(receipt, path, error);
+        };
+        if (ImGui::Button("Load baseline"))
+            load(t.receipt_before);
+        ImGui::SameLine();
+        if (ImGui::Button("Load comparison"))
+            load(t.receipt_after);
+        ImGui::EndDisabled();
+        if (t.receipt_job.valid())
+            ImGui::TextColored(accent, "Checking packing declarations, IRWs and chip lanes...");
+        if (t.receipt_after && !t.receipt_after->valid)
+            ImGui::TextWrapped("Capture refused: %s", t.receipt_after->error.c_str());
+        if (t.receipt_after && t.receipt_after->valid) {
+            const auto &receipt = *t.receipt_after;
+            ImGui::TextColored(accent, "Chip-byte verification passed | %zu packed payloads",
+                               receipt.payloads.size());
+            ImGui::TextWrapped("Captured: %s | %s", receipt.captured.c_str(), receipt.root.c_str());
+            ImGui::TextDisabled(
+                "%s", receipt.after_successful_build
+                          ? "Captured after a successful build launched by bddtool."
+                          : "Existing build capture; source freshness has not been established.");
+            if (ImGui::Button("Use current as baseline"))
+                t.receipt_before = std::make_unique<RomReceipt>(receipt);
+            ImGui::SameLine();
+            if (ImGui::Button("Save current receipt"))
+                save(receipt);
+            for (int bank = 0; bank < 2; bank++) {
+                const auto &b = receipt.banks[bank];
+                ImGui::Text("Bank %d: %llu used | %llu free | largest gap %llu bytes", bank,
+                            (unsigned long long)b.used, (unsigned long long)b.free,
+                            (unsigned long long)b.largest_gap);
+            }
+        }
+        if (t.receipt_before && t.receipt_before->valid) {
+            ImGui::TextWrapped("Baseline: %s @ %s", t.receipt_before->root.c_str(),
+                               t.receipt_before->captured.c_str());
+            if (ImGui::Button("Save baseline receipt"))
+                save(*t.receipt_before);
+            if (t.receipt_after && t.receipt_after->valid) {
+                auto report = compare_rom_receipts(*t.receipt_before, *t.receipt_after);
+                ImGui::SameLine();
+                if (ImGui::Button("Copy ROM comparison"))
+                    ImGui::SetClipboardText(report.c_str());
+                ImGui::BeginChild("rom-comparison", ImVec2(0, 230), ImGuiChildFlags_Border);
+                ImGui::TextWrapped("%s", report.c_str());
+                ImGui::EndChild();
+            }
+        }
+        ImGui::TextWrapped(
+            "These are whole-build video measurements. Reserved slots can limit use of physical "
+            "gaps. Source freshness, decoded artwork, program-ROM tables/palettes and runtime "
+            "object/DMA usage need separate checks. Save receipts to keep them between sessions.");
+        auto authoring = optimization_budget(t.document.state());
+        ImGui::Text("Current document estimates: tables %llu B | palettes %llu B | %d placements",
+                    (unsigned long long)authoring.table_bytes,
+                    (unsigned long long)authoring.palette_bytes, authoring.objects);
     }
     void checks(Tab &t) {
         heading("Build & Check", "Review your layout, apply it to the game, and follow the build.");
@@ -2074,7 +2465,14 @@ class App {
     uint64_t session_stamp = 0;
     void frame() {
         for (auto &t : tabs) {
+            bool was_building = t->game_build.running();
             t->game_build.poll();
+            if (was_building && !t->game_build.running() && t->game_build.exit_code() == 0 &&
+                t->game_export && !t->receipt_job.valid()) start_receipt(*t, t->game_export->root, true);
+            if (t->receipt_job.valid() && t->receipt_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                try { t->receipt_after = std::make_unique<RomReceipt>(t->receipt_job.get()); }
+                catch (const std::exception &e) { error = e.what(); }
+            }
             if (t->pattern_job.valid() &&
                 t->pattern_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 try {
@@ -2092,6 +2490,8 @@ class App {
                 t->optimize_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 try {
                     t->optimize_plan = std::make_unique<OptimizationPlan>(t->optimize_job.get());
+                    t->heat_regions = optimization_regions(*t->optimize_plan);
+                    t->heat_fit = true;
                     t->optimize_choice = 0;
                     t->optimize_palette = 0;
                 } catch (const std::exception &e) {
@@ -2386,7 +2786,9 @@ int run(int argc, char **argv) {
     InteractionSmoke interactions;
     AnimationSmoke animation_smoke;
     bool test_animation = smoke && argc >= 5 && std::string(argv[4]) == "--animations";
-    bool test_optimize = smoke && argc >= 5 && std::string(argv[4]) == "--optimize";
+    bool test_review = smoke && argc >= 5 && std::string(argv[4]) == "--optimize-review";
+    bool test_shared = smoke && argc >= 5 && std::string(argv[4]) == "--shared";
+    bool test_optimize = test_review || test_shared || (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
     bool test_pattern_suggest = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-suggest";
     bool test_pattern = test_pattern_suggest || (smoke && argc >= 5 && std::string(argv[4]) == "--pattern");
     if (test_pattern && app.tab()) {
@@ -2408,7 +2810,7 @@ int run(int argc, char **argv) {
     if (test_optimize && app.tab()) {
         auto &t = *app.tab();
         t.optimize_options.deep = true;
-        app.start_optimization(t);
+        app.start_optimization(t, test_shared);
         app.page = 3;
     }
     auto optimize_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(40);
@@ -2455,11 +2857,12 @@ int run(int argc, char **argv) {
         SDL_RenderClear(app.renderer);
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), app.renderer);
         if (smoke && (frames == 3 || frames == 7 || frames == 11 || frames == 31 ||
-                      (test_animation && frames == 23))) {
+                      ((test_animation || test_review) && frames == 23))) {
             int w, h;
             SDL_GetRendererOutputSize(app.renderer, &w, &h);
             std::vector<uint8_t> rgba((size_t)w * h * 4);
-            std::string name = frames == 3     ? "stage.png"
+            std::string name = test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
+                               : frames == 3     ? "stage.png"
                                : frames == 7   ? "compact.png"
                                : frames == 11  ? "assets.png"
                                : frames == 23  ? "animation.png"
@@ -2474,6 +2877,10 @@ int run(int argc, char **argv) {
         }
         SDL_RenderPresent(app.renderer);
         if (smoke) {
+            if (test_review && app.tab() && app.tab()->receipt_job.valid()) {
+                if (std::chrono::steady_clock::now() > optimize_deadline) { rc = 1; app.running = false; }
+                SDL_Delay(10); continue;
+            }
             if (test_pattern && app.tab() && app.tab()->pattern_job.valid()) {
                 if (std::chrono::steady_clock::now() > optimize_deadline) {
                     rc = 1;
@@ -2503,6 +2910,18 @@ int run(int argc, char **argv) {
                 app.running = false;
             }
             frames++;
+            if (test_review && app.tab()) {
+                auto &t = *app.tab();
+                if (frames == 5) t.optimize_mode = 2;
+                if (frames == 8) { t.optimize_mode = 0; t.compare_open = true; t.compare_camera = t.camera; }
+                if (frames == 12) { t.compare_camera.x += 200; t.compare_split = .7f; }
+                if (frames == 18) { t.compare_open = false; t.optimize_mode = 3; app.start_receipt(t, t.game_root); }
+                if (frames == 24) {
+                    if (!t.receipt_after || !t.receipt_after->valid) {
+                        std::fprintf(stderr, "Receipt UI failed: %s\n", t.receipt_after ? t.receipt_after->error.c_str() : "missing result"); rc = 1;
+                    } else t.receipt_before = std::make_unique<RomReceipt>(*t.receipt_after);
+                }
+            }
             if (frames == 4) {
                 SDL_SetWindowSize(app.window, 1000, 720);
                 if (app.tab())
@@ -2523,6 +2942,8 @@ int run(int argc, char **argv) {
     app.animation_textures.clear();
     app.optimize_before_textures.clear();
     app.optimize_after_textures.clear();
+    app.compare_before_textures.clear();
+    app.compare_after_textures.clear();
     editor_project_storage_shutdown();
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();

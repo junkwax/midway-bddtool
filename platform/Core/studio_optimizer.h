@@ -22,12 +22,14 @@ struct OptimizeBudget {
 struct OptimizePiece {
     int x = 0, y = 0, w = 0, h = 0, image = 0;
     bool flip_x = false, flip_y = false;
+    int role = 0; // 0: region, 1: shared base, 2: unique detail.
     std::map<int, int> palettes;
 };
 struct OptimizeChange {
     int source_image = 0, uses = 0;
     uint64_t before_bits = 0, added_bits = 0;
     bool reindexed = false;
+    bool residual = false;
     std::vector<OptimizePiece> pieces;
 };
 struct OptimizationPlan {
@@ -42,8 +44,17 @@ struct OptimizationPlan {
 OptimizeBudget optimization_budget(const State &state);
 OptimizationPlan find_lossless_savings(const Document &document, const OptimizeOptions &options,
                                        OptimizeProgress *progress = nullptr);
+OptimizationPlan find_shared_savings(const Document &document, const OptimizeOptions &options,
+                                     OptimizeProgress *progress = nullptr);
 bool verify_optimization(const OptimizationPlan &plan, std::string &error);
 std::string optimization_report(const OptimizationPlan &plan);
+struct OptimizeRegion {
+    int image = 0, change = 0,
+        kinds = 0; // 1 blank trim, 2 lower BPP, 4 shared, 8 mirror, 16 detail.
+    Rect rect;
+    int before_bpp = 0, after_bpp = 0;
+};
+std::vector<OptimizeRegion> optimization_regions(const OptimizationPlan &plan);
 
 enum class PatternMode { RepeatX, RepeatY, MirrorX, MirrorY };
 struct PatternOptions {

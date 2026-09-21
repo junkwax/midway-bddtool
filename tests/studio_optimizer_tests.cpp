@@ -5,6 +5,7 @@
 #include <iostream>
 #include <cmath>
 #include <stdexcept>
+#include <algorithm>
 using namespace studio;
 namespace fs = std::filesystem;
 void require(bool ok, const std::string &why) {
@@ -375,6 +376,109 @@ int main(int argc, char **argv) {
         layer_options.plane = 0;
         require(!preview_pattern(artistic, layer_options).valid,
                 "Layer pattern accepted mixed palette assignments");
+        // Shared opaque pixels across translated, XY-mirrored images with unique central shading.
+        auto reuse_root = root / "residuals";
+        fs::create_directories(reuse_root);
+        BddCoreImage bases[2];
+        bases[0].idx = 40;
+        bases[0].w = 128;
+        bases[0].h = 64;
+        bases[0].pix.resize(128 * 64);
+        bases[1].idx = 41;
+        bases[1].w = 136;
+        bases[1].h = 72;
+        bases[1].pix.resize(136 * 72);
+        for (int y = 0; y < 64; y++)
+            for (int x = 0; x < 128; x++) {
+                auto common = (uint8_t)(8 + (x * 13 + y * 7 + x * y) % 24);
+                bool detail = x >= 32 && x < 64;
+                bases[0].pix[y * 128 + x] = detail ? (uint8_t)(1 + (x + y) % 7) : common;
+                bases[1].pix[(71 - y - 4) * 136 + 135 - x - 4] =
+                    detail ? (uint8_t)(33 + (x * 3 + y) % 7) : common;
+            }
+        require(bdd_core_save_bdd((reuse_root / "fixture.BDD").u8string().c_str(), bases, 2,
+                                  palettes, 2, &saved) != 0,
+                saved.error);
+        std::ofstream reuse_bdb(reuse_root / "fixture.BDB");
+        reuse_bdb << "DETAILS 1000 500 255 1 2 8\nDETAILS1 0 1000 0 499\n";
+        for (int i = 0; i < 8; i++)
+            reuse_bdb << std::hex << (0x4000 | ((i % 4) << 4)) << std::dec << ' '
+                      << (20 + (i % 4) * 200) << ' ' << (20 + (i / 4) * 120) << ' ' << std::hex
+                      << (40 + i / 4) << std::dec << ' ' << i % 2 << '\n';
+        reuse_bdb.close();
+        Document detail_doc;
+        require(detail_doc.load((reuse_root / "fixture.BDB").u8string(), error), error);
+        OptimizeOptions detail_options;
+        detail_options.deep = true;
+        auto details = find_shared_savings(detail_doc, detail_options);
+        require(details.verified && details.changes.size() == 2 &&
+                    details.proposed.video_bits < details.baseline.video_bits,
+                "Translated shared base plus unique details was missed: " + details.error);
+        require(details.proposed.palettes == details.baseline.palettes,
+                "Shared bases remapped palettes");
+        check_roundtrip(detail_doc, details, reuse_root);
+        auto constrained = detail_options;
+        constrained.max_pieces = 1;
+        auto no_details = find_shared_savings(detail_doc, constrained);
+        require(no_details.verified && no_details.changes.empty(), "Shared-piece limit ignored");
+        OptimizeProgress cancel_shared;
+        cancel_shared.cancel = true;
+        require(find_shared_savings(detail_doc, detail_options, &cancel_shared).cancelled,
+                "Shared scan cancellation ignored");
+        auto heat = optimization_regions(details);
+        require(
+            std::any_of(heat.begin(), heat.end(), [](const auto &r) { return r.kinds & 4; }) &&
+                std::any_of(heat.begin(), heat.end(), [](const auto &r) { return r.kinds & 16; }),
+            "Shared/detail heatmap regions missing");
+        for (const auto &r : heat) {
+            const auto &im = *detail_doc.image(r.image);
+            require(r.change >= 0 && r.change < (int)details.changes.size() && r.rect.x >= 0 &&
+                        r.rect.y >= 0 && r.rect.x + r.rect.w <= im.w && r.rect.y + r.rect.h <= im.h,
+                    "Heatmap region escaped its source image");
+        }
+        auto overlapping = details;
+        auto corrupt = std::make_shared<AssetBank>(*details.after.assets);
+        int common_id = details.changes[0].pieces[0].image;
+        for (auto &im : corrupt->data.images)
+            if (im.idx == common_id)
+                for (auto &p : im.pix)
+                    if (!p)
+                        p = 1;
+        overlapping.after.assets = corrupt;
+        require(!verify_optimization(overlapping, error),
+                "Opaque shared/detail overlap escaped verification");
+        auto window = [](const State &s, Point camera) {
+            std::vector<uint32_t> pixels(400 * 254);
+            for (const auto &item : scene_items(s, camera)) {
+                const auto &im = s.assets->data.images[item.image_slot];
+                const auto &pal = s.assets->data.palettes[item.palette];
+                for (int y = 0; y < im.h; y++)
+                    for (int x = 0; x < im.w; x++) {
+                        int sx = (int)std::floor(item.rect.x) + x,
+                            sy = (int)std::floor(item.rect.y) + y;
+                        auto p = im.pix[(size_t)(item.vflip ? im.h - 1 - y : y) * im.w +
+                                        (item.hflip ? im.w - 1 - x : x)];
+                        if (p && sx >= 0 && sy >= 0 && sx < 400 && sy < 254)
+                            pixels[sy * 400 + sx] = 0x10000u | pal.rgb555[p];
+                    }
+            }
+            return pixels;
+        };
+        details.before.planes[0].scroll = details.after.planes[0].scroll = .5;
+        for (Point camera : {Point{-80, -20}, Point{0, 0}, Point{241, 19}, Point{610, 90}})
+            require(window(details.before, camera) == window(details.after, camera),
+                    "Camera comparison changed exact artwork");
+        auto scene = scene_items(details.before, {100, 20});
+        require(!scene.empty() && scene.front().rect.x == detail_doc.scene().front().rect.x - 50,
+                "Camera preview did not apply layer parallax");
+        auto trim_regions = optimization_regions(trimmed);
+        require(std::any_of(trim_regions.begin(), trim_regions.end(),
+                            [](const auto &r) { return r.kinds & 1; }),
+                "Blank-trim heatmap missing");
+        auto palette_regions = optimization_regions(plan);
+        require(std::any_of(palette_regions.begin(), palette_regions.end(),
+                            [](const auto &r) { return r.kinds & 2; }),
+                "Palette heatmap missing");
         if (argc >= 3) {
             Document real;
             require(real.load(argv[2], error), error);
@@ -390,6 +494,18 @@ int main(int argc, char **argv) {
                 auto r = root / "real";
                 fs::create_directories(r);
                 check_roundtrip(real, actual, r);
+            }
+            auto shared_actual = find_shared_savings(real, options);
+            require(shared_actual.verified, shared_actual.error);
+            std::ofstream shared_report(root / "shared-pieces.txt");
+            shared_report << optimization_report(shared_actual);
+            std::cout << "Shared-base scan: " << shared_actual.changes.size() << " source images; "
+                      << shared_actual.baseline.video_bits / 8 << " -> "
+                      << shared_actual.proposed.video_bits / 8 << " modeled bytes.\n";
+            if (!shared_actual.changes.empty()) {
+                auto r = root / "real-shared";
+                fs::create_directories(r);
+                check_roundtrip(real, shared_actual, r);
             }
             // The final layer in the local MK3CAVE fixture is the jagged spike strip.
             if (real.state().name == "mk3cave") {

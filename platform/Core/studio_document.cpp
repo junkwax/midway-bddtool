@@ -271,14 +271,24 @@ bool Document::editable(const Placement &p) const {
     return !p.locked && !(p.plane >= 0 && state_.planes[p.plane].locked);
 }
 std::vector<SceneItem> Document::scene(Point camera, bool source, int solo) const {
+    return scene_items(state_, camera, source, solo);
+}
+std::vector<SceneItem> scene_items(const State &state_, Point camera, bool source, int solo) {
     std::vector<SceneItem> result;
+    if (!state_.assets)
+        return result;
     for (size_t i = 0; i < state_.objects.size(); ++i) {
         const auto &p = state_.objects[i];
-        const Plane *plane = p.plane >= 0 ? &state_.planes[p.plane] : nullptr;
+        const Plane *plane = p.plane >= 0 && p.plane < (int)state_.planes.size() ? &state_.planes[p.plane] : nullptr;
         if (p.hidden || (plane && plane->hidden) || (solo >= 0 && p.plane != solo))
             continue;
         size_t slot = 0;
-        const auto *im = image(p.object.ii, &slot);
+        const BddCoreImage *im = nullptr;
+        for (; slot < state_.assets->data.images.size(); slot++)
+            if (state_.assets->data.images[slot].idx == p.object.ii) {
+                im = &state_.assets->data.images[slot];
+                break;
+            }
         if (!im)
             continue;
         SceneItem item;
@@ -286,7 +296,7 @@ std::vector<SceneItem> Document::scene(Point camera, bool source, int solo) cons
         item.object_index = i;
         item.image_slot = slot;
         item.palette = p.object.fl;
-        item.locked = !editable(p);
+        item.locked = p.locked || (plane && plane->locked);
         item.hflip = (p.object.wx & 0x10) != 0;
         item.vflip = (p.object.wx & 0x20) != 0;
         item.rank = plane ? plane->rank : 10000;

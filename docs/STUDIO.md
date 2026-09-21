@@ -104,6 +104,10 @@ palette and placement budgets, exact pixel verification and an undoable Apply.
 Its **Repeat & Mirror** workshop also previews deliberate artwork changes,
 including repeated groups across a whole layer and mirrored pillar sides.
 Apply combines the art edit and tile reuse in one undo step.
+Shared-base scans preserve unique details, the savings map links regions to
+their proposals, and full-stage comparison follows the document camera.
+ROM receipts capture and compare verified packed output from existing builds;
+successful builds launched here start a capture automatically.
 See [Stage optimization and pattern editing](OPTIMIZE.md) for scope, controls and the
 distinction between estimated video savings and verified packed-ROM savings.
 

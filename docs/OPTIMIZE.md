@@ -23,6 +23,16 @@ exhaustive search of every possible rectangle or partition combination.
 
 ## Review and apply
 
+**Compare full stage** opens a movable 400x254 camera preview for either a
+lossless proposal or a Repeat & Mirror proposal. Use the wipe slider or toggle
+between original and proposed artwork. Drag inside the view to move the camera;
+both snapshots use the same camera, layer parallax and draw order. **Stage start**
+resets the camera, and **Focus proposal** centers the affected artwork. This is
+the document's background composition, not an emulator capture. Unbound layers
+are identified as estimated; runtime actors and floor/foreground effects are
+excluded. Editing the document leaves the analyzed snapshots intact and marks
+them stale.
+
 Select a source image to compare its original against the reconstruction.
 Colored cut outlines label the shared tile ID, BPP, and X/Y flips; hover a
 piece for details. Cycle through the palettes used by its placements.
@@ -58,6 +68,38 @@ Normal metadata is retained; new image IDs are allocated without reusing old
 ones. Images carrying animation anchors, LOD references or other runtime
 metadata, locked placements, unassigned artwork, and incompatible source
 geometry are excluded or refused rather than silently changed.
+
+## Shared bases and unique details
+
+**Find shared bases** searches different source images for common opaque pixels,
+including X/Y flips and translated matches. It stores the common pixels once and
+retains each image's unique details in a separate piece. Rectangular bounds may
+overlap, but opaque pixels cannot overlap or erase one another. Every pixel and
+every current palette variant must still reconstruct exactly before Apply.
+Palette indices remain unchanged.
+
+The search uses sampled 8x4 windows to suggest translations, then compares the
+actual pixels. Quick search uses an eight-pixel anchor grid; Deep uses four.
+It considers up to 1,024/4,096 source pairs and keeps up to 128 candidates before
+choosing disjoint pairs within the placement/header limits. It is bounded,
+not exhaustive. Sparse common pixels may cost more to encode than they save;
+those proposals are rejected. Animated/LOD and locked artwork remains excluded.
+
+The local MK3CAVE test found pairs involving 16 source images and modeled
+203,238 → 200,416 video bytes (2,822 fewer), with original pixels and palette
+assignments preserved. This is a separate proposal from the regular cut/palette
+scan. Do not add their savings figures together: apply a chosen proposal and
+scan the resulting document again to explore combinations.
+
+## Savings map
+
+The **Savings map** displays the latest verified scan over its source stage.
+Yellow shows removed blank regions, blue lower-BPP regions, purple shared
+pieces, orange mirrored reuse and gray retained unique details. Filter by type,
+zoom with the wheel, pan with the right mouse button, and click a region to
+open its source image in the proposal review. Shapes describe region bounds;
+the colors are not additive byte savings. A stale map remains a labeled
+snapshot until a new scan completes.
 
 ## Repeat & Mirror: deliberate artwork changes
 
@@ -111,7 +153,7 @@ art direction or a verified packed-ROM saving. Tests wrote only scratch output.
 
 Before enabling Apply, the verifier reconstructs every changed source image
 for every palette used by its placements. It compares raw RGB555 colors and
-transparency at every pixel, checks disjoint pieces and bounds, and verifies
+transparency at every pixel, checks disjoint opaque coverage and bounds, and verifies
 placement coordinates, flags, palette references, order and layer projection.
 Apply repeats verification and rejects stale snapshots.
 
@@ -131,9 +173,10 @@ separate approximate storage costs, not deductions from video-ROM savings.
 
 The selected LOD can force different BPP, compression or alignment. LOAD2
 checksum folds, bit bleed and bank allocation require checking actual packed
-output, per label and orientation. This implementation does not run LOAD2,
-measure free bank extents or claim reclaimed ROM bytes. It also does not
-measure runtime peak objects, palette slots or DMA usage. A larger number of
+output, per label and orientation. The proposal estimator does not run LOAD2
+or claim reclaimed ROM bytes. Use ROM receipts below for generated-output
+measurements. Neither estimates nor receipts measure runtime peak objects,
+palette slots or DMA usage. A larger number of
 pieces can cost more runtime work even when the video payload shrinks.
 
 The local MK3CAVE deep/balanced benchmark modeled 203,238 → 192,058
@@ -141,6 +184,42 @@ video bytes (11,180 bytes, about 5.5%), with 64 → 128 placements and 7 → 45 
 palettes. Those are estimates for that local input snapshot, not shipped
 asset data or a packed-ROM measurement. The scratch output passed complete
 scene equality and save/reopen tests; the live source pair was not modified.
+
+## ROM receipts: measured build output
+
+Open **Optimize → ROM receipts** and choose the built game checkout. **Capture
+current build** reads its literal MK2 `makevrom.py` packing declarations, the
+listed generated `data/*.IRW` files and all twelve `rom/` video chips. It never
+executes the packing script. The native adapter supports the reviewed MK2
+layout, header bank selection and fallback mapping, bootstrap base overrides,
+and continuation records. Unsupported/dynamic declarations, missing files,
+truncated records, bank overflows and overlapping payloads are refused.
+
+Capture reconstructs the packed flat image and compares **every byte in all
+twelve interleaved chip lanes**. It re-reads the inputs afterward to detect
+changes during capture. A mix of stale IRWs and chips therefore fails rather
+than producing a receipt. Literal `0xff` payload bytes count as occupied;
+file size and non-`0xff` counts are not treated as free-space measurements.
+
+Use the verified current capture as a baseline and save it as `.romreceipt`.
+After applying your reviewed export and building the game, capture again.
+A successful build launched through bddtool starts a new capture automatically;
+view its result under ROM receipts. Save/load controls preserve the baseline
+and comparison between sessions. Receipts store counts, ranges and change
+identifiers, not game artwork or ROM contents.
+
+The comparison reports actual packed payload bytes, physical free bytes and
+largest contiguous gap per bank, plus per-IRW changes and relocated payloads.
+These are **whole-build** measurements: other edits can contribute to the delta,
+and physical gaps may be reserved by the game's slot policy. A historical
+receipt records verification at capture time, not the current state of files.
+Change identifiers are noncryptographic; receipts are not signed attestations.
+
+Matching IRWs and chips can both be stale relative to edited sources. Manual
+captures therefore leave source freshness unproven. Program-ROM tables and
+palette bytes remain separately labeled document estimates; decoded-art identity,
+runtime effects and object/DMA peaks require their own checks. No emulator or
+optimized game build is run by the optimizer tests.
 
 ## Research reviewed
 
@@ -160,8 +239,7 @@ checkout, under `doc/graphics_opportunities/`:
   and different draw consumers require explicit flips and packed-pixel proofs.
 
 Private game assets and source-drop code are not included here. Future passes
-can add arbitrary-offset shared subregions, exact residual patches, global
-palette-family planning and build-backed per-bank receipts. Runtime actors and
+can broaden subregion sampling and add global palette-family planning. Runtime actors and
 foreground multipart IMG routines remain outside this static BDB optimizer.
 
 ## Verification commands
@@ -171,6 +249,9 @@ ctest --test-dir tmp/studio-build -C Release --output-on-failure
 studio_optimizer_tests tmp/optimizer-test [path/to/MK3CAVE.BDB [--deep]]
 bddview --studio-smoke tmp/optimizer-ui path/to/MK3CAVE.BDB --optimize
 bddview --studio-smoke tmp/pattern-ui path/to/MK3CAVE.BDB --pattern
+bddview --studio-smoke tmp/shared-ui path/to/MK3CAVE.BDB --shared
+bddview --studio-smoke tmp/review-ui path/to/MK3CAVE.BDB --optimize-review
+studio_rom_receipt_tests tmp/receipt-test [path/to/built/game]
 ```
 
 The optional local benchmark writes only to its scratch directory: a report

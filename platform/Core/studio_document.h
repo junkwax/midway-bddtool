@@ -71,6 +71,8 @@ struct Issue {
     ObjectId object = 0;
     bool error = false;
 };
+std::vector<SceneItem> scene_items(const State &state, Point camera = {}, bool source = false,
+                                 int solo = -1);
 
 // One owner and one history per document. No SDL, ImGui, global arrays, or assembly writes.
 class Document {
