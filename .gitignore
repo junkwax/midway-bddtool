@@ -75,6 +75,7 @@ screenshot.*
 !docs/UI_REDESIGN_AUDIT.md
 !docs/STUDIO.md
 !docs/OPTIMIZE.md
+!docs/MK3CAVE_VALIDATION.md
 
 # Runtime generated
 /cfg/
@@ -146,6 +147,13 @@ tools/*
 # Runs in CI -- .github/workflows/publish-stage.yml invokes it after checkout,
 # so it has to be tracked or every stage submission fails on a missing file.
 !tools/publish_stage_to_wiki.py
+# Read-only audits and manual isolated-build validation helpers; no private assets.
+!tools/studio_savings_audit.cpp
+!tools/audit_bdd_library.py
+!tools/studio_validation_candidate.cpp
+!tools/verify_static_stage_packing.py
+!docs/BDD_LIBRARY_AUDIT.md
+!docs/STAGE_SAVINGS_VALIDATION.md
 
 # Removed MK2 tool sources kept locally for revisiting (not shipped)
 /platform/_local/

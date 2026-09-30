@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Custom MK3CAVE export in Build & Check: original-coordinate runtime binding,
+  protected water/palettes, four-slot packing, reviewed apply with backups, and
+  a build helper that verifies packed pixels before packaging a local ROM ZIP.
+  Ten automated tests pass; the real candidate again matches 69 baseline MAME
+  captures. The snapshot's unrelated Cage logo guard still blocks its full build.
+
+### Validation
+
+- Added a manual MK3CAVE candidate/ROM-receipt utility and a Python checker for
+  runtime layer placement, both flip axes, decoded LOAD2 pixels and current ROM
+  slot limits. The isolated game validation saved 3,096 video bytes with 69
+  pixel-identical MAME capture pairs, including a full water animation cycle.
+  See [the measured results and integration limits](docs/MK3CAVE_VALIDATION.md).
+
 ### Fixed
+
+- ROM receipts now check declared slot bases and limits, separate unused reserved
+  capacity from unreserved gaps, and retain that policy in saved receipts. The
+  budget view includes a searchable slot table; older receipts remain readable.
+- Game export reviews include current slot capacities and reject Apply if a
+  referenced LOD or the packing configuration changed after review. Added a
+  runtime-placement regression for transparent-edge trimming.
+- Stage navigation: dragging empty canvas space pans by default, preserving the
+  current selection. Horizontal/vertical scrollbars reach off-screen artwork,
+  including negative coordinates. Hand mode pans over artwork; Shift/Ctrl-drag
+  empty space retains box selection, with middle/Space-drag still available.
 - Restored file information in the modern editor's top-right menu bar: document
   name, object/image/palette counts, estimated video ROM, and document checks.
   Click the summary for layer/world details, BDB/BDD paths and disk sizes, budget
@@ -100,6 +127,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Snap Panels to Rails" is now "Reset Sidebar Width".
 
 ### Added
+- Optimize > Animated art now also accepts selected frames from local IMG libraries,
+  with label filtering, batch selection, signed anchors, and configurable preview
+  timing. Manual sequences are explicitly identified and remain isolated from the
+  recognized Forest runtime overlay and BDD/BDB save/export.
+- Optimize > Animated art: read-only Forest animation analysis for exact/mirrored
+  frame reuse, family-wide palette compaction, and stationary base/detail sharing.
+  A bounded selective search finds profitable groups of related frames while
+  retaining unrelated poses; reports show group membership and search limits.
+  Horizontal-band search isolates reusable middle strips with paired cuts and
+  rejects splits whose extra frame descriptions consume the savings. Optional
+  piece outlines distinguish shared artwork from details in the playback preview.
+  Synchronized playback preserves source timing and anchors; every reconstructed
+  frame is pixel verified. Reports separate estimated video, palette and frame
+  description costs, including unprofitable proposals. No runtime export is implied.
+- Visibility heatmaps identify artwork outside an explicit camera range or covered
+  by static layers with matching parallax. Scoped trim proposals include camera
+  comparison, proof revalidation, undo/redo and review-only handling for unbound stages.
+- Palette-aware whole-image reuse normalizes index assignments and equivalent
+  opaque colors across current palette variants, preserving transparent zero and
+  requiring static-palette review before Apply.
+- Read-only unused-art auditing gathers placements, metadata, source mentions and
+  existing reference-graph evidence, with selectable details and exportable reports.
 - Repeat & Mirror can discover group sizes, offsets and mirrored variants, with
   selectable proposals showing full-resolution visual changes and estimated savings.
 - Shared-base optimization can reuse one base across up to eight source images,

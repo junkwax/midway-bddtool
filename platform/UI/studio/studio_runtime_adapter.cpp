@@ -2,6 +2,7 @@
 #include "bg_editor.h"
 #include "bg_editor_globals.h"
 #include "Core/viewer_stage_io.h"
+#include "Core/studio_cave_export.h"
 #include <filesystem>
 #include <cstdio>
 #include <cstring>
@@ -12,6 +13,13 @@ namespace studio {
 // Migration boundary: reuse the existing assembly interpretation once on open.
 // The studio's live state and renderer never use the legacy object arrays or BLKS tables.
 void read_runtime_defaults(Document &document) {
+    if (document.state().name == "mk3cave" || document.state().name == "MK3CAVE") {
+        std::string error;
+        auto root = std::filesystem::u8path(document.path()).parent_path().parent_path();
+        if (!seed_cave_runtime(document, root.u8string(), error))
+            std::fprintf(stderr, "Cave runtime binding: %s\n", error.c_str());
+        return;
+    }
     if (document.has_layout() || !document.notice().empty() || !document.state().has_bdb ||
         document.path().empty())
         return;

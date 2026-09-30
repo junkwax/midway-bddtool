@@ -1,14 +1,15 @@
 #pragma once
 #include <string>
 namespace studio {
-// Executes only the selected checkout's build.py, without a command shell.
+// Executes the selected checkout's build.py or supported cave helper without a command shell.
 class GameBuild {
   public:
     ~GameBuild();
     GameBuild() = default;
     GameBuild(const GameBuild &) = delete;
     GameBuild &operator=(const GameBuild &) = delete;
-    bool start(const std::string &root, const std::string &log_path, std::string &error);
+    bool start(const std::string &root, const std::string &log_path, std::string &error,
+               const std::string &script_relative = "build.py");
     void poll();
     bool running() const { return running_; }
     bool started() const { return started_; }

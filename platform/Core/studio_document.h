@@ -11,6 +11,7 @@ namespace studio {
 struct OptimizationPlan;
 struct PatternOptions;
 struct PatternPlan;
+struct VisibilityPlan;
 
 using ObjectId = uint64_t;
 struct Point {
@@ -48,6 +49,7 @@ struct Placement {
     BddCoreObject object = {};
     int plane = -1;
     bool hidden = false, locked = false;
+    int runtime_dx = 0; // Source-coordinate move supplied by a custom stage generator.
 };
 struct State {
     std::shared_ptr<const AssetBank> assets;
@@ -57,6 +59,7 @@ struct State {
     int world_w = 800, world_h = 254, depth = 255;
     int start_x = 0, start_y = 0, ground = 230;
     bool has_bdb = true;
+    std::string runtime_profile;
     uint64_t revision = 0;
 };
 struct SceneItem {
@@ -118,8 +121,11 @@ class Document {
                      std::string &error, int &image_id);
     bool apply_optimization(const OptimizationPlan &plan, std::string &error);
     bool apply_pattern(const PatternPlan &plan, std::string &error);
+    bool apply_visibility(const VisibilityPlan &plan, bool gameplay_contract_confirmed, std::string &error);
     // Read-only legacy runtime adapter seeds defaults once, before any editing.
     void seed_runtime(const std::vector<Plane> &planes, int start_x, int start_y, int ground);
+    void seed_custom_runtime(const std::vector<Plane> &planes, int start_x, int start_y, int ground,
+                             const std::vector<int> &source_dx, const std::string &profile);
 
   private:
     friend PatternPlan preview_pattern(const Document &, const PatternOptions &);

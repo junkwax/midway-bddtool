@@ -1,5 +1,6 @@
 #include "Core/studio_game_export.h"
 #include "Core/studio_game_build.h"
+#include "Core/studio_optimizer.h"
 #include <thread>
 #include <filesystem>
 #include <fstream>
@@ -79,6 +80,37 @@ int main(int argc, char **argv) {
         fs::create_directories(root / "game" / "data");
         fs::create_directories(root / "game" / "src");
         std::string error;
+        // Transparent edge trimming changes LOAD2's crop origin. Exercise both centered
+        // and uncentered bindings after optimization, not just manually moved rectangles.
+        auto trimmed = Document::empty();
+        std::vector<uint8_t> rgba_trim(16 * 8 * 4);
+        for (int y = 1; y < 7; ++y)
+            for (int x = 4; x < 12; ++x) {
+                auto p = (y * 16 + x) * 4;
+                rgba_trim[p] = 255;
+                rgba_trim[p + 3] = 255;
+            }
+        int trim_image = -1;
+        require(trimmed.import_rgba("trim", 16, 8, rgba_trim.data(), error, trim_image), error);
+        trimmed.place(trim_image, 0, 0, {10, 20});
+        AssemblyExport trim_before, trim_after;
+        require(export_game_assembly(trimmed, assembly(1), trim_before, error), error);
+        OptimizeOptions trim_options;
+        trim_options.max_pieces = 1;
+        trim_options.compact_palettes = false;
+        auto plan = find_lossless_savings(trimmed, trim_options);
+        require(plan.verified && !plan.changes.empty(), "Trim regression did not exercise an edit");
+        require(trimmed.apply_optimization(plan, error), error);
+        require(export_game_assembly(trimmed, assembly(1), trim_after, error), error);
+        projection(trimmed, trim_after);
+        require(trim_after.planes.front().y == trim_before.planes.front().y + 1,
+                "Transparent top trim moved artwork at runtime");
+        auto uncentered = assembly(1);
+        auto center = uncentered.find("\t.long center_x\r\n");
+        uncentered.erase(center,
+                         std::string("\t.long center_x\r\n\t.long PLANE1BMOD,worldtlx\r\n").size());
+        require(export_game_assembly(trimmed, uncentered, trim_after, error), error);
+        projection(trimmed, trim_after);
         auto d = Document::demo();
         auto original = assembly();
         AssemblyExport out;
@@ -123,6 +155,8 @@ int main(int argc, char **argv) {
         require(single.save((game / "data" / "UNTITLED.BDB").u8string(), error), error);
         write(game / "data" / "STAGE.LOD", "BBB> UNTITLED\n");
         write(game / "src" / "BGND.ASM", assembly(1));
+        write(game / "makevrom.py",
+              "CUSTOM_VIDEO_SLOTS = {'STAGE.IRW': (0x800000, 0x801000, 'stage')}\n");
         auto extra = single;
         extra.add_plane();
         GameExport rejected;
@@ -135,6 +169,19 @@ int main(int argc, char **argv) {
                                     error),
                 error);
         require(read(game / "src" / "BGND.ASM") == assembly(1), "Preparing modified game sources");
+        require(package.report.find("STAGE.IRW: fixed slot 4096 bytes") != std::string::npos,
+                "Current slot capacity missing from export review");
+        write(game / "makevrom.py",
+              "CUSTOM_VIDEO_SLOTS = {'STAGE.IRW': (0x800000, 0x800800, 'shrunk')}\n");
+        require(!apply_game_export(package, error) &&
+                    error.find("makevrom.py") != std::string::npos,
+                "Packing changes since review were ignored");
+        write(game / "makevrom.py",
+              "CUSTOM_VIDEO_SLOTS = {'STAGE.IRW': (0x800000, 0x801000, 'stage')}\n");
+        write(game / "data" / "STAGE.LOD", "BBB> OTHER\n");
+        require(!apply_game_export(package, error) && error.find("STAGE.LOD") != std::string::npos,
+                "LOD changes since review were ignored");
+        write(game / "data" / "STAGE.LOD", "BBB> UNTITLED\n");
         write(game / "src" / "BGND.ASM", assembly(1) + "; concurrent edit\r\n");
         require(!apply_game_export(package, error), "Concurrent changes overwritten");
         require(prepare_game_export(single, game.u8string(), (root / "package2").u8string(),
@@ -187,6 +234,20 @@ int main(int argc, char **argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         require(!job.running() && job.exit_code() == 0, "Successful build reported failure");
+        require(!job.start(game.u8string(), (root / "build.log").u8string(), error,
+                           "tools/unknown.py"), "Unsupported build helper accepted");
+        fs::create_directories(game / "tools");
+        write(game / "tools/bddtool_mk3cave_build.py", "print('CAVE_HELPER_OK',flush=True)\n");
+        require(job.start(game.u8string(), (root / "cave-build.log").u8string(), error,
+                          "tools/bddtool_mk3cave_build.py"), error);
+        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (job.running() && std::chrono::steady_clock::now() < deadline) {
+            job.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        require(!job.running() && job.exit_code() == 0 &&
+                    read(root / "cave-build.log").find("CAVE_HELPER_OK") != std::string::npos,
+                "Custom cave build helper did not run");
         if (argc >= 4) {
             Document real;
             require(real.load(argv[2], error), error);

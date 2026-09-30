@@ -24,7 +24,10 @@ struct GameExport {
     std::string root, folder, report, label, requested_label;
     uint64_t revision = 0;
     bool applied = false;
+    std::string build_script = "build.py";
     std::vector<GameExportFile> files;
+    // Read dependencies reviewed with the package, never installed as output files.
+    std::vector<GameExportFile> dependencies;
 };
 // Preparation only writes a new package directory. Applying verifies both sides before writing.
 bool prepare_game_export(const Document &document, const std::string &game_root,

@@ -1,5 +1,14 @@
 # Stage optimization and pattern editing
 
+The [current library audit](BDD_LIBRARY_AUDIT.md) compares all 68 local BDD files,
+separates active build inputs from generated packs and source variants, and
+records palette-preserving versus palette-copy estimates without changing the game.
+
+The [MK3CAVE validation](MK3CAVE_VALIDATION.md) records a measured 3,096-byte
+video saving through actual LOAD2 packing, complete ROM builds and 69 identical
+MAME capture pairs. It also documents the origin and slot corrections needed
+between an editor-verified proposal and this stage's runtime generator.
+
 Open a paired BDB/BDD stage and select **Optimize → Find savings**. The scan
 runs in the background and can be cancelled. It analyzes a snapshot; edits
 made during or after analysis make that proposal stale. Nothing is written to
@@ -8,6 +17,7 @@ the game checkout by analysis or Apply.
 The first implementation targets static background artwork. It searches:
 
 - Compact palette copies for the indices actually used in each region.
+- Equivalent opaque colors merged only when they match in every current palette variant.
 - Horizontal and vertical cuts with background widths aligned to four pixels.
 - Repeated subdivisions, including mirrored halves, thirds, fifths and strips.
 - Constant-size repeat groups with partial edge pieces.
@@ -68,6 +78,61 @@ Normal metadata is retained; new image IDs are allocated without reusing old
 ones. Images carrying animation anchors, LOD references or other runtime
 metadata, locked placements, unassigned artwork, and incompatible source
 geometry are excluded or refused rather than silently changed.
+
+## Palette-aware reuse
+
+**Find palette reuse** normalizes whole images for sharing, including X/Y flips,
+without adding placements. Different index assignments can share a pixel payload
+through separate compact palette copies. Duplicate opaque indices can merge only
+when their RGB555 colors agree across every palette used by that image. Opaque
+black remains distinct from transparent index zero.
+
+This scan uses the total palette cap under **Search limits**. It can retain an
+initial neutral canonicalization when that enables a later image to share its
+payload; the final proposal must still save estimated video bytes. Empty margins
+may be cropped, but this mode does not subdivide images. The regular **Find
+savings** scan also tries equivalent-color normalization when compact palette
+copies are enabled.
+
+Review the palette count and palette/table bytes as well as video savings.
+**Affected palettes are static** must be checked before applying a remapped
+proposal: matching current RGB555 colors does not establish safety for palette
+cycling, swaps, or game code that addresses particular indices. Animated/LOD
+metadata and locked placements remain excluded. Preview, full-stage comparison,
+Apply, undo/redo and save use the existing verified optimization workflow.
+
+The local MK3CAVE whole-image scan modeled 203,238 → 195,036 video bytes
+(8,202 saved), keeping 64 placements and increasing stored palettes from 7 to
+45. Palette data increased from 764 to 3,698 bytes; it is reported separately
+from video ROM. The proposal passed exact reconstruction, Apply, undo/redo and
+save/reopen checks. These are estimates, not a verified game-build receipt.
+
+## Unused-art audit
+
+Open **Optimize → Unused art** and choose **Scan references**. With a game checkout
+selected, the read-only audit collects source mentions from ASM/TBL/LOD/INC files
+under `src`, `src-refactor/src` and `data`. It also reads an existing
+`tmp/art_ref_graph/current.json` produced by the game's reference-graph tooling.
+It does not run the game tooling, assemble a build, or write to the checkout.
+
+The table shows image and palette placements, image-default palette references,
+animation/LOD metadata protections, duplicate palettes, source file/line evidence
+and graph label matches. Hidden and locked placements count as uses. Turn off
+**Only assets without placements** to inspect all entries, then select a row for
+its evidence. Reports can be copied or saved, and a selected image can be viewed
+in Assets. Document edits mark the results stale; source changes require a rescan.
+
+An image ID alone cannot establish its assembly label. Missing mappings stay
+unresolved. Source mentions can be definitions rather than consumers, and numeric
+or computed references remain unresolved. Graph label matches retain every match
+when a name is ambiguous; graph freshness and the mapping to this BDD are not
+verified. Even a graph `DEAD` classification is a review candidate, not proof that
+removal is safe. Invalid graph input or interrupted scans are marked incomplete.
+
+The unplaced-video estimate is an upper bound for this document, deduplicated
+against placed payloads and other unplaced images. It is not a promised build
+saving. Palette duplicates can still have distinct runtime slot identities.
+The audit therefore provides no automatic deletion or palette-renumbering action.
 
 ## Shared bases and unique details
 
@@ -184,6 +249,59 @@ the final layer replaced 26 spike placements with 12. Stage totals changed from
 including 8,946 silhouette pixels. This is an example to review, not a selected
 art direction or a verified packed-ROM saving. Tests wrote only scratch output.
 
+## Visibility heatmap and scoped trims
+
+Open **Optimize → Visibility**, enter the full camera X/Y range and choose
+**Analyze visibility**. Initial bounds are suggestions from document dimensions;
+they are not extracted or verified against game code. The viewport is 400x254.
+
+- Yellow: source pixels outside the viewport throughout the selected range.
+- Purple: permanently covered by opaque artwork, or covered/outside across all uses.
+- Gray: protected or unresolved artwork.
+- Uncolored opaque pixels: possibly visible, including coverage the scan cannot prove.
+
+Use the overlay filter, camera sliders, mouse-wheel zoom and right-drag pan to
+inspect the map. Click highlighted artwork for its source-image counts. **Compare
+camera views** opens the existing original/proposed wipe comparison and identifies
+the analyzed range. Moving that comparison outside the range is allowed and is
+explicitly labeled: removed artwork may become visible there.
+
+The proof is analytic over the entire continuous camera rectangle, including
+fractional positions. Outside tests sweep each pixel rectangle through the range.
+Occlusion is accepted only from later-drawn static, bound artwork with the same
+horizontal parallax, so relative pixel alignment cannot change. Different-parallax
+coverage is retained as unproven. Index zero is transparent; opaque black covers
+normally. Boundary-touching pixels are conservatively retained.
+
+Every placement of a shared image must agree before a source pixel can be removed.
+Hidden, locked, unplaced, animation/LOD and unsupported image geometry is protected.
+Unresolved plane bindings make the proposal review-only. The scan is bounded to
+16 million source pixels and 100 million pixel visits/occlusion comparisons;
+cancellation or a work-limit failure produces no applicable proposal.
+
+Proposals clear only proved invisible pixels and crop their remaining bounds,
+keeping X widths aligned to four pixels and adjusting every mirrored placement.
+They add no placements or palettes. An entirely invisible image becomes a small
+transparent placeholder; its image ID and placements are retained. Each accepted
+trim must reduce the total modeled video payload after exact-payload sharing is
+accounted for. The search is greedy and may miss jointly beneficial trims.
+
+Before **Apply verified visibility trims**, confirm that the range covers gameplay
+and that all uses of the artwork are represented by these static layers. Runtime
+actors, moving/reordered layers, effects, computed image references and changed
+transparency modes are not established by this proof. This preserves the stage
+view under that contract, not every original source pixel or every possible camera.
+Restore the original artwork or Undo before relying on a broader range later.
+
+Apply recomputes the proof against the current document, rejects changed proposals,
+and creates one undoable edit. Reports can be copied; saved pairs use the normal
+save/export workflow. Byte figures remain estimates requiring a game-build receipt.
+Tests compare integer and fractional camera views, XY flips, negative parallax,
+shared uses and transparent holes, and exercise protection, tampering, confirmation,
+staleness, undo/redo and save/reopen. MK3CAVE opened from a supported game checkout
+now receives its custom runtime binding. A standalone raw input without that
+checkout remains review-only for visibility analysis.
+
 ## What is proved for lossless proposals
 
 Before enabling Apply, the verifier reconstructs every changed source image
@@ -229,6 +347,19 @@ executes the packing script. The native adapter supports the reviewed MK2
 layout, header bank selection and fallback mapping, bootstrap base overrides,
 and continuation records. Unsupported/dynamic declarations, missing files,
 truncated records, bank overflows and overlapping payloads are refused.
+
+If `CUSTOM_VIDEO_SLOTS` is declared, capture also verifies each slotted payload's
+exact base and size against the current limits. Matching IRWs and chips no longer
+hide a slot overflow. The budget separates physical gaps into **unused bytes
+inside reserved slots** and **bytes outside reservations**, and reports the
+largest unreserved gap. Overlapping and empty reservations are counted as a union.
+This uses the declared slot map; it does not prove that every remaining gap is
+usable by all runtime code. **Declared ROM slots** shows asset sizes and capacities,
+with a filter for names such as `MK3CV`. Slot capacity alone is not growth permission.
+
+New receipts save that slot map in version 2. Version 1 receipts still load, with
+slot reservations explicitly unknown. Checkouts without a slot declaration also
+retain the physical budget without inventing an unreserved budget.
 
 Capture reconstructs the packed flat image and compares **every byte in all
 twelve interleaved chip lanes**. It re-reads the inputs afterward to detect
@@ -287,9 +418,125 @@ bddview --studio-smoke tmp/pattern-ui path/to/MK3CAVE.BDB --pattern
 bddview --studio-smoke tmp/shared-ui path/to/MK3CAVE.BDB --shared
 bddview --studio-smoke tmp/review-ui path/to/MK3CAVE.BDB --optimize-review
 studio_rom_receipt_tests tmp/receipt-test [path/to/built/game]
+studio_visibility_tests tmp/visibility-test [path/to/unbound/MK3CAVE.BDB]
+bddview --studio-smoke tmp/visibility-ui path/to/stage.BDB --visibility
 ```
 
 The optional local benchmark writes only to its scratch directory: a report
 and a saved optimized pair for inspection. The UI smoke exercises the
 background scan and captures the review; it does not apply or save the opened
 game stage.
+
+
+## Animated art: Forest and IMG libraries
+
+**Optimize > Animated art > Analyze Forest sources** loads the recognized Forest
+sequence from the checkout selected in Build & Check and decodes its frames from
+`data/MKBGANI.IMG`. The scan runs in the background and can be cancelled. It reads
+local sources only; it does not modify the document, IMG, LOD or assembly files.
+Other runtime animation drivers remain unsupported and show an explanation.
+
+**Choose IMG frames...** also opens any local IMG library for manual analysis. Filter
+labels, select individual records or **Select matches**, and choose a preview duration
+(1..60 ticks at 60 ticks/second). Up to 128 records and two million decoded pixels
+can be selected; frames must fit within 1024 pixels on each axis. **Edit selection**
+reopens the picker. All five searches operate on the selected artwork, including
+libraries unrelated to the current stage.
+
+This mode plays selected records once per loop in **IMG directory order**, preserving
+their signed frame anchors. It does not infer an assembly animation sequence,
+sequence opcodes, multipart composition, actors, timing, palette swaps or the game
+driver. The comparison and copied report identify manual timing/order explicitly.
+A multipart component selected by itself is analyzed as a component, not a complete
+pose. Directory entries with ambiguous labels, missing default/external palettes,
+invalid dimensions or invalid offsets are unavailable. Selected pixels and palettes
+are validated again when loading; decode failures produce an explanation. The
+manual comparison never replaces the Stage runtime-animation overlay or enters
+BDD/BDB save/export. Analyze again to reread changed IMG files.
+
+Five independent alternatives are compared:
+
+- Trim transparent margins and reuse identical or X/Y mirrored whole-frame payloads.
+- Compact indices with one mapping for each source-palette family across all its
+  frames, then reuse frames. Distinct authored indices stay distinct, including
+  opaque black versus transparent index zero. This does not assume a separate
+  palette can be installed for every frame.
+- Share opaque pixels that have the same index at the same actor-relative position
+  across every frame in a palette family; store the remaining details per frame.
+  The shared base excludes any pixel that disappears or changes in another frame,
+  so detail pieces never need to erase a base pixel.
+- Selectively share bases between groups of related frames, leaving unrelated poses
+  intact. The search starts with whole frames and greedily merges profitable groups.
+  A merge must reduce both the entire animation's deduplicated video estimate and
+  its video-plus-frame-description estimate, including existing reuse. Groups never
+  cross source palettes. Limits are eight frames per group, the first 32 frames,
+  128 candidate evaluations and 32 million input-pixel visits across evaluations;
+  the UI/report says when the bounded search reaches a limit. This is not an
+  exhaustive optimum and does not yet search moving components or arbitrary cuts.
+
+- Share horizontal bands whose complete opaque rows match between frames at the
+  same actor-relative position and with the same source palette. Runs must be at
+  least eight rows long. The search considers two cuts together, so it can isolate
+  a reusable middle section while keeping different top and bottom artwork. It
+  evaluates whole-animation video and frame-description costs before accepting a
+  split. Limits are eight pieces per frame, the first 32 frames, the 512 longest
+  proposed bands, and 128 candidate/32-million-input-pixel work caps. Greedy choices
+  and limits are reported; translated or mirrored row-run discovery is not included.
+
+Each frame is reconstructed and compared with the original RGB555 colors and
+transparency at its signed animation anchor. Overlapping opaque pieces are rejected.
+Both playback panels use the original sequence and tick duration with a common
+view scale and origin. The blue cross is the actor anchor. Sequence repetitions and
+multiple actors do not multiply stored artwork; the Forest's seven frames are used
+in twenty sequence steps by three trees. As in the Stage preview, random idle pauses
+are omitted. Pause or scrub to inspect individual steps.
+
+Video figures use the existing background auto-BPP/zero-compression estimate with
+16-bit alignment. **Both baseline and proposals receive the same four-pixel width
+padding**, so a nonaligned source cannot falsely appear to save space just because
+a padded proposal becomes eligible for the model's compression path. These figures
+are not the actual animation LOD packing or measured ROM receipts. Palette bytes
+and assumed frame descriptions (14 bytes per piece plus 4 per frame) are separate;
+runtime code size and object RAM remain unmeasured. A negative saved-byte figure
+means the alternative would be larger under the model. Alternatives are not additive.
+
+The local Forest check found a 31,690-byte baseline estimate. Whole-frame reuse and
+family palette compaction produced **no video savings**. Family palette entries
+fell from 53 to 50, still requiring the same bit depth. The all-frame stationary-base
+proposal grew to 32,950 bytes and needs two pieces per actor. This is a useful
+rejection of an unprofitable split, not a recommendation to alter Forest. The
+selective search also checked all 21 frame pairs without a profitable merge and
+retained the whole-frame representation. The horizontal-band pass found no runs
+of eight matching rows in Forest, so it also retained the whole frames.
+
+**Copy analysis report** includes per-frame image/palette references, signed offsets,
+flips, shared/detail roles, group membership, search counts, and actor-relative band
+cut positions. **Piece outlines** shows shared pieces in purple and frame details in
+blue. The compact layout keeps the previews visible, with model/runtime notes under
+**Estimate details and runtime integration**. Results describe the loaded source
+snapshot; run the
+scan again after changing source files. No Apply/export action is exposed: Forest
+currently creates single-frame DMA objects through `make_a_mad_tree` and advances
+three actors through `triple_framew`. Multipart artwork, flip changes, and palette
+remaps need a reviewed consumer adapter, checks of every shared/alternate/cycling
+palette use, decoded packed-art comparison, and in-game validation first.
+
+The implementation follows the consumer constraints in the game checkout's
+`doc/graphics_opportunities/MULTIPART_SHARE_SCAN.md` and
+`PALETTE_REINDEX_SCAN.md`. It does not treat their older measurements as current
+build receipts. Tests cover anchor changes, XY reuse, shared-base holes, opaque black,
+family palette ownership, odd-width budget consistency, malformed data, cancellation,
+unchanged sequence/source ownership, subset-only savings, profitable three-frame
+growth, protection of existing whole-frame reuse, search limits, and deterministic
+results. `--animation-analysis` runs the UI smoke with a Forest BDB and exercises
+all five alternatives at normal and compact sizes, including piece outlines. Tests
+also verify two-cut middle bands, signed Y boundaries, differing palette ownership,
+actor-relative X mismatches, and preservation of existing whole-frame reuse.
+
+
+`--animation-library` exercises a manual TREEANI selection from the local MKBGANI
+library with a seven-tick preview, opens/closes the filtered picker, and verifies
+that the recognized Forest runtime overlay retains its own sequence and timing.
+Core tests cover manual ordering/repetitions, signed anchors, palette availability,
+duplicate labels, invalid selections/timing, report provenance, and unchanged stage
+ownership. The catalog reads directory metadata only; analysis decodes selected art.

@@ -1511,7 +1511,7 @@ bool verify_optimization(const OptimizationPlan &plan, std::string &error) {
             auto &a = expected[i];
             const auto &b = plan.after.objects[i];
             require(a.id == b.id && a.plane == b.plane && a.hidden == b.hidden &&
-                        a.locked == b.locked && a.object.ii == b.object.ii &&
+                        a.locked == b.locked && a.runtime_dx == b.runtime_dx && a.object.ii == b.object.ii &&
                         a.object.fl == b.object.fl && a.object.wx == b.object.wx &&
                         a.object.depth == b.object.depth && a.object.sy == b.object.sy &&
                         (plan.changes.empty() || b.object.order == (int)i),

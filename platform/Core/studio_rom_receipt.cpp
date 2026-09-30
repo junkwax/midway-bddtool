@@ -81,18 +81,39 @@ std::string literal(const std::string &source, const std::string &name, char lef
     std::smatch match;
     check(std::regex_search(source, match, declaration),
           "Unsupported makevrom declaration: " + name);
-    size_t start = (size_t)match.position() + match.length(), end = source.find(right, start);
+    size_t start = (size_t)match.position() + match.length(), end = start;
+    int depth = 1;
+    char quote = 0;
+    bool escape = false;
+    for (; end < source.size(); ++end) {
+        char c = source[end];
+        if (quote) {
+            if (!escape && c == quote)
+                quote = 0;
+            if (!escape && c == '\\')
+                escape = true;
+            else
+                escape = false;
+        } else if (c == '\'' || c == '"')
+            quote = c;
+        else if (c == left)
+            ++depth;
+        else if (c == right && --depth == 0)
+            break;
+    }
+    if (end == source.size())
+        end = std::string::npos;
     check(end != std::string::npos, "Unclosed declaration: " + name);
     size_t line_end = source.find('\n', end);
     check(source.substr(end + 1, line_end == std::string::npos ? line_end : line_end - end - 1)
                   .find_first_not_of(" \t\r") == std::string::npos,
           "Computed declaration is unsupported: " + name);
-    check(
-        !std::regex_search(
-            source,
-            std::regex(name +
-                       "\\s*(\\+=|\\.\\s*(append|extend|insert|remove|pop|update|clear)\\s*\\()")),
-        "Dynamic packing declarations are unsupported: " + name);
+    check(!std::regex_search(
+              source,
+              std::regex(name + "\\s*([+*/%&|^-]=|\\.\\s*(append|extend|insert|remove|pop|popitem|"
+                                "setdefault|update|clear|__setitem__|__delitem__)\\s*\\()")) &&
+              !std::regex_search(source, std::regex("\\bdel\\s+" + name + "\\b")),
+          "Dynamic packing declarations are unsupported: " + name);
     return source.substr(start, end - start);
 }
 void residue_ok(std::string body, const std::regex &entries) {
@@ -110,6 +131,34 @@ std::map<std::string, uint64_t> dictionary(const std::string &source, const std:
               "Duplicate packing filename.");
     return values;
 }
+void validate_slots(const std::vector<RomSlot> &slots) {
+    check(slots.size() <= 4096, "Too many declared ROM slots.");
+    std::set<std::string> names;
+    for (const auto &slot : slots) {
+        check(std::regex_match(slot.name, std::regex("[A-Za-z0-9_.-]+\\.[Ii][Rr][Ww]")) &&
+                  names.insert(slot.name).second,
+              "Invalid or duplicate ROM slot name.");
+        check(slot.start < slot.end && slot.end <= (slot.start < 0x800000 ? 0x800000 : 0xc00000),
+              "Declared slot crosses a video bank or has invalid bounds: " + slot.name);
+    }
+}
+RomSlotPolicy slot_policy(const std::string &source) {
+    RomSlotPolicy policy;
+    // Recognize uses as well as assignments: an imported/computed policy is not an absent policy.
+    policy.declared = std::regex_search(source, std::regex("\\bCUSTOM_VIDEO_SLOTS\\b"));
+    if (policy.declared) {
+        auto body = literal(source, "CUSTOM_VIDEO_SLOTS", '{', '}');
+        std::regex entry(
+            R"rx(["']([A-Za-z0-9_.-]+)["']\s*:\s*\(\s*(0[xX][0-9a-fA-F]+|[0-9]+)\s*,\s*(0[xX][0-9a-fA-F]+|[0-9]+)\s*,\s*(?:"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\\\r\n]|\\.)*')\s*,?\s*\))rx");
+        residue_ok(body, entry);
+        for (std::sregex_iterator i(body.begin(), body.end(), entry), end; i != end; ++i)
+            policy.slots.push_back({(*i)[1].str(), std::stoull((*i)[2].str(), nullptr, 0),
+                                    std::stoull((*i)[3].str(), nullptr, 0)});
+        validate_slots(policy.slots);
+    }
+    policy.valid = true;
+    return policy;
+}
 void budgets(RomReceipt &receipt) {
     check(!receipt.payloads.empty() && receipt.payloads.size() <= 4096,
           "Receipt has no payloads or too many payloads.");
@@ -123,6 +172,16 @@ void budgets(RomReceipt &receipt) {
         check(p.offset >= lo && p.offset <= hi && p.bytes <= hi - p.offset,
               "Payload is outside its video bank: " + p.name);
     }
+    check(receipt.slots_checked || receipt.slots.empty(), "Unchecked receipt contains ROM slots.");
+    validate_slots(receipt.slots);
+    for (const auto &slot : receipt.slots)
+        for (const auto &p : receipt.payloads)
+            if (slot.name == p.name) {
+                check(p.offset == slot.start, "ROM slot base drifted: " + p.name);
+                check(p.bytes <= slot.end - slot.start,
+                      "ROM slot overflow: " + p.name + " (" + std::to_string(p.bytes) +
+                          " packed bytes; " + std::to_string(slot.end - slot.start) + " reserved)");
+            }
     for (int bank = 0; bank < 2; bank++) {
         std::vector<RomPayload> ranges;
         for (auto p : receipt.payloads)
@@ -141,10 +200,44 @@ void budgets(RomReceipt &receipt) {
         }
         budget.free += hi - cursor;
         budget.largest_gap = std::max(budget.largest_gap, hi - cursor);
+        if (receipt.slots_checked) {
+            // Declared reservations can overlap each other. Count their union with live data,
+            // including unused reservations, so no free byte is advertised twice.
+            std::vector<std::pair<uint64_t, uint64_t>> occupied;
+            for (const auto &p : ranges)
+                occupied.emplace_back(p.offset, p.offset + p.bytes);
+            for (const auto &s : receipt.slots)
+                if ((s.start >= 0x800000) == (bank == 1))
+                    occupied.emplace_back(s.start, s.end);
+            std::sort(occupied.begin(), occupied.end());
+            cursor = bank ? 0x800000 : 0;
+            for (const auto &range : occupied) {
+                if (range.first > cursor) {
+                    budget.unreserved_free += range.first - cursor;
+                    budget.largest_unreserved_gap =
+                        std::max(budget.largest_unreserved_gap, range.first - cursor);
+                }
+                cursor = std::max(cursor, range.second);
+            }
+            budget.unreserved_free += hi - cursor;
+            budget.largest_unreserved_gap = std::max(budget.largest_unreserved_gap, hi - cursor);
+            budget.reserved_free = budget.free - budget.unreserved_free;
+        }
         receipt.banks[bank] = budget;
     }
 }
 } // namespace
+
+RomSlotPolicy read_rom_slot_policy(const std::string &root) {
+    try {
+        return slot_policy(
+            without_comments(read(fs::u8path(root) / "makevrom.py", 2 * 1024 * 1024)));
+    } catch (const std::exception &e) {
+        RomSlotPolicy policy;
+        policy.error = e.what();
+        return policy;
+    }
+}
 
 RomReceipt capture_rom_receipt(const std::string &root_path, bool successful) {
     RomReceipt result;
@@ -153,6 +246,9 @@ RomReceipt capture_rom_receipt(const std::string &root_path, bool successful) {
         result.root = root.u8string();
         auto script = read(root / "makevrom.py", 2 * 1024 * 1024);
         auto source = without_comments(script);
+        auto policy = slot_policy(source);
+        result.slots_checked = policy.declared;
+        result.slots = std::move(policy.slots);
         auto constants = [&](const std::string &name, uint64_t expected) {
             std::smatch match;
             check(std::regex_search(
@@ -268,13 +364,16 @@ bool save_rom_receipt(const RomReceipt &receipt, const std::string &path, std::s
         auto validated = receipt;
         budgets(validated);
         std::ostringstream out;
-        out << "BDDROM 1\n"
+        out << "BDDROM 2\n"
             << std::quoted(receipt.root) << ' ' << std::quoted(receipt.captured) << ' '
             << receipt.packing_fingerprint << ' ' << receipt.after_successful_build << '\n';
         out << receipt.payloads.size() << '\n';
         for (const auto &p : receipt.payloads)
             out << std::quoted(p.name) << ' ' << p.bank << ' ' << p.offset << ' ' << p.bytes << ' '
                 << p.fingerprint << '\n';
+        out << receipt.slots_checked << ' ' << receipt.slots.size() << '\n';
+        for (const auto &slot : receipt.slots)
+            out << std::quoted(slot.name) << ' ' << slot.start << ' ' << slot.end << '\n';
         std::ofstream file(fs::u8path(path), std::ios::binary | std::ios::trunc);
         file << out.str();
         file.close();
@@ -294,13 +393,24 @@ RomReceipt load_rom_receipt(const std::string &path) {
         size_t count = 0;
         in >> magic >> version >> std::quoted(result.root) >> std::quoted(result.captured) >>
             result.packing_fingerprint >> result.after_successful_build >> count;
-        check(in && magic == "BDDROM" && version == 1 && count > 0 && count <= 4096,
+        check(in && magic == "BDDROM" && (version == 1 || version == 2) && count > 0 &&
+                  count <= 4096,
               "Invalid ROM receipt.");
         for (size_t i = 0; i < count; i++) {
             RomPayload p;
             in >> std::quoted(p.name) >> p.bank >> p.offset >> p.bytes >> p.fingerprint;
             check((bool)in, "Truncated ROM receipt.");
             result.payloads.push_back(p);
+        }
+        if (version == 2) {
+            in >> result.slots_checked >> count;
+            check(in && count <= 4096, "Invalid ROM slot receipt.");
+            for (size_t i = 0; i < count; ++i) {
+                RomSlot slot;
+                in >> std::quoted(slot.name) >> slot.start >> slot.end;
+                check((bool)in, "Truncated ROM slot receipt.");
+                result.slots.push_back(slot);
+            }
         }
         in >> std::ws;
         check(in.eof(), "Unexpected receipt data.");
@@ -325,6 +435,11 @@ std::string compare_rom_receipts(const RomReceipt &before, const RomReceipt &aft
         out << "Bank " << i << ": used " << a.used << " -> " << b.used << " B; freed "
             << (int64_t)a.used - (int64_t)b.used << " B; free " << a.free << " -> " << b.free
             << " B; largest gap " << a.largest_gap << " -> " << b.largest_gap << " B\n";
+        if (before.slots_checked && after.slots_checked)
+            out << "  Unused inside declared slots: " << a.reserved_free << " -> "
+                << b.reserved_free << " B; outside reservations: " << a.unreserved_free << " -> "
+                << b.unreserved_free << " B; largest unreserved gap: " << a.largest_unreserved_gap
+                << " -> " << b.largest_unreserved_gap << " B\n";
     }
     std::map<std::string, RomPayload> a, b;
     for (auto p : before.payloads)
@@ -345,6 +460,12 @@ std::string compare_rom_receipts(const RomReceipt &before, const RomReceipt &aft
                 << (x.offset != y.offset ? "; moved" : "")
                 << (x.fingerprint != y.fingerprint ? "; payload changed" : "") << '\n';
     }
+    if (!before.slots_checked || !after.slots_checked)
+        out << "Slot policy was not verified in one or both receipts; unreserved capacity is "
+               "unknown.\n";
+    else
+        out << "Declared slot bases and limits verified at capture. Unreserved gaps exclude "
+               "CUSTOM_VIDEO_SLOTS reservations; other runtime restrictions still apply.\n";
     out << "Physical gaps may be reserved by the game's slot policy. Changes cover the entire "
            "build, not only this stage.\n"
            "Source freshness, decoded-pixel identity, program tables/palettes and runtime "

@@ -1,5 +1,6 @@
 #include "Core/studio_document.h"
 #include "Core/studio_optimizer.h"
+#include "Core/studio_visibility.h"
 
 #include <algorithm>
 #include <cmath>
@@ -185,7 +186,7 @@ bool Document::load(const std::string &path, std::string &error) {
             int version = 0;
             uint64_t bh = 0, dh = 0;
             in >> tag >> version >> bh >> dh;
-            if (tag != "BDDSTUDIO" || version != 1) {
+            if (tag != "BDDSTUDIO" || (version != 1 && version != 2)) {
                 error = "Unsupported or damaged studio layout: " + layout.u8string();
                 return false;
             }
@@ -194,7 +195,22 @@ bool Document::load(const std::string &path, std::string &error) {
                             "are shown; review before saving.";
             } else {
                 while (in >> tag) {
-                    if (tag == "camera")
+                    if (tag == "profile" && version == 2) {
+                        in >> d.state_.runtime_profile;
+                        if (d.state_.runtime_profile != "mk3cave") {
+                            error = "Unsupported custom runtime profile.";
+                            return false;
+                        }
+                    } else if (tag == "source-shift" && version == 2) {
+                        size_t i = 0;
+                        int dx = 0;
+                        in >> i >> dx;
+                        if (i >= d.state_.objects.size() || (dx != 0 && dx != -93)) {
+                            error = "Invalid custom source shift.";
+                            return false;
+                        }
+                        d.state_.objects[i].runtime_dx = dx;
+                    } else if (tag == "camera")
                         in >> d.state_.start_x >> d.state_.start_y >> d.state_.ground;
                     else if (tag == "plane") {
                         size_t i = 0;
@@ -242,6 +258,11 @@ bool Document::load(const std::string &path, std::string &error) {
                 d.has_layout_ = true;
             }
         }
+        for (const auto &p : d.state_.objects)
+            if (p.runtime_dx && d.state_.runtime_profile != "mk3cave") {
+                error = "Source shifts require a custom runtime profile.";
+                return false;
+            }
         *this = std::move(d);
         return true;
     } catch (const std::exception &e) {
@@ -302,6 +323,7 @@ std::vector<SceneItem> scene_items(const State &state_, Point camera, bool sourc
         item.rank = plane ? plane->rank : 10000;
         double x = p.object.depth, y = p.object.sy;
         if (!source) {
+            x += p.runtime_dx;
             if (plane) {
                 x += plane->x - plane->source.x1;
                 y += plane->y - plane->source.y1;
@@ -367,6 +389,17 @@ void Document::seed_runtime(const std::vector<Plane> &planes, int x, int y, int 
     state_.start_x = x;
     state_.start_y = y;
     state_.ground = ground;
+}
+void Document::seed_custom_runtime(const std::vector<Plane> &planes, int x, int y, int ground,
+                                   const std::vector<int> &dx, const std::string &profile) {
+    if (has_layout_ || !notice_.empty() || dirty() || active_ || dx.size() != state_.objects.size())
+        return;
+    seed_runtime(planes, x, y, ground);
+    state_.runtime_profile = profile;
+    for (size_t i = 0; i < dx.size(); ++i)
+        state_.objects[i].runtime_dx = dx[i];
+    for (size_t i = 0; i < planes.size(); ++i)
+        state_.planes[i].locked = planes[i].locked;
 }
 void Document::begin(const std::string &label) {
     if (active_)
@@ -740,6 +773,29 @@ bool Document::apply_pattern(const PatternPlan &plan, std::string &error) {
     return true;
 }
 
+bool Document::apply_visibility(const VisibilityPlan &plan, bool gameplay_contract_confirmed,
+                                std::string &error) {
+    if (!gameplay_contract_confirmed) {
+        error =
+            "Confirm the camera limits and static layer behavior before applying visibility trims.";
+        return false;
+    }
+    if (active_ || plan.before.revision != state_.revision || plan.before.assets != state_.assets) {
+        error = "The document changed. Run visibility analysis again.";
+        return false;
+    }
+    // Recompute against the live state as well, including runtime bindings seeded without an edit.
+    auto current = plan;
+    current.before = state_;
+    if (!verify_visibility(current, error))
+        return false;
+    begin("Trim artwork within camera range");
+    state_ = plan.after;
+    touch();
+    commit();
+    return true;
+}
+
 BddCoreStage Document::export_stage(std::vector<Plane> &planes) const {
     BddCoreStage out;
     out.has_bdb = state_.has_bdb;
@@ -759,7 +815,7 @@ BddCoreStage Document::export_stage(std::vector<Plane> &planes) const {
             }
     }
     std::vector<Point> delta(planes.size());
-    if (pack) {
+    if (pack && state_.runtime_profile.empty()) {
         int shelf = 0;
         for (size_t i = 0; i < planes.size(); i++) {
             auto &p = planes[i];
@@ -856,7 +912,9 @@ bool Document::save(const std::string &path, std::string &error, bool recovery) 
                 output.bdb.modules.data(), (int)output.bdb.modules.size(),
                 output.bdb.objects[i].depth, output.bdb.objects[i].sy, im->w, im->h, nullptr);
             if (owner != p.plane) {
-                error = "Assign unassigned artwork to a layer before saving this layout.";
+                error = state_.runtime_profile.empty()
+                    ? "Assign unassigned artwork to a layer before saving this layout."
+                    : "Custom stage source coordinates must stay inside their original module rectangles. Move the layer to change its runtime position.";
                 return false;
             }
         }
@@ -910,8 +968,14 @@ bool Document::save(const std::string &path, std::string &error, bool recovery) 
         }
         {
             std::ofstream out(files[index++].temp, std::ios::trunc);
-            out << "BDDSTUDIO 1 " << (output.has_bdb ? file_hash(files[0].temp) : 0) << ' '
+            out << "BDDSTUDIO " << (state_.runtime_profile.empty() ? 1 : 2) << ' '
+                << (output.has_bdb ? file_hash(files[0].temp) : 0) << ' '
                 << file_hash(temp_bdd) << '\n';
+            if (!state_.runtime_profile.empty()) {
+                out << "profile " << state_.runtime_profile << '\n';
+                for (size_t i = 0; i < state_.objects.size(); ++i)
+                    out << "source-shift " << i << ' ' << state_.objects[i].runtime_dx << '\n';
+            }
             out << "camera " << state_.start_x << ' ' << state_.start_y << ' ' << state_.ground
                 << '\n';
             for (size_t i = 0; i < planes.size(); i++) {

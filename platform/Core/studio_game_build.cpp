@@ -17,8 +17,8 @@ GameBuild::~GameBuild() {
         CloseHandle((HANDLE)process_);
 #endif
 }
-bool GameBuild::start(const std::string &root_path, const std::string &log_path,
-                      std::string &error) {
+bool GameBuild::start(const std::string &root_path, const std::string &log_path, std::string &error,
+                      const std::string &script_relative) {
     if (running_) {
         error = "A game build is already running.";
         return false;
@@ -26,7 +26,16 @@ bool GameBuild::start(const std::string &root_path, const std::string &log_path,
     try {
         namespace fs = std::filesystem;
         auto root = fs::canonical(fs::u8path(root_path));
-        auto script = root / "build.py";
+        if (script_relative != "build.py" && script_relative != "tools/bddtool_mk3cave_build.py") {
+            error = "Unsupported game build adapter.";
+            return false;
+        }
+        auto script = fs::canonical(root / fs::u8path(script_relative));
+        auto relative = script.lexically_relative(root);
+        if (relative.empty() || *relative.begin() == "..") {
+            error = "Game build adapter escapes the selected checkout.";
+            return false;
+        }
         auto log = fs::absolute(fs::u8path(log_path));
         if (!fs::is_regular_file(script)) {
             error = "The selected checkout has no build.py.";

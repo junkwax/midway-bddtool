@@ -91,6 +91,55 @@ int main(int argc, char **argv) {
         auto report = compare_rom_receipts(loaded, after);
         require(report.find("B.IRW: 32 -> 20 B (12 saved)") != std::string::npos,
                 "Per-payload comparison missing");
+        require(!loaded.slots_checked &&
+                    report.find("unreserved capacity is unknown") != std::string::npos,
+                "Missing slot policy was advertised as checked");
+        auto policy =
+            std::string("CUSTOM_VIDEO_SLOTS = {\n"
+                        " 'A.IRW': (0x10, 0x80, 'first'),\n"
+                        " 'B.IRW': (0x800020, 0x800060, \"slot } with # and comma,\"),\n"
+                        " 'EMPTY.IRW': (0x800050, 0x800090, 'overlapping unused reservation'),\n"
+                        "}\n");
+        write(root / "makevrom.py", config + policy);
+        auto slotted = capture_rom_receipt(root.u8string());
+        require(slotted.valid && slotted.slots_checked && slotted.slots.size() == 3, slotted.error);
+        require(slotted.banks[0].reserved_free == 48 && slotted.banks[1].reserved_free == 92,
+                "Reservations were double-counted, omitted or counted as packed data");
+        require(slotted.banks[1].unreserved_free == 0x400000 - 112 &&
+                    slotted.banks[1].largest_unreserved_gap == 0x400000 - 144,
+                "Unreserved gap calculation is incorrect");
+        require(save_rom_receipt(slotted, receipt.u8string(), error), error);
+        auto restored = load_rom_receipt(receipt.u8string());
+        require(restored.valid && restored.slots_checked && restored.slots.size() == 3 &&
+                    restored.banks[1].reserved_free == 92,
+                "Slot receipt roundtrip failed");
+        // The payload/chips still match; only the allocator's current limit changes.
+        write(root / "makevrom.py",
+              config + "CUSTOM_VIDEO_SLOTS = {'B.IRW': (0x800020, 0x800030, 'too small')}\n");
+        auto overflow = capture_rom_receipt(root.u8string());
+        require(!overflow.valid && overflow.error.find("slot overflow: B.IRW") != std::string::npos,
+                "Matching chips bypassed the current slot limit");
+        write(root / "makevrom.py",
+              config + "CUSTOM_VIDEO_SLOTS = {'B.IRW': (0x800010, 0x800080, 'wrong base')}\n");
+        require(!capture_rom_receipt(root.u8string()).valid, "Slot base drift accepted");
+        for (const auto &bad :
+             {policy + "CUSTOM_VIDEO_SLOTS.update({'B.IRW': (0, 1, 'new')})\n",
+              policy + "CUSTOM_VIDEO_SLOTS.setdefault('EXTRA.IRW', (0, 1, 'new'))\n",
+              policy + "CUSTOM_VIDEO_SLOTS |= {'EXTRA.IRW': (0, 1, 'new')}\n",
+              policy + "del CUSTOM_VIDEO_SLOTS['B.IRW']\n",
+              std::string("CUSTOM_VIDEO_SLOTS = {'B.IRW': (0x800020, limit, 'computed')}\n"),
+              std::string("CUSTOM_VIDEO_SLOTS = {'B.IRW': (0x7ffff0, 0x800030, 'cross-bank')}\n"),
+              std::string("CUSTOM_VIDEO_SLOTS = {'B.IRW': (1, 2, 'a'), 'B.IRW': (3, 4, 'b')}\n")}) {
+            write(root / "makevrom.py", config + bad);
+            require(!read_rom_slot_policy(root.u8string()).valid,
+                    "Unsupported slot policy accepted");
+        }
+        write(receipt, "BDDROM 1\n\"root\" \"old\" 1 0\n1\n\"A.IRW\" 0 16 64 0\n");
+        auto legacy = load_rom_receipt(receipt.u8string());
+        require(legacy.valid && !legacy.slots_checked, "Version 1 compatibility failed");
+        write(receipt, "BDDROM 2\n\"root\" \"new\" 1 0\n1\n\"A.IRW\" 0 16 64 0\n"
+                       "1 1\n\"A.IRW\" 16 32\n");
+        require(!load_rom_receipt(receipt.u8string()).valid, "Serialized slot overflow accepted");
         write(root / "makevrom.py", config + "irw_files.append('STAGED.IRW')\n");
         require(!capture_rom_receipt(root.u8string()).valid, "Dynamic packing list accepted");
         write(root / "makevrom.py", config);

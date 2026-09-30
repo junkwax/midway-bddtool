@@ -5,9 +5,11 @@
 #include "Core/studio_game_export.h"
 #include "Core/studio_game_build.h"
 #include "Core/studio_animation.h"
+#include "Core/studio_animation_optimizer.h"
 #include "Core/studio_optimizer.h"
 #include "Core/studio_rom_receipt.h"
 #include "Core/studio_art_audit.h"
+#include "Core/studio_visibility.h"
 #include <future>
 #include <fstream>
 #include "libs/stb_image.h"
@@ -57,15 +59,29 @@ struct Tab {
     Viewport view;
     std::vector<ObjectId> selected;
     int plane = 0, solo = -1, asset = 0;
-    bool fit = true, source = false, camera_preview = false, move_layer = false;
+    bool fit = true, source = false, camera_preview = false, move_layer = false, hand_tool = false;
     Point camera;
     double next_recovery = 0;
     uint64_t recovered_revision = 0;
     char game_root[1024] = {}, game_label[96] = {};
+    ImGuiTextFilter rom_slot_filter;
     std::unique_ptr<GameExport> game_export;
     GameBuild game_build;
     AnimationPreview animation;
     std::string animation_root;
+    std::future<AnimationAnalysis> animation_analysis_job;
+    std::shared_ptr<OptimizeProgress> animation_analysis_progress;
+    std::unique_ptr<AnimationAnalysis> animation_analysis;
+    std::string animation_analysis_root;
+    std::unique_ptr<AnimationLibrary> animation_library;
+    std::vector<uint8_t> animation_library_selected;
+    char animation_library_filter[64] = {};
+    int animation_library_ticks = 5;
+    bool animation_library_open = false;
+    int animation_alternative = 0, animation_analysis_step = 0;
+    bool animation_analysis_play = true, animation_piece_outlines = false;
+    double animation_analysis_time = 0;
+
     bool show_animation = true, play_animation = true;
     double animation_seconds = 0;
     OptimizeOptions optimize_options;
@@ -88,6 +104,16 @@ struct Tab {
     std::unique_ptr<ArtAudit> art_audit;
     int audit_choice = -1;
     bool audit_unplaced_only = true;
+    VisibilityOptions visibility_options;
+    std::future<VisibilityPlan> visibility_job;
+    std::shared_ptr<OptimizeProgress> visibility_progress;
+    std::unique_ptr<VisibilityPlan> visibility_plan;
+    State visibility_masks;
+    Viewport visibility_view;
+    Point visibility_camera;
+    Point visibility_size;
+    bool visibility_fit = true, visibility_confirmed = false, compare_visibility = false;
+    int visibility_filter = 0, visibility_choice = -1;
     int optimize_mode = 0, pattern_palette = 0;
     PatternOptions pattern_options;
     std::future<PatternPlan> pattern_job;
@@ -104,12 +130,15 @@ struct Tab {
     int pattern_source_plane = -2;
     std::string pattern_source_error;
     ~Tab() {
+        if (animation_analysis_progress) animation_analysis_progress->cancel = true;
         if (optimize_progress)
             optimize_progress->cancel = true;
         if (pattern_progress)
             pattern_progress->cancel = true;
         if (audit_progress)
             audit_progress->cancel = true;
+        if (visibility_progress)
+            visibility_progress->cancel = true;
     }
 };
 struct AssetPayload {
@@ -118,6 +147,7 @@ struct AssetPayload {
 };
 struct TextureCache {
     SDL_Renderer *renderer = nullptr;
+    bool palette_alpha = false; // Overlay masks only; authored indexed art stays opaque above zero.
     std::shared_ptr<const AssetBank> bank;
     std::map<std::pair<int, int>, SDL_Texture *> values;
     void clear() {
@@ -145,6 +175,9 @@ struct TextureCache {
         if (!bdd_core_indexed_to_rgba(im.pix.data(), im.w, im.h, pal.argb, pal.count, rgba.data(),
                                       rgba.size()))
             return nullptr;
+        if (palette_alpha)
+            for (size_t i = 0; i < im.pix.size(); i++)
+                rgba[i * 4 + 3] = im.pix[i] < pal.count ? (uint8_t)(pal.argb[im.pix[i]] >> 24) : 0;
         SDL_Texture *tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888,
                                              SDL_TEXTUREACCESS_STATIC, im.w, im.h);
         if (!tex)
@@ -161,8 +194,10 @@ class App {
     SDL_Renderer *renderer = nullptr;
     TextureCache textures;
     TextureCache animation_textures;
+    TextureCache animation_analysis_before, animation_analysis_after;
     TextureCache optimize_before_textures, optimize_after_textures;
     TextureCache compare_before_textures, compare_after_textures;
+    TextureCache visibility_textures, visibility_before_textures;
     std::vector<std::unique_ptr<Tab>> tabs;
     int active = -1, page = 0, select_tab = -1;
     uint64_t next_tab = 1;
@@ -173,11 +208,16 @@ class App {
     char search[96] = {};
     double message_until = 0;
     bool dragging = false, marquee = false, moved = false;
+    bool panning = false, pan_moved = false, pan_clear_click = false;
+    int pan_button = 0;
+    Point pan_mouse, pan_origin;
+    struct ScrollDrag { double low = 0, high = 0, offset = 0; } scroll_drag[2];
+    Rect canvas_scrollbars[2];
     int drag_plane = -1;
     Point drag_start, drag_last;
     std::vector<ObjectId> drag_selection;
     Rect canvas_rect;
-    Point animation_pause_point, animation_next_point;
+    Point animation_pause_point, animation_next_point, animation_library_edit_point, animation_library_close_point;
     Tab *tab() { return active >= 0 && active < (int)tabs.size() ? tabs[active].get() : nullptr; }
     void toast(const std::string &text) {
         message = text;
@@ -188,7 +228,15 @@ class App {
         auto t = std::make_unique<Tab>();
         t->id = next_tab++;
         t->document = std::move(d);
+        if (t->document.state().runtime_profile == "mk3cave") {
+            t->optimize_options.compact_palettes = false;
+            t->optimize_options.max_added_objects = 24;
+        }
         t->camera = {(double)t->document.state().start_x, (double)t->document.state().start_y};
+        t->visibility_options = {t->document.state().start_x,
+            std::max(t->document.state().start_x, t->document.state().world_w - 400),
+            t->document.state().start_y, t->document.state().start_y};
+        t->visibility_camera = t->camera;
         t->camera_preview =
             std::any_of(t->document.state().planes.begin(), t->document.state().planes.end(),
                         [](const Plane &p) { return p.bound; });
@@ -305,7 +353,7 @@ class App {
     void cancel_gesture() {
         if (tab())
             tab()->document.cancel();
-        dragging = marquee = moved = false;
+        dragging = marquee = moved = panning = false;
         drag_plane = -1;
         drag_last = {};
     }
@@ -326,7 +374,7 @@ class App {
         if (io.WantTextInput || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId))
             return;
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            if (dragging || marquee)
+            if (dragging || marquee || panning)
                 cancel_gesture();
             else if (tab())
                 tab()->selected.clear();
@@ -582,7 +630,8 @@ class App {
                 ImGui::TextUnformatted(
                     "Drag to move. Shift-click to select more. Ctrl+D duplicates.");
                 ImGui::TextUnformatted(
-                    "Wheel to zoom. Middle-drag or Space-drag to pan. Escape cancels.");
+                    "Drag empty space to pan. Shift-drag empty space to box-select. "
+                    "Hand mode, middle-drag or Space-drag pans anywhere. Wheel zooms. Escape cancels.");
                 ImGui::TextUnformatted("Arrow keys nudge 1 pixel; Shift nudges 10 pixels.");
                 ImGui::Separator();
                 ImGui::TextWrapped(
@@ -875,16 +924,77 @@ class App {
             ImGui::TextWrapped(
                 "Select artwork on the canvas, or choose a layer in the stage tree.");
     }
+    void start_pan(Tab &t, int button, bool clear_click = false) {
+        panning = true; pan_moved = false; pan_clear_click = clear_click;
+        pan_button = button; pan_mouse = point(ImGui::GetIO().MousePos); pan_origin = t.view.pan;
+    }
+    void canvas_scrollbars_ui(Tab &t, ImVec2 origin, ImVec2 size, Rect bounds) {
+        constexpr float thickness = 16;
+        auto cursor = ImGui::GetCursorScreenPos();
+        auto *draw = ImGui::GetWindowDrawList();
+        for (int axis = 0; axis < 2; axis++) {
+            bool vertical = axis == 1;
+            ImVec2 pos(origin.x + (vertical ? size.x : 0), origin.y + (vertical ? 0 : size.y));
+            ImVec2 extent(vertical ? thickness : size.x, vertical ? size.y : thickness);
+            canvas_scrollbars[axis] = {pos.x, pos.y, extent.x, extent.y};
+            double &pan = vertical ? t.view.pan.y : t.view.pan.x;
+            double visible = (vertical ? size.y : size.x) / t.view.zoom;
+            double content_low = vertical ? bounds.y : bounds.x;
+            double content_high = content_low + (vertical ? bounds.h : bounds.w);
+            double padding = std::max(32.0, visible * .1);
+            double low = std::min(content_low - padding, pan);
+            double high = std::max(content_high + padding, pan + visible);
+            ImGui::SetCursorScreenPos(pos);
+            ImGui::InvisibleButton(vertical ? "canvas-scroll-y" : "canvas-scroll-x", extent);
+            auto &drag = scroll_drag[axis];
+            if (ImGui::IsItemActivated()) { drag.low = low; drag.high = high; }
+            if (ImGui::IsItemActive()) { low = drag.low; high = drag.high; }
+            double length = vertical ? extent.y : extent.x;
+            double thumb = std::min(length, std::max(24.0, length * visible / (high - low)));
+            double travel = length - thumb, range = high - low - visible;
+            double start = range > 0 ? std::clamp((pan - low) / range, 0.0, 1.0) * travel : 0;
+            double mouse = vertical ? ImGui::GetIO().MousePos.y - pos.y : ImGui::GetIO().MousePos.x - pos.x;
+            if (ImGui::IsItemActivated())
+                drag.offset = mouse >= start && mouse <= start + thumb ? mouse - start : thumb / 2;
+            if (ImGui::IsItemActive() && travel > 0 && range > 0) {
+                start = std::clamp(mouse - drag.offset, 0.0, travel);
+                pan = low + start / travel * range;
+                t.fit = false;
+            }
+            draw->AddRectFilled(pos, {pos.x + extent.x, pos.y + extent.y},
+                                ImGui::GetColorU32(ImGuiCol_ScrollbarBg));
+            ImVec2 a(pos.x + (vertical ? 2 : (float)start), pos.y + (vertical ? (float)start : 2));
+            ImVec2 b(a.x + (vertical ? thickness - 4 : (float)thumb),
+                     a.y + (vertical ? (float)thumb : thickness - 4));
+            draw->AddRectFilled(a, b, ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ScrollbarGrabActive :
+                ImGui::IsItemHovered() ? ImGuiCol_ScrollbarGrabHovered : ImGuiCol_ScrollbarGrab), 4);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip(vertical ? "Scroll map vertically" : "Scroll map horizontally");
+        }
+        ImGui::SetCursorScreenPos(cursor);
+    }
     void canvas(Tab &t) {
         ImVec2 origin = ImGui::GetCursorScreenPos(), size = ImGui::GetContentRegionAvail();
-        size.x = std::max(1.0f, size.x);
-        size.y = std::max(1.0f, size.y);
+        size.x = std::max(1.0f, size.x - 16);
+        size.y = std::max(1.0f, size.y - 16);
         canvas_rect = {origin.x, origin.y, size.x, size.y};
         if (t.fit) {
             t.view.fit(t.camera_preview ? Rect{0, 0, 400, 254} : t.document.bounds(t.source),
                        {0, 0, size.x, size.y});
             t.fit = false;
         }
+        Point cam = t.camera_preview ? t.camera : Point{};
+        auto navigation_items = t.document.scene(cam, t.source, t.solo);
+        Rect navigation_bounds{0, 0, 400, 254};
+        if (!navigation_items.empty()) navigation_bounds = navigation_items.front().rect;
+        for (const auto &item : navigation_items) {
+            double right = std::max(navigation_bounds.x + navigation_bounds.w, item.rect.x + item.rect.w);
+            double bottom = std::max(navigation_bounds.y + navigation_bounds.h, item.rect.y + item.rect.h);
+            navigation_bounds.x = std::min(navigation_bounds.x, item.rect.x);
+            navigation_bounds.y = std::min(navigation_bounds.y, item.rect.y);
+            navigation_bounds.w = right - navigation_bounds.x;
+            navigation_bounds.h = bottom - navigation_bounds.y;
+        }
+        canvas_scrollbars_ui(t, origin, size, navigation_bounds);
         auto *draw = ImGui::GetWindowDrawList();
         auto &io = ImGui::GetIO();
         ImGui::InvisibleButton("canvas", size,
@@ -893,19 +1003,31 @@ class App {
                                    ImGuiButtonFlags_MouseButtonRight);
         bool hovered = ImGui::IsItemHovered();
         Point world = t.view.to_world(point(io.MousePos), point(origin));
-        Point cam = t.camera_preview ? t.camera : Point{};
-        if (hovered && io.MouseWheel != 0 && !dragging) {
+        if (hovered && io.MouseWheel != 0 && !dragging && !marquee && !panning) {
             t.view.zoom_at(t.view.zoom * std::pow(1.15, io.MouseWheel), point(io.MousePos),
                            point(origin));
             world = t.view.to_world(point(io.MousePos), point(origin));
         }
-        bool pan = hovered && (ImGui::IsMouseDragging(2) ||
-                               (ImGui::IsKeyDown(ImGuiKey_Space) && ImGui::IsMouseDragging(0)));
-        if (pan) {
-            t.view.pan.x -= io.MouseDelta.x / t.view.zoom;
-            t.view.pan.y -= io.MouseDelta.y / t.view.zoom;
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        if (hovered && !dragging && !marquee && !panning && !ImGui::GetDragDropPayload()) {
+            if (ImGui::IsMouseClicked(2)) start_pan(t, 2);
+            else if (ImGui::IsMouseClicked(0) && (t.hand_tool || ImGui::IsKeyDown(ImGuiKey_Space)))
+                start_pan(t, 0);
         }
+        if (panning) {
+            if (ImGui::IsMouseDown(pan_button)) {
+                if (ImGui::IsMouseDragging(pan_button)) pan_moved = true;
+                if (pan_moved) {
+                    t.view.pan = {pan_origin.x - (io.MousePos.x - pan_mouse.x) / t.view.zoom,
+                                  pan_origin.y - (io.MousePos.y - pan_mouse.y) / t.view.zoom};
+                    world = t.view.to_world(point(io.MousePos), point(origin));
+                }
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            } else {
+                if (pan_clear_click && !pan_moved) t.selected.clear();
+                panning = false;
+            }
+        } else if (hovered && (t.hand_tool || ImGui::IsKeyDown(ImGuiKey_Space)))
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         if (ImGui::BeginDragDropTarget()) {
             if (const auto *payload = ImGui::AcceptDragDropPayload("STUDIO_ASSET")) {
                 const auto &asset = *static_cast<const AssetPayload *>(payload->Data);
@@ -934,7 +1056,7 @@ class App {
             }
             ImGui::EndDragDropTarget();
         }
-        if (hovered && !pan && !ImGui::IsKeyDown(ImGuiKey_Space) && ImGui::IsMouseClicked(0) &&
+        if (hovered && !panning && !t.hand_tool && !ImGui::IsKeyDown(ImGuiKey_Space) && ImGui::IsMouseClicked(0) &&
             !ImGui::GetDragDropPayload()) {
             ObjectId hit = t.document.pick(world, cam, t.source, t.solo);
             if (hit) {
@@ -961,13 +1083,11 @@ class App {
                     drag_last = {};
                     moved = false;
                 }
-            } else {
-                if (!io.KeyShift && !io.KeyCtrl)
-                    t.selected.clear();
+            } else if (io.KeyShift || io.KeyCtrl) {
                 marquee = true;
                 drag_start = world;
                 drag_selection = t.selected;
-            }
+            } else start_pan(t, 0, true);
         }
         if (dragging && ImGui::IsMouseDown(0)) {
             int dx = (int)std::round(world.x - drag_start.x),
@@ -1286,12 +1406,14 @@ class App {
             ImGui::BeginDisabled(busy || !current || package.applied);
             if (ImGui::Button("Apply reviewed export")) {
                 if (apply_game_export(package, error))
-                    toast("Game sources updated; backups saved. Run Build game next.");
+                    toast(package.build_script == "build.py"
+                              ? "Game sources updated; backups saved. Run Build game next."
+                              : "Game sources updated; backups saved. Run Build & verify ROMs next.");
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::BeginDisabled(busy || !current || !package.applied);
-            if (ImGui::Button("Build game")) {
+            if (ImGui::Button(package.build_script == "build.py" ? "Build game" : "Build & verify ROMs")) {
                 bool unchanged = true;
                 for (const auto &file : package.files) {
                     std::ifstream in(fs::u8path(package.root) / fs::u8path(file.relative),
@@ -1306,20 +1428,23 @@ class App {
                 }
                 if (unchanged &&
                     t.game_build.start(
-                        package.root, (fs::u8path(package.folder) / "build.log").u8string(), error))
+                        package.root, (fs::u8path(package.folder) / "build.log").u8string(), error,
+                        package.build_script))
                     toast("Game build started. The log is shown below.");
             }
             ImGui::EndDisabled();
             if (package.applied)
-                ImGui::TextDisabled("Sources applied. ROM packaging and emulator verification "
-                                    "follow the game build.");
+                ImGui::TextDisabled("%s", package.build_script == "build.py"
+                    ? "Sources applied. ROM packaging and emulator verification follow the game build."
+                    : "Sources applied. Build & verify ROMs packages a local ROM set without installing it.");
         }
         if (t.game_build.started()) {
             if (t.game_build.running())
                 ImGui::TextColored(accent, "Game build running...");
             else if (t.game_build.exit_code() == 0)
-                ImGui::TextColored(accent, "Game build finished successfully. Package and verify "
-                                           "it in the emulator next.");
+                ImGui::TextColored(accent, "%s", t.game_export && t.game_export->build_script != "build.py"
+                    ? "Packed pixels and ROM build verified. ROMs: rom/bddtool/mk2.zip. Emulator check is next."
+                    : "Game build finished successfully. Package and verify it in the emulator next.");
             else
                 ImGui::TextColored(ImVec4(.98f, .48f, .42f, 1),
                                    "Game build failed (exit %d). See the log below.",
@@ -1353,6 +1478,7 @@ class App {
             options.max_added_objects = 0;
             options.policy = 0;
         }
+        if (doc.state().runtime_profile == "mk3cave") options.compact_palettes = false;
         t.optimize_static_palettes = false;
         t.optimize_job =
             std::async(std::launch::async, [doc = std::move(doc), options, progress, mode]() {
@@ -1375,8 +1501,15 @@ class App {
         ImGui::SameLine();
         if (ImGui::RadioButton("Unused art", t.optimize_mode == 4))
             t.optimize_mode = 4;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Visibility", t.optimize_mode == 5))
+            t.optimize_mode = 5;
+        if (ImGui::RadioButton("Animated art", t.optimize_mode == 6))
+            t.optimize_mode = 6;
         ImGui::Separator();
-        if (t.optimize_mode == 1)
+        if (t.optimize_mode == 6)
+            animated_art(t);
+        else if (t.optimize_mode == 1)
             pattern_workshop(t);
         else if (t.optimize_mode == 2)
             savings_map(t);
@@ -1384,12 +1517,15 @@ class App {
             rom_receipts(t);
         else if (t.optimize_mode == 4)
             unused_art(t);
+        else if (t.optimize_mode == 5)
+            visibility(t);
         else
             lossless_optimizer(t);
         stage_comparison(t);
     }
     void compare_button(Tab &t, bool pattern) {
         if (ImGui::Button("Compare full stage")) {
+            t.compare_visibility = false;
             t.compare_pattern = pattern;
             t.compare_camera = t.camera;
             t.compare_open = true;
@@ -1424,7 +1560,11 @@ class App {
         ImGui::Combo("##opt-policy", &t.optimize_options.policy,
                      "Smallest video data\0Balanced\0Fewer placements\0");
         if (ImGui::CollapsingHeader("Search limits")) {
+            ImGui::BeginDisabled(t.document.state().runtime_profile == "mk3cave");
             ImGui::Checkbox("Try compact palette copies", &t.optimize_options.compact_palettes);
+            ImGui::EndDisabled();
+            if (t.document.state().runtime_profile == "mk3cave")
+                ImGui::TextDisabled("Cave export keeps its seven palettes and protects the cavern/water layer.");
             ImGui::SetNextItemWidth(180);
             ImGui::SliderInt("Pieces per image", &t.optimize_options.max_pieces, 1, 16);
             ImGui::SetNextItemWidth(180);
@@ -1993,7 +2133,10 @@ class App {
         if (!t.compare_open)
             return;
         const State *before = nullptr, *after = nullptr;
-        if (t.compare_pattern && t.pattern_plan && t.pattern_plan->valid) {
+        if (t.compare_visibility && t.visibility_plan && t.visibility_plan->analyzed) {
+            before = &t.visibility_plan->before;
+            after = &t.visibility_plan->after;
+        } else if (t.compare_pattern && t.pattern_plan && t.pattern_plan->valid) {
             before = &t.pattern_plan->before;
             after = &t.pattern_plan->packing.after;
         } else if (!t.compare_pattern && t.optimize_plan && t.optimize_plan->verified) {
@@ -2021,6 +2164,13 @@ class App {
                     before->revision != t.document.state().revision)
                     ImGui::TextColored(
                         accent, "Comparing the analyzed snapshot; the document has changed.");
+                if (t.compare_visibility) {
+                    const auto &o = t.visibility_plan->options;
+                    ImGui::Text("Visibility proof range: X %d..%d, Y %d..%d", o.min_x, o.max_x, o.min_y, o.max_y);
+                    if (t.compare_camera.x < o.min_x || t.compare_camera.x > o.max_x ||
+                        t.compare_camera.y < o.min_y || t.compare_camera.y > o.max_y)
+                        ImGui::TextColored(accent, "Outside the analyzed range: removed artwork may be visible here.");
+                }
                 float camera[2] = {(float)t.compare_camera.x, (float)t.compare_camera.y};
                 ImGui::SetNextItemWidth(280);
                 if (ImGui::DragFloat2("Camera X / Y", camera, 1, -32768, 32767, "%.0f",
@@ -2037,7 +2187,8 @@ class App {
                     for (const auto &item : scene_items(*before)) {
                         const auto &object = before->objects[item.object_index];
                         bool affected =
-                            t.compare_pattern
+                            t.compare_visibility ? std::any_of(t.visibility_plan->images.begin(),
+                                t.visibility_plan->images.end(), [&](const auto &i) { return i.trimmed && i.image == object.object.ii; }) : t.compare_pattern
                                 ? (t.pattern_plan->options.plane >= 0
                                        ? object.plane == t.pattern_plan->options.plane
                                        : object.object.ii == t.pattern_plan->options.image)
@@ -2229,11 +2380,514 @@ class App {
             draw->AddText(ImVec2(origin.x + 12, origin.y + 12), IM_COL32_WHITE,
                           "No regions found within the scan limits.");
     }
+    void start_visibility(Tab &t) {
+        t.visibility_progress = std::make_shared<OptimizeProgress>();
+        t.visibility_job = std::async(std::launch::async,
+                                      [state = t.document.state(), options = t.visibility_options,
+                                       progress = t.visibility_progress]() {
+                                          return analyze_visibility(state, options, progress.get());
+                                      });
+        t.visibility_plan.reset();
+        t.visibility_confirmed = false;
+        t.visibility_choice = -1;
+    }
+    void visibility(Tab &t) {
+        heading("Visibility heatmap",
+                "Find pixels outside the camera range or permanently covered.");
+        ImGui::TextWrapped(
+            "Camera bounds below are suggested from document dimensions, not read from game code. "
+            "Set the full gameplay range, including vertical movement and stage effects.");
+        bool busy = t.visibility_job.valid();
+        auto &o = t.visibility_options;
+        ImGui::BeginDisabled(busy);
+        int xs[] = {o.min_x, o.max_x}, ys[] = {o.min_y, o.max_y};
+        ImGui::SetNextItemWidth(210);
+        bool changed = ImGui::InputInt2("Camera X min / max", xs);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(210);
+        changed |= ImGui::InputInt2("Camera Y min / max", ys);
+        if (changed) {
+            o = {xs[0], xs[1], ys[0], ys[1]};
+            t.visibility_confirmed = false;
+        }
+        if (ImGui::Button("Analyze visibility"))
+            start_visibility(t);
+        ImGui::EndDisabled();
+        if (busy) {
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel visibility scan"))
+                t.visibility_progress->cancel = true;
+            ImGui::ProgressBar((float)t.visibility_progress->done.load() /
+                                   std::max(1, t.visibility_progress->total.load()),
+                               ImVec2(-1, 16));
+        }
+        if (!t.visibility_plan)
+            return;
+        const auto &plan = *t.visibility_plan;
+        if (!plan.error.empty()) {
+            ImGui::TextWrapped("%s", plan.error.c_str());
+            return;
+        }
+        bool current = plan.before.assets == t.document.state().assets &&
+                       plan.before.revision == t.document.state().revision &&
+                       o.min_x == plan.options.min_x && o.max_x == plan.options.max_x &&
+                       o.min_y == plan.options.min_y && o.max_y == plan.options.max_y;
+        if (!current)
+            ImGui::TextColored(accent,
+                               "Document or camera range changed. Analyze again before applying.");
+        if (!plan.verified)
+            ImGui::TextColored(accent, "Review only: bind unresolved game layers before trimming.");
+        ImGui::Text("%d images proposed | Estimated video %.1f -> %.1f KiB | No added placements "
+                    "or palettes",
+                    plan.changed_images, plan.baseline.video_bits / 8192.0,
+                    plan.proposed.video_bits / 8192.0);
+        ImGui::BeginDisabled(!current || busy || !plan.verified || !plan.changed_images ||
+                             t.document.transaction_active());
+        ImGui::Checkbox(
+            "This is the full gameplay range; artwork has only these static, opaque uses",
+            &t.visibility_confirmed);
+        ImGui::BeginDisabled(!t.visibility_confirmed);
+        if (ImGui::Button("Apply verified visibility trims")) {
+            if (t.document.apply_visibility(plan, t.visibility_confirmed, error)) {
+                t.visibility_confirmed = false;
+                toast("Visibility trims applied. Undo restores the complete artwork.");
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Compare camera views")) {
+            t.compare_visibility = true;
+            t.compare_pattern = false;
+            t.compare_open = true;
+            t.compare_camera = t.visibility_camera;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Copy visibility report"))
+            ImGui::SetClipboardText(visibility_report(plan).c_str());
+        ImGui::SetNextItemWidth(160);
+        ImGui::Combo(
+            "Overlay", &t.visibility_filter,
+            "All classifications\0Outside range\0Permanently covered\0Protected / unresolved\0");
+        ImGui::SameLine();
+        if (ImGui::Button("Fit map"))
+            t.visibility_fit = true;
+        float cx = (float)t.visibility_camera.x, cy = (float)t.visibility_camera.y;
+        ImGui::SetNextItemWidth(220);
+        if (ImGui::SliderFloat("Inspect camera X", &cx, (float)plan.options.min_x,
+                               (float)plan.options.max_x, "%.1f"))
+            t.visibility_camera.x = cx;
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(180);
+        if (ImGui::SliderFloat("Inspect camera Y", &cy, (float)plan.options.min_y,
+                               (float)plan.options.max_y, "%.1f"))
+            t.visibility_camera.y = cy;
+        ImGui::TextDisabled("Yellow: outside | Purple: covered | Gray: protected | Uncolored: may "
+                            "be visible. Click artwork for counts.");
+        if (t.visibility_choice >= 0 && t.visibility_choice < (int)plan.images.size()) {
+            const auto &i = plan.images[t.visibility_choice];
+            ImGui::Text("Image %d: %llu outside, %llu covered, %llu retained/protected%s", i.image,
+                        (unsigned long long)i.outside, (unsigned long long)i.covered,
+                        (unsigned long long)i.retained, i.trimmed ? " | trim proposed" : "");
+        }
+        auto origin = ImGui::GetCursorScreenPos();
+        ImVec2 size(std::max(100.f, ImGui::GetContentRegionAvail().x),
+                    std::clamp(ImGui::GetContentRegionAvail().y - 35, 180.f, 340.f));
+        ImGui::InvisibleButton("visibility-map", size,
+                               ImGuiButtonFlags_MouseButtonLeft |
+                                   ImGuiButtonFlags_MouseButtonRight);
+        bool hovered = ImGui::IsItemHovered();
+        auto items = scene_items(plan.before, t.visibility_camera);
+        if (t.visibility_size.x != size.x || t.visibility_size.y != size.y) {
+            t.visibility_size = point(size);
+            t.visibility_fit = true;
+        }
+        if (t.visibility_fit) {
+            Rect bounds{0, 0, 400, 254};
+            for (const auto &item : items) {
+                double right = std::max(bounds.x + bounds.w, item.rect.x + item.rect.w);
+                double bottom = std::max(bounds.y + bounds.h, item.rect.y + item.rect.h);
+                bounds.x = std::min(bounds.x, item.rect.x);
+                bounds.y = std::min(bounds.y, item.rect.y);
+                bounds.w = right - bounds.x;
+                bounds.h = bottom - bounds.y;
+            }
+            t.visibility_view.fit(bounds, {0, 0, size.x, size.y});
+            t.visibility_fit = false;
+        }
+        auto &io = ImGui::GetIO();
+        if (hovered && io.MouseWheel)
+            t.visibility_view.zoom_at(t.visibility_view.zoom * std::pow(1.15, io.MouseWheel),
+                                      point(io.MousePos), point(origin));
+        if (hovered && ImGui::IsMouseDragging(1)) {
+            t.visibility_view.pan.x -= io.MouseDelta.x / t.visibility_view.zoom;
+            t.visibility_view.pan.y -= io.MouseDelta.y / t.visibility_view.zoom;
+        }
+        auto *draw = ImGui::GetWindowDrawList();
+        ImVec2 end(origin.x + size.x, origin.y + size.y);
+        draw->AddRectFilled(origin, end, IM_COL32(14, 17, 22, 255));
+        auto zero = t.visibility_view.to_screen({}, point(origin));
+        draw_snapshot(plan.before, visibility_before_textures, vec(zero),
+                      (float)t.visibility_view.zoom, t.visibility_camera, origin, end);
+        draw->PushClipRect(origin, end, true);
+        visibility_textures.renderer = renderer;
+        visibility_textures.palette_alpha = true;
+        int hit = -1;
+        bool classified_hit = false;
+        for (const auto &item : items) {
+            auto a = vec(t.visibility_view.to_screen({item.rect.x, item.rect.y}, point(origin)));
+            auto b = vec(t.visibility_view.to_screen(
+                {item.rect.x + item.rect.w, item.rect.y + item.rect.h}, point(origin)));
+            if (auto tex = visibility_textures.get(t.visibility_masks, (int)item.image_slot,
+                                                   t.visibility_filter))
+                draw->AddImage((ImTextureID)(intptr_t)tex, a, b,
+                               ImVec2(item.hflip ? 1.f : 0.f, item.vflip ? 1.f : 0.f),
+                               ImVec2(item.hflip ? 0.f : 1.f, item.vflip ? 0.f : 1.f));
+            if (hovered && ImGui::IsMouseHoveringRect(a, b)) {
+                int x = (int)((io.MousePos.x - a.x) / t.visibility_view.zoom);
+                int y = (int)((io.MousePos.y - a.y) / t.visibility_view.zoom);
+                const auto &im = plan.before.assets->data.images[item.image_slot];
+                if (item.hflip)
+                    x = im.w - 1 - x;
+                if (item.vflip)
+                    y = im.h - 1 - y;
+                if (x >= 0 && y >= 0 && x < im.w && y < im.h) {
+                    auto kind = plan.images[item.image_slot].pixels[(size_t)y * im.w + x];
+                    bool classified =
+                        kind >= 2 && (!t.visibility_filter || kind == t.visibility_filter + 1);
+                    if (classified || !classified_hit) {
+                        hit = (int)item.image_slot;
+                        classified_hit = classified;
+                    }
+                }
+            }
+        }
+        if (hit >= 0 && ImGui::IsMouseClicked(0))
+            t.visibility_choice = hit;
+        draw->AddRect(vec(zero), vec(t.visibility_view.to_screen({400, 254}, point(origin))),
+                      IM_COL32(240, 215, 125, 255));
+        draw->PopClipRect();
+        if (ImGui::CollapsingHeader("Proof limits and skipped artwork"))
+            for (const auto &note : plan.notes)
+                ImGui::TextWrapped("%s", note.c_str());
+    }
+    void start_animation_analysis(Tab &t) {
+        if (t.animation_analysis_job.valid())
+            return;
+        t.animation = load_animation_preview(t.document, t.game_root);
+        t.animation_root = t.game_root;
+        t.animation_analysis.reset();
+        t.animation_analysis_root = t.game_root;
+        t.animation_alternative = t.animation_analysis_step = 0;
+        t.animation_analysis_time = 0;
+        auto progress = std::make_shared<OptimizeProgress>();
+        t.animation_analysis_progress = progress;
+        t.animation_analysis_job =
+            std::async(std::launch::async, [source = t.animation, progress]() {
+                return analyze_animation(source, progress.get());
+            });
+    }
+    void start_img_analysis(Tab &t) {
+        if (t.animation_analysis_job.valid() || !t.animation_library) return;
+        std::vector<std::string> names;
+        for (size_t i = 0; i < t.animation_library->images.size(); i++)
+            if (t.animation_library_selected[i]) names.push_back(t.animation_library->images[i].label);
+        if (names.empty()) return;
+        t.animation_analysis.reset();
+        t.animation_analysis_root.clear();
+        t.animation_alternative = t.animation_analysis_step = 0;
+        t.animation_analysis_time = 0;
+        auto progress = std::make_shared<OptimizeProgress>();
+        t.animation_analysis_progress = progress;
+        t.animation_analysis_job = std::async(std::launch::async,
+            [path = t.animation_library->path, names, ticks = t.animation_library_ticks, progress]() {
+                auto source = load_animation_selection(path, names, ticks);
+                if (!source.ready()) {
+                    AnimationAnalysis failed; failed.error = source.notice; return failed;
+                }
+                return analyze_animation(source, progress.get());
+            });
+    }
+    void animation_library_picker(Tab &t) {
+        ImGui::SetNextWindowSize({780, 520}, ImGuiCond_Appearing);
+        t.animation_library_open = ImGui::BeginPopupModal("Choose IMG frames", nullptr, ImGuiWindowFlags_NoResize);
+        if (!t.animation_library_open) return;
+        if (!t.animation_library) { ImGui::CloseCurrentPopup(); ImGui::EndPopup(); return; }
+        const auto &library = *t.animation_library;
+        ImGui::TextWrapped("%s", library.path.c_str());
+        ImGui::TextWrapped("Choose related frames to compare. Playback uses directory order and the "
+                           "duration below; in-game sequence and driver behavior are unverified.");
+        ImGui::SetNextItemWidth(260);
+        ImGui::InputTextWithHint("##img-frame-filter", "Filter labels (e.g. TREEANI)",
+                                 t.animation_library_filter, sizeof t.animation_library_filter);
+        std::string filter = t.animation_library_filter;
+        for (auto &c : filter) if (c >= 'a' && c <= 'z') c -= 32;
+        std::vector<int> matches;
+        size_t selected = std::count(t.animation_library_selected.begin(),
+                                     t.animation_library_selected.end(), uint8_t(1));
+        size_t additional = 0;
+        for (size_t i = 0; i < library.images.size(); i++) {
+            if (library.images[i].label.find(filter) == std::string::npos) continue;
+            matches.push_back((int)i);
+            if (!t.animation_library_selected[i] && library.images[i].problem.empty()) additional++;
+        }
+        ImGui::SameLine(); ImGui::BeginDisabled(selected + additional > 128 || !additional);
+        if (ImGui::Button("Select matches")) {
+            for (int i : matches) if (library.images[i].problem.empty()) t.animation_library_selected[i] = 1;
+            selected += additional;
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && selected + additional > 128)
+            ImGui::SetTooltip("Narrow the filter first: the limit is 128 selected frames.");
+        ImGui::SameLine();
+        if (ImGui::Button("Clear selection")) {
+            std::fill(t.animation_library_selected.begin(), t.animation_library_selected.end(), 0);
+            selected = 0;
+        }
+        ImGui::Text("%d matching records / %d selected (maximum 128)", (int)matches.size(), (int)selected);
+        if (ImGui::BeginTable("img-library-frames", 5,
+            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH, {0, 260})) {
+            ImGui::TableSetupColumn("Use", ImGuiTableColumnFlags_WidthFixed, 36);
+            ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthStretch, 2);
+            ImGui::TableSetupColumn("Size"); ImGui::TableSetupColumn("Palette");
+            ImGui::TableSetupColumn("Anchor / availability", ImGuiTableColumnFlags_WidthStretch, 3);
+            ImGui::TableSetupScrollFreeze(0, 1); ImGui::TableHeadersRow();
+            ImGuiListClipper clipper; clipper.Begin((int)matches.size());
+            while (clipper.Step()) for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++) {
+                int i = matches[row]; const auto &entry = library.images[i];
+                bool value = t.animation_library_selected[i] != 0;
+                ImGui::PushID(i); ImGui::TableNextRow(); ImGui::TableNextColumn();
+                ImGui::BeginDisabled(!entry.problem.empty() || (!value && selected >= 128));
+                if (ImGui::Checkbox("##use-frame", &value)) {
+                    t.animation_library_selected[i] = value;
+                    if (value) selected++; else selected--;
+                }
+                ImGui::EndDisabled(); ImGui::TableNextColumn();
+                ImGui::TextUnformatted(entry.label.c_str()); ImGui::TableNextColumn();
+                ImGui::Text("%d x %d", entry.width, entry.height); ImGui::TableNextColumn();
+                ImGui::Text("%d", entry.palette); ImGui::TableNextColumn();
+                if (entry.problem.empty()) ImGui::Text("%d, %d", entry.anchor_x, entry.anchor_y);
+                else {
+                    ImGui::TextUnformatted(entry.problem.c_str());
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entry.problem.c_str());
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        ImGui::SetNextItemWidth(210);
+        ImGui::SliderInt("Preview ticks / frame (60 ticks/sec)", &t.animation_library_ticks, 1, 60);
+        ImGui::BeginDisabled(selected == 0 || t.animation_analysis_job.valid());
+        if (ImGui::Button("Analyze selected frames")) {
+            start_img_analysis(t); ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled(); ImGui::SameLine();
+        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        animation_library_close_point = item_center();
+        ImGui::EndPopup();
+    }
+    void animated_art(Tab &t) {
+        heading("Animated art", "Read-only analysis: runtime Forest animation or selected frames from an IMG library.");
+        bool busy = t.animation_analysis_job.valid();
+        ImGui::BeginDisabled(busy);
+        if (ImGui::Button("Analyze Forest sources"))
+            start_animation_analysis(t);
+        ImGui::SameLine();
+        if (ImGui::Button("Choose IMG frames...")) {
+            char path[1024] = {};
+            if (t.animation_library) std::snprintf(path, sizeof path, "%s", t.animation_library->path.c_str());
+            else if (*t.game_root) std::snprintf(path, sizeof path, "%s/data/MKBGANI.IMG", t.game_root);
+            if (file_dialog_open("Choose IMG library", "Midway image libraries\0*.IMG;*.img\0All files\0*.*\0", path, sizeof path)) {
+                auto library = inspect_animation_library(path);
+                if (!library.error.empty()) error = library.error;
+                else {
+                    t.animation_library = std::make_unique<AnimationLibrary>(std::move(library));
+                    t.animation_library_selected.assign(t.animation_library->images.size(), 0);
+                    t.animation_library_filter[0] = 0;
+                    ImGui::OpenPopup("Choose IMG frames");
+                }
+            }
+        }
+        if (t.animation_library) {
+            ImGui::SameLine();
+            if (ImGui::Button("Edit selection")) ImGui::OpenPopup("Choose IMG frames");
+            animation_library_edit_point = item_center();
+        }
+        ImGui::EndDisabled();
+        animation_library_picker(t);
+        if (t.animation_analysis && t.animation_analysis->error.empty()) {
+            ImGui::SameLine();
+            if (ImGui::Button("Copy analysis report"))
+                ImGui::SetClipboardText(animation_analysis_report(*t.animation_analysis).c_str());
+        }
+        if (busy) {
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+                t.animation_analysis_progress->cancel = true;
+            auto &p = *t.animation_analysis_progress;
+            ImGui::TextDisabled("Analysis work: %d / %d", p.done.load(), p.total.load());
+        }
+        if (!t.animation.ready() && !t.animation_analysis && !busy)
+            ImGui::TextWrapped("%s", t.animation.notice.c_str());
+        if (!t.animation_analysis)
+            return;
+        const auto &a = *t.animation_analysis;
+        if (!a.error.empty()) {
+            ImGui::TextWrapped("%s", a.error.c_str());
+            return;
+        }
+        if (!a.source.manual_sequence && t.animation_analysis_root != t.game_root)
+            ImGui::TextColored(accent, "Checkout changed. Analyze again to refresh this snapshot.");
+        if (a.source.manual_sequence)
+            ImGui::TextColored(accent, "Manual IMG comparison: selection order and preview timing; game behavior unverified.");
+        bool saves_video = std::any_of(
+            a.alternatives.begin(), a.alternatives.end(),
+            [&](const AnimationAlternative &p) { return p.video_bits < a.baseline_bits; });
+        if (!saves_video)
+            ImGui::TextColored(accent, "No video savings found by these searches.");
+        ImGui::Text("%d frame records / %d sequence steps / %d actors. Baseline model: %llu bytes.",
+                    (int)a.source.frames.size(), (int)a.source.sequence.size(),
+                    (int)a.source.anchors.size(), (unsigned long long)(a.baseline_bits / 8));
+        if (ImGui::BeginTable("animation-alternatives", 4,
+                              ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+            ImGui::TableSetupColumn("Representation", ImGuiTableColumnFlags_WidthStretch, 3);
+            ImGui::TableSetupColumn("Video bytes");
+            ImGui::TableSetupColumn("Saved bytes");
+            ImGui::TableSetupColumn("Pieces / actor");
+            ImGui::TableHeadersRow();
+            for (size_t i = 0; i < a.alternatives.size(); i++) {
+                const auto &p = a.alternatives[i];
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                if (ImGui::Selectable(p.name.c_str(), t.animation_alternative == (int)i,
+                                      ImGuiSelectableFlags_SpanAllColumns))
+                    t.animation_alternative = (int)i;
+                ImGui::TableNextColumn();
+                ImGui::Text("%llu", (unsigned long long)(p.video_bits / 8));
+                ImGui::TableNextColumn();
+                ImGui::Text("%lld",
+                            (long long)((int64_t)a.baseline_bits - (int64_t)p.video_bits) / 8);
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", p.max_pieces);
+            }
+            ImGui::EndTable();
+        }
+        const auto &p = a.alternatives[t.animation_alternative];
+        ImGui::TextWrapped(
+            "%s. %d reused references; %llu palette bytes; %llu assumed recipe bytes.",
+            p.verified ? "Every frame pixel verified" : "Unverified", p.reused_pieces,
+            (unsigned long long)p.palette_bytes, (unsigned long long)p.recipe_bytes);
+        if (p.search_candidates || p.search_limited || p.horizontal_bands)
+            ImGui::TextDisabled("%d candidate %s checked%s.", p.search_candidates,
+                                p.horizontal_bands ? "band splits" : "groups",
+                                p.search_limited ? " (search limit reached)" : "");
+        if (!p.shared_groups.empty() && ImGui::CollapsingHeader("Shared frame groups")) {
+            for (const auto &group : p.shared_groups) {
+                std::string names;
+                for (auto frame : group) {
+                    if (!names.empty()) names += ", ";
+                    names += a.source.frames[frame].label;
+                }
+                ImGui::TextWrapped("%s", names.c_str());
+            }
+        }
+        if (ImGui::Button(t.animation_analysis_play ? "Pause comparison" : "Play comparison"))
+            t.animation_analysis_play = !t.animation_analysis_play;
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(220);
+        if (ImGui::SliderInt("Sequence step", &t.animation_analysis_step, 0,
+                             (int)a.source.sequence.size() - 1)) {
+            t.animation_analysis_play = false;
+            t.animation_analysis_time =
+                t.animation_analysis_step * a.source.frame_ticks / 60.0 + .000001;
+        }
+        if (t.animation_analysis_play) {
+            t.animation_analysis_time += ImGui::GetIO().DeltaTime;
+            t.animation_analysis_step = (int)a.source.frame_at(t.animation_analysis_time);
+        }
+        int fi = a.source.sequence[t.animation_analysis_step];
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", a.source.frames[fi].label.c_str());
+        ImGui::SameLine();
+        ImGui::Checkbox("Piece outlines", &t.animation_piece_outlines);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Purple: shared artwork. Blue: frame detail.");
+        const auto &f = a.source.frames[fi];
+        double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        for (const auto &frame : a.source.frames) {
+            const auto &image = a.source.artwork.assets->data.images[frame.image];
+            x0 = std::min(x0, -(double)frame.anchor_x);
+            y0 = std::min(y0, -(double)frame.anchor_y);
+            x1 = std::max(x1, (double)image.w - frame.anchor_x);
+            y1 = std::max(y1, (double)image.h - frame.anchor_y);
+        }
+        float width = std::max(100.0f, (ImGui::GetContentRegionAvail().x - 12) / 2);
+        float height = std::max(96.0f, std::min(320.0f, ImGui::GetContentRegionAvail().y - 32));
+        auto draw = [&](bool after) {
+            ImGui::BeginChild(after ? "animation-after" : "animation-before", {width, height},
+                              true);
+            ImGui::TextUnformatted(after ? "Reconstructed animation" : "Original animation");
+            auto origin = ImGui::GetCursorScreenPos();
+            auto available = ImGui::GetContentRegionAvail();
+            auto list = ImGui::GetWindowDrawList();
+            list->AddRectFilled(origin, {origin.x + available.x, origin.y + available.y},
+                                IM_COL32(24, 28, 34, 255));
+            double zoom = std::min(available.x / (x1 - x0 + 16), available.y / (y1 - y0 + 16));
+            Point anchor{origin.x + (available.x - (x1 + x0) * zoom) / 2,
+                         origin.y + (available.y - (y1 + y0) * zoom) / 2};
+            auto &cache = after ? animation_analysis_after : animation_analysis_before;
+            cache.renderer = renderer;
+            auto image = [&](const State &state, int slot, int pal, int x, int y, bool fx,
+                             bool fy) {
+                const auto &img = state.assets->data.images[slot];
+                auto tex = cache.get(state, slot, pal);
+                if (tex)
+                    list->AddImage(
+                        (ImTextureID)(intptr_t)tex, vec({anchor.x + x * zoom, anchor.y + y * zoom}),
+                        vec({anchor.x + (x + img.w) * zoom, anchor.y + (y + img.h) * zoom}),
+                        {(float)fx, (float)fy}, {(float)!fx, (float)!fy});
+            };
+            if (after)
+                for (const auto &r : p.frames[fi])
+                    image(p.artwork, r.image, r.palette, r.x, r.y, r.flip_x, r.flip_y);
+            else
+                image(a.source.artwork, f.image, f.palette, -f.anchor_x, -f.anchor_y, false, false);
+            if (after && t.animation_piece_outlines) {
+                for (const auto &piece : p.frames[fi]) {
+                    const auto &img = p.artwork.assets->data.images[piece.image];
+                    list->AddRect(vec({anchor.x + piece.x * zoom, anchor.y + piece.y * zoom}),
+                        vec({anchor.x + (piece.x + img.w) * zoom,
+                             anchor.y + (piece.y + img.h) * zoom}),
+                        piece.shared_base ? IM_COL32(181, 119, 255, 255) : selection_color);
+                }
+            }
+            list->AddLine(vec({anchor.x - 4, anchor.y}), vec({anchor.x + 4, anchor.y}),
+                          selection_color);
+            list->AddLine(vec({anchor.x, anchor.y - 4}), vec({anchor.x, anchor.y + 4}),
+                          selection_color);
+            ImGui::Dummy(available);
+            ImGui::EndChild();
+        };
+        draw(false);
+        ImGui::SameLine();
+        draw(true);
+        if (ImGui::CollapsingHeader("Estimate details and runtime integration")) {
+            ImGui::TextWrapped("Source: %s", a.source.source.c_str());
+            ImGui::TextWrapped("%s", a.source.notice.c_str());
+            ImGui::TextWrapped(
+                "Video figures use the background packing model, not measured animation ROM. "
+                "Alternatives are separate, not cumulative. The blue cross marks the preserved "
+                "actor anchor. Playback omits random idle pauses. Proposals need a reviewed runtime "
+                "adapter and packed-art / in-game validation before export.");
+            if (p.palette_remapped) ImGui::TextWrapped(
+                "Palette remapping needs review of all consumers and alternate/cycling palettes.");
+        }
+    }
     void start_art_audit(Tab &t) {
         t.audit_progress = std::make_shared<OptimizeProgress>();
         auto doc = t.document;
-        t.audit_job = std::async(std::launch::async,
-            [doc = std::move(doc), root = std::string(t.game_root), progress = t.audit_progress]() {
+        t.audit_job =
+            std::async(std::launch::async, [doc = std::move(doc), root = std::string(t.game_root),
+                                            progress = t.audit_progress]() {
                 return audit_art(doc, root, progress.get());
             });
         t.art_audit.reset();
@@ -2399,9 +3053,62 @@ class App {
                 save(receipt);
             for (int bank = 0; bank < 2; bank++) {
                 const auto &b = receipt.banks[bank];
-                ImGui::Text("Bank %d: %llu used | %llu free | largest gap %llu bytes", bank,
-                            (unsigned long long)b.used, (unsigned long long)b.free,
-                            (unsigned long long)b.largest_gap);
+                ImGui::Text("Bank %d: %llu used | %llu physical gap bytes", bank,
+                            (unsigned long long)b.used, (unsigned long long)b.free);
+                if (receipt.slots_checked) {
+                    ImGui::TextWrapped("%llu unused bytes inside reserved slots | %llu outside "
+                                       "reservations | largest unreserved gap %llu bytes",
+                                       (unsigned long long)b.reserved_free,
+                                       (unsigned long long)b.unreserved_free,
+                                       (unsigned long long)b.largest_unreserved_gap);
+                } else
+                    ImGui::TextDisabled(
+                        "Slot reservations unknown; largest physical gap %llu bytes",
+                        (unsigned long long)b.largest_gap);
+            }
+            if (receipt.slots_checked && !smoke_dir.empty())
+                ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+            if (receipt.slots_checked && ImGui::CollapsingHeader("Declared ROM slots")) {
+                t.rom_slot_filter.Draw("Filter assets", 240);
+                ImGui::SameLine();
+                ImGui::TextDisabled("%zu reservations | slot limits checked (?)", receipt.slots.size());
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::PushTextWrapPos(450);
+                    ImGui::TextUnformatted("Empty reservations are included in the budget. Slot "
+                                           "capacity can overlap another reservation; it does not "
+                                           "guarantee room for an asset to grow.");
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
+                }
+                if (ImGui::BeginTable("rom-slots", 3,
+                                      ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+                                          ImGuiTableFlags_ScrollY,
+                                      ImVec2(0, 190))) {
+                    ImGui::TableSetupColumn("Asset");
+                    ImGui::TableSetupColumn("Packed bytes");
+                    ImGui::TableSetupColumn("Slot capacity");
+                    ImGui::TableSetupScrollFreeze(0, 1);
+                    ImGui::TableHeadersRow();
+                    for (const auto &slot : receipt.slots) {
+                        if (!t.rom_slot_filter.PassFilter(slot.name.c_str()))
+                            continue;
+                        auto payload =
+                            std::find_if(receipt.payloads.begin(), receipt.payloads.end(),
+                                         [&](const RomPayload &p) { return p.name == slot.name; });
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(slot.name.c_str());
+                        ImGui::TableNextColumn();
+                        if (payload == receipt.payloads.end())
+                            ImGui::TextDisabled("Not packed");
+                        else
+                            ImGui::Text("%llu", (unsigned long long)payload->bytes);
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%llu", (unsigned long long)(slot.end - slot.start));
+                    }
+                    ImGui::EndTable();
+                }
             }
         }
         if (t.receipt_before && t.receipt_before->valid) {
@@ -2509,6 +3216,9 @@ class App {
         ImGui::SameLine();
         ImGui::Checkbox("Grid", &grid);
         ImGui::SameLine();
+        if (ImGui::Checkbox("Hand", &t.hand_tool)) cancel_gesture();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Drag anywhere to pan. Otherwise drag empty space to pan, or Shift-drag to box-select.");
+        ImGui::SameLine();
         ImGui::BeginDisabled(t.source);
         if (ImGui::Checkbox("Camera preview", &t.camera_preview)) {
             cancel_gesture();
@@ -2563,6 +3273,7 @@ class App {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", t.animation.notice.c_str());
         }
+        ImGui::TextDisabled("Drag empty space to pan | Shift-drag to select | Wheel to zoom");
         float avail = ImGui::GetContentRegionAvail().y;
         float tray_h = tray ? std::min(164.0f, avail * .28f) : 0;
         float body_h = std::max(120.0f, avail - tray_h - 43);
@@ -2704,7 +3415,7 @@ class App {
                 close_pending = -1;
                 return;
             }
-            if (dragging || marquee)
+            if (dragging || marquee || panning)
                 cancel_gesture();
             bool dirty = false;
             if (quit_pending) {
@@ -2802,15 +3513,49 @@ class App {
     uint64_t session_stamp = 0;
     void frame() {
         for (auto &t : tabs) {
-            bool was_building = t->game_build.running();
-            if (t->audit_job.valid() && t->audit_job.wait_for(std::chrono::seconds(0)) ==
-                                          std::future_status::ready) {
-                try { t->art_audit = std::make_unique<ArtAudit>(t->audit_job.get()); }
+            if (t->animation_analysis_job.valid() &&
+                t->animation_analysis_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                try { t->animation_analysis = std::make_unique<AnimationAnalysis>(t->animation_analysis_job.get()); }
                 catch (const std::exception &e) { error = e.what(); }
+            }
+            if (t->visibility_job.valid() &&
+                t->visibility_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                try {
+                    t->visibility_plan = std::make_unique<VisibilityPlan>(t->visibility_job.get());
+                    auto bank = std::make_shared<AssetBank>(*t->visibility_plan->before.assets);
+                    for (size_t i = 0; i < bank->data.images.size(); i++)
+                        if (i < t->visibility_plan->images.size())
+                            bank->data.images[i].pix = t->visibility_plan->images[i].pixels;
+                    bank->data.palettes.clear();
+                    const uint32_t colors[] = {0, 0, 0x99f5c837, 0x99af64f5, 0x668898a8};
+                    for (int filter = 0; filter < 4; filter++) {
+                        BddCorePalette pal{};
+                        pal.count = 5;
+                        for (int i = 0; i < 5; i++)
+                            pal.argb[i] = !filter || i == filter + 1 ? colors[i] : 0;
+                        bank->data.palettes.push_back(pal);
+                    }
+                    t->visibility_masks.assets = bank;
+                    t->visibility_fit = true;
+                    t->visibility_camera = {(double)t->visibility_plan->options.min_x,
+                                            (double)t->visibility_plan->options.min_y};
+                } catch (const std::exception &e) {
+                    error = e.what();
+                }
+            }
+            bool was_building = t->game_build.running();
+            if (t->audit_job.valid() &&
+                t->audit_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                try {
+                    t->art_audit = std::make_unique<ArtAudit>(t->audit_job.get());
+                } catch (const std::exception &e) {
+                    error = e.what();
+                }
             }
             t->game_build.poll();
             if (was_building && !t->game_build.running() && t->game_build.exit_code() == 0 &&
-                t->game_export && !t->receipt_job.valid()) start_receipt(*t, t->game_export->root, true);
+                t->game_export && !t->receipt_job.valid())
+                start_receipt(*t, t->game_export->root, true);
             if (t->receipt_job.valid() && t->receipt_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 try { t->receipt_after = std::make_unique<RomReceipt>(t->receipt_job.get()); }
                 catch (const std::exception &e) { error = e.what(); }
@@ -2924,6 +3669,8 @@ struct InteractionSmoke {
             initial_x = t->document.object(id)->object.depth;
         }
         if (frame == 15) {
+            // Integer scale makes the movement assertion independent of SDL mouse quantization.
+            t->view.zoom = 1;
             auto r = t->document.scene().front().rect;
             mouse = t->view.to_screen({r.x + 10, r.y + 10}, {app.canvas_rect.x, app.canvas_rect.y});
             io.AddMousePosEvent((float)mouse.x, (float)mouse.y);
@@ -2976,6 +3723,92 @@ struct InteractionSmoke {
                 stderr,
                 "bddtool canvas drag, keyboard undo/redo and Escape cancellation passed.\n");
         return true;
+    }
+};
+
+struct NavigationSmoke {
+    uint64_t revision = 0;
+    ObjectId selected = 0;
+    Point before, mouse;
+    void input(App &app, int frame) {
+        if (!app.tab()) return;
+        auto &t = *app.tab(); auto &io = ImGui::GetIO();
+        io.ConfigInputTrickleEventQueue = false;
+        io.AddFocusEvent(true);
+        if (frame == 1) {
+            app.page = 0; t.fit = false; t.camera_preview = false; t.show_animation = false;
+            t.view.zoom = 1; t.view.pan = {-10000, -10000}; before = t.view.pan;
+            selected = t.document.state().objects.front().id; t.selected = {selected};
+            revision = t.document.state().revision;
+            mouse = {app.canvas_rect.x + 80, app.canvas_rect.y + 80};
+            io.AddMousePosEvent((float)mouse.x, (float)mouse.y);
+        }
+        if (frame == 2) io.AddMouseButtonEvent(0, true);
+        if (frame == 3) io.AddMousePosEvent((float)mouse.x + 40, (float)mouse.y + 25);
+        if (frame == 4) io.AddMouseButtonEvent(0, false);
+        if (frame == 6 || frame == 9) {
+            before = t.view.pan;
+            auto bar = app.canvas_scrollbars[frame == 6 ? 1 : 0];
+            io.AddMousePosEvent((float)(bar.x + bar.w * .75), (float)(bar.y + bar.h * .75));
+        }
+        if (frame == 7 || frame == 10) io.AddMouseButtonEvent(0, true);
+        if (frame == 8 || frame == 11) io.AddMouseButtonEvent(0, false);
+        if (frame == 12) {
+            auto item = t.document.scene().front();
+            t.hand_tool = true; t.view.pan = {item.rect.x - 30, item.rect.y - 30}; before = t.view.pan;
+            mouse = {app.canvas_rect.x + 40, app.canvas_rect.y + 40};
+            io.AddMousePosEvent((float)mouse.x, (float)mouse.y);
+        }
+        if (frame == 13) io.AddMouseButtonEvent(0, true);
+        if (frame == 14) io.AddMousePosEvent((float)mouse.x + 25, (float)mouse.y + 10);
+        if (frame == 15) io.AddMouseButtonEvent(0, false);
+        if (frame == 16) {
+            t.hand_tool = false; t.view.pan = {-10000, -10000}; before = t.view.pan;
+            mouse = {app.canvas_rect.x + 50, app.canvas_rect.y + 50};
+            io.AddMousePosEvent((float)mouse.x, (float)mouse.y);
+        }
+        if (frame == 17) { io.AddKeyEvent(ImGuiMod_Shift, true); io.AddMouseButtonEvent(0, true); }
+        if (frame == 18) io.AddMousePosEvent((float)mouse.x + 30, (float)mouse.y + 20);
+        if (frame == 19) { io.AddMouseButtonEvent(0, false); io.AddKeyEvent(ImGuiMod_Shift, false); }
+        if (frame == 20 || frame == 24) {
+            before = t.view.pan; io.AddMousePosEvent((float)mouse.x, (float)mouse.y);
+            if (frame == 24) io.AddKeyEvent(ImGuiKey_Space, true);
+            io.AddMouseButtonEvent(frame == 20 ? 2 : 0, true);
+        }
+        if (frame == 21 || frame == 25) io.AddMousePosEvent((float)mouse.x + 20, (float)mouse.y + 15);
+        if (frame == 22 || frame == 26) {
+            io.AddMouseButtonEvent(frame == 22 ? 2 : 0, false);
+            if (frame == 26) io.AddKeyEvent(ImGuiKey_Space, false);
+        }
+        if (frame == 27) {
+            auto bar = app.canvas_scrollbars[0];
+            mouse = {bar.x + bar.w * .5, bar.y + bar.h * .5};
+            io.AddMousePosEvent((float)mouse.x, (float)mouse.y);
+            io.AddMouseButtonEvent(0, true);
+        }
+        if (frame == 28) io.AddMousePosEvent((float)mouse.x - 20, (float)mouse.y);
+        if (frame == 29) io.AddMouseButtonEvent(0, false);
+        if (frame == 30) t.fit = true;
+    }
+    bool check(App &app, int frame) {
+        if (frame < 1 || !app.tab()) return true;
+        auto &t = *app.tab();
+        bool ok = t.document.state().revision == revision && !t.document.transaction_active();
+        auto delta = [&](double x, double y) {
+            return std::abs(t.view.pan.x - before.x + x) < .001 &&
+                   std::abs(t.view.pan.y - before.y + y) < .001;
+        };
+        if (frame == 4) ok &= delta(40, 25) && t.selected == std::vector<ObjectId>{selected};
+        if (frame == 8) ok &= t.view.pan.y > before.y;
+        if (frame == 11) ok &= t.view.pan.x > before.x;
+        if (frame == 15) ok &= delta(25, 10);
+        if (frame == 18) ok &= app.marquee && !app.panning && delta(0, 0);
+        if (frame == 19) ok &= !app.marquee && delta(0, 0);
+        if (frame == 22 || frame == 26) ok &= delta(20, 15) && !app.panning;
+        if (frame == 27) before = t.view.pan;
+        if (frame == 29) ok &= t.view.pan.x < before.x;
+        if (!ok) std::fprintf(stderr, "Canvas navigation smoke failed at frame %d: pan %.2f,%.2f before %.2f,%.2f revision %llu selected %zu.\n", frame, t.view.pan.x, t.view.pan.y, before.x, before.y, (unsigned long long)t.document.state().revision, t.selected.size());
+        return ok;
     }
 };
 
@@ -3131,7 +3964,7 @@ int run(int argc, char **argv) {
     if (smoke) {
         app.smoke_dir = argv[2];
         fs::create_directories(fs::u8path(app.smoke_dir));
-        if (argc >= 4)
+        if (argc >= 4 && std::string(argv[3]) != "--demo")
             app.open(argv[3]);
         else
             app.add(Document::demo());
@@ -3141,12 +3974,18 @@ int run(int argc, char **argv) {
         app.open(argv[1]);
     int frames = 0, rc = 0;
     InteractionSmoke interactions;
+    NavigationSmoke navigation_smoke;
+    bool test_navigation = smoke && argc >= 5 && std::string(argv[4]) == "--navigation";
     AnimationSmoke animation_smoke;
     bool test_animation = smoke && argc >= 5 && std::string(argv[4]) == "--animations";
     bool test_review = smoke && argc >= 5 && std::string(argv[4]) == "--optimize-review";
     bool test_shared = smoke && argc >= 5 && std::string(argv[4]) == "--shared";
     bool test_palette_reuse = smoke && argc >= 5 && std::string(argv[4]) == "--palette-reuse";
     bool test_art_audit = smoke && argc >= 5 && std::string(argv[4]) == "--art-audit";
+    bool test_animation_library = smoke && argc >= 5 && std::string(argv[4]) == "--animation-library";
+    bool test_animation_analysis = test_animation_library ||
+        (smoke && argc >= 5 && std::string(argv[4]) == "--animation-analysis");
+    bool test_visibility = smoke && argc >= 5 && std::string(argv[4]) == "--visibility";
     bool test_optimize =
         test_review || test_shared || test_palette_reuse || (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
     bool test_pattern_suggest = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-suggest";
@@ -3183,6 +4022,27 @@ int run(int argc, char **argv) {
         app.tab()->optimize_mode = 4;
         app.page = 3;
     }
+    if (test_animation_analysis && app.tab()) {
+        auto &t = *app.tab();
+        if (test_animation_library) {
+            auto path = (fs::u8path(t.game_root) / "data" / "MKBGANI.IMG").u8string();
+            t.animation_library = std::make_unique<AnimationLibrary>(inspect_animation_library(path));
+            t.animation_library_selected.assign(t.animation_library->images.size(), 0);
+            for (size_t i = 0; i < t.animation_library->images.size(); i++)
+                if (t.animation_library->images[i].label.rfind("TREEANI", 0) == 0)
+                    t.animation_library_selected[i] = 1;
+            t.animation_library_ticks = 7;
+            std::snprintf(t.animation_library_filter, sizeof t.animation_library_filter, "TREEANI");
+            app.start_img_analysis(t);
+        } else app.start_animation_analysis(t);
+        t.optimize_mode = 6; app.page = 3;
+    }
+    if (test_visibility && app.tab()) {
+        auto &t = *app.tab();
+        t.visibility_options = {0, 8, 0, 4};
+        app.start_visibility(t);
+        t.optimize_mode = 5; app.page = 3;
+    }
     auto optimize_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(test_pattern_discover ? 120 : 40);
     while (app.running) {
@@ -3216,15 +4076,33 @@ int run(int argc, char **argv) {
             if (frames == 15 || frames == 16)
                 io.AddKeyEvent(ImGuiKey_Escape, frames == 15);
         }
+        if (test_animation_library) {
+            if (frames == 8 || frames == 14) {
+                auto point = frames == 8 ? app.animation_library_edit_point : app.animation_library_close_point;
+                io.AddMousePosEvent((float)point.x, (float)point.y);
+            }
+            if (frames == 9 || frames == 10 || frames == 15 || frames == 16)
+                io.AddMouseButtonEvent(0, frames == 9 || frames == 15);
+        }
+        if (test_navigation) navigation_smoke.input(app, frames);
         if (smoke && argc < 4)
             interactions.input(app, frames);
         if (test_animation)
             animation_smoke.input(app, frames);
         ImGui::NewFrame();
         app.frame();
+        if (test_navigation && !navigation_smoke.check(app, frames)) {
+            rc = 1; app.running = false;
+        }
         if (smoke && argc < 4 && !interactions.check(app, frames)) {
             rc = 1;
             app.running = false;
+        }
+        if (test_animation_library && app.tab() &&
+            ((frames == 11 && !app.tab()->animation_library_open) ||
+             (frames == 17 && app.tab()->animation_library_open))) {
+            std::fprintf(stderr, "IMG picker open/close smoke failed at frame %d.\n", frames);
+            rc = 1; app.running = false;
         }
         if (test_animation && !animation_smoke.check(app, frames)) {
             std::fprintf(stderr, "Animation UI smoke failed at frame %d.\n", frames);
@@ -3245,6 +4123,8 @@ int run(int argc, char **argv) {
                                : frames == 7   ? "compact.png"
                                : frames == 11  ? "assets.png"
                                : frames == 23  ? "animation.png"
+                               : test_animation_analysis ? "animation-analysis.png"
+                               : test_visibility ? "visibility.png"
                                : test_art_audit ? "art-audit.png"
                                : test_optimize ? "optimize.png"
                                : test_pattern  ? "pattern.png"
@@ -3257,6 +4137,45 @@ int run(int argc, char **argv) {
         }
         SDL_RenderPresent(app.renderer);
         if (smoke) {
+            if (test_animation_analysis && app.tab()) {
+                auto &t = *app.tab();
+                if (t.animation_analysis_job.valid()) {
+                    if (std::chrono::steady_clock::now() > optimize_deadline) { rc = 1; app.running = false; }
+                    SDL_Delay(10); continue;
+                }
+                if (!t.animation_analysis || !t.animation_analysis->error.empty()) {
+                    std::fprintf(stderr, "Animation analysis failed: %s\n", t.animation_analysis ? t.animation_analysis->error.c_str() : "missing result");
+                    rc = 1; app.running = false;
+                }
+                if (test_animation_library && t.animation_analysis && t.animation_analysis->error.empty() &&
+                    (!t.animation_analysis->source.manual_sequence ||
+                     t.animation_analysis->source.frame_ticks != 7 ||
+                     t.animation_analysis->source.sequence.size() != 7 ||
+                     t.animation.manual_sequence)) {
+                    std::fprintf(stderr, "Manual IMG analysis changed the runtime overlay or preview contract.\n");
+                    rc = 1; app.running = false;
+                }
+                if (frames == 8) t.animation_alternative = 1;
+                if (frames == 18) { t.animation_alternative = 2; t.animation_analysis_play = false; t.animation_analysis_step = 5; }
+                if (frames == 24) t.animation_alternative = 3;
+                if (frames == 28) { t.animation_alternative = 4; t.animation_piece_outlines = true; }
+            }
+            if (test_visibility && app.tab()) {
+                auto &t = *app.tab();
+                if (t.visibility_job.valid()) {
+                    if (std::chrono::steady_clock::now() > optimize_deadline) { rc = 1; app.running = false; }
+                    SDL_Delay(10); continue;
+                }
+                if (!t.visibility_plan || !t.visibility_plan->analyzed) {
+                    std::fprintf(stderr, "Visibility UI failed: %s\n", t.visibility_plan ? t.visibility_plan->error.c_str() : "no result");
+                    rc = 1; app.running = false;
+                }
+                if (frames == 8) t.visibility_choice = 0;
+                if (frames == 18) {
+                    t.compare_visibility = true; t.compare_pattern = false; t.compare_open = true;
+                    t.compare_camera = {4, 2};
+                }
+            }
             if (test_art_audit && app.tab()) {
                 auto &t = *app.tab();
                 if (t.audit_job.valid()) {
@@ -3307,7 +4226,12 @@ int run(int argc, char **argv) {
                 if (frames == 5) t.optimize_mode = 2;
                 if (frames == 8) { t.optimize_mode = 0; t.compare_open = true; t.compare_camera = t.camera; }
                 if (frames == 12) { t.compare_camera.x += 200; t.compare_split = .7f; }
-                if (frames == 18) { t.compare_open = false; t.optimize_mode = 3; app.start_receipt(t, t.game_root); }
+                if (frames == 18) {
+                    t.compare_open = false; t.optimize_mode = 3;
+                    std::snprintf(t.rom_slot_filter.InputBuf, sizeof t.rom_slot_filter.InputBuf, "MK3CV");
+                    t.rom_slot_filter.Build();
+                    app.start_receipt(t, t.game_root);
+                }
                 if (frames == 24) {
                     if (!t.receipt_after || !t.receipt_after->valid) {
                         std::fprintf(stderr, "Receipt UI failed: %s\n", t.receipt_after ? t.receipt_after->error.c_str() : "missing result"); rc = 1;
@@ -3316,12 +4240,12 @@ int run(int argc, char **argv) {
             }
             if (frames == 4) {
                 SDL_SetWindowSize(app.window, 1000, 720);
-                if (app.tab())
+                if (app.tab() && !test_navigation)
                     app.tab()->fit = true;
             }
-            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit)
+            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation)
                 app.page = 1;
-            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit) {
+            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation) {
                 app.page = 2;
                 if (argc >= 5 && std::string(argv[4]) == "--prepare" && app.tab())
                     app.prepare_game(*app.tab());
@@ -3332,10 +4256,14 @@ int run(int argc, char **argv) {
     }
     app.textures.clear();
     app.animation_textures.clear();
+    app.animation_analysis_before.clear();
+    app.animation_analysis_after.clear();
     app.optimize_before_textures.clear();
     app.optimize_after_textures.clear();
     app.compare_before_textures.clear();
     app.compare_after_textures.clear();
+    app.visibility_textures.clear();
+    app.visibility_before_textures.clear();
     editor_project_storage_shutdown();
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();

@@ -82,39 +82,68 @@ uint32_t number(std::string s) {
     require(used == s.size() && value <= 0xffffffffULL, "Unsupported animation number: " + s);
     return (uint32_t)value;
 }
-void read_art(const fs::path &path, const std::vector<std::string> &names, AnimationPreview &out) {
+struct ImgDirectory {
+    std::unique_ptr<FILE, decltype(&fclose)> file{nullptr, fclose};
+    long size = 0;
+    std::vector<std::pair<std::string, ImgImageDisk>> images;
+    std::vector<ImgPaletteDisk> palettes;
+    explicit ImgDirectory(const fs::path &path) {
 #ifdef _WIN32
-    FILE *raw = _wfopen(path.c_str(), L"rb");
+        file.reset(_wfopen(path.c_str(), L"rb"));
 #else
-    FILE *raw = fopen(path.c_str(), "rb");
+        file.reset(fopen(path.c_str(), "rb"));
 #endif
-    std::unique_ptr<FILE, decltype(&fclose)> file(raw, fclose);
-    require(raw != nullptr, "Cannot find MKBGANI.IMG in the selected checkout's data folder.");
-    auto size = img_file_size_for_import(raw);
-    ImgLibHeaderDisk header{};
-    require(size >= (long)sizeof header && fread(&header, sizeof header, 1, raw) == 1 &&
-                header.temp == 0xabcd && header.version >= 0x500 &&
-                header.palcnt >= IMG_NUM_DEFAULT_PALS,
-            "Invalid MKBGANI.IMG header.");
-    auto palettes = header.palcnt - IMG_NUM_DEFAULT_PALS;
-    uint64_t end = (uint64_t)header.oset + (uint64_t)header.imgcnt * sizeof(ImgImageDisk) +
-                   (uint64_t)palettes * sizeof(ImgPaletteDisk);
-    require(end <= (uint64_t)size, "Truncated MKBGANI.IMG directory.");
-    std::map<std::string, ImgImageDisk> images;
-    require(fseek(raw, header.oset, SEEK_SET) == 0, "Cannot read IMG directory.");
-    for (unsigned i = 0; i < header.imgcnt; i++) {
-        ImgImageDisk record{};
-        require(fread(&record, sizeof record, 1, raw) == 1, "Truncated IMG image record.");
-        char label[64];
-        img_raw_name_to_upper(record.name, sizeof record.name, "", label, sizeof label);
-        require(images.emplace(label, record).second ||
-                    std::find(names.begin(), names.end(), label) == names.end(),
-                "Duplicate animation image: " + std::string(label));
+        require(bool(file), "Cannot open IMG library: " + path.u8string());
+        auto raw = file.get();
+        size = img_file_size_for_import(raw);
+        ImgLibHeaderDisk header{};
+        require(size >= (long)sizeof header && fread(&header, sizeof header, 1, raw) == 1 &&
+                    header.temp == 0xabcd && header.version >= 0x500 &&
+                    header.palcnt >= IMG_NUM_DEFAULT_PALS && header.oset >= sizeof header,
+                "Invalid IMG library header.");
+        auto count = header.palcnt - IMG_NUM_DEFAULT_PALS;
+        uint64_t end = (uint64_t)header.oset + (uint64_t)header.imgcnt * sizeof(ImgImageDisk) +
+                       (uint64_t)count * sizeof(ImgPaletteDisk);
+        require(end <= (uint64_t)size, "Truncated IMG directory.");
+        require(fseek(raw, header.oset, SEEK_SET) == 0, "Cannot read IMG directory.");
+        for (unsigned i = 0; i < header.imgcnt; i++) {
+            ImgImageDisk record{};
+            require(fread(&record, sizeof record, 1, raw) == 1, "Truncated IMG image record.");
+            char label[64];
+            img_raw_name_to_upper(record.name, sizeof record.name, "", label, sizeof label);
+            images.emplace_back(label, record);
+        }
+        palettes.resize(count);
+        require(!count ||
+                    fread(palettes.data(), sizeof(ImgPaletteDisk), count, raw) == (size_t)count,
+                "Truncated IMG palette directory.");
     }
-    std::vector<ImgPaletteDisk> palette_records(palettes);
-    require(palettes == 0 || fread(palette_records.data(), sizeof(ImgPaletteDisk), palettes, raw) ==
-                                 (size_t)palettes,
-            "Truncated IMG palette directory.");
+    std::string problem(const ImgImageDisk &r) const {
+        int pi = (int)r.palnum - IMG_NUM_DEFAULT_PALS;
+        if (!r.w || r.w > 1024 || !r.h || r.h > 1024)
+            return "Unsupported dimensions (maximum 1024 per axis).";
+        if (pi < 0 || pi >= (int)palettes.size())
+            return "External/default palette is not available in this IMG.";
+        const auto &p = palettes[pi];
+        if (!p.numc || p.numc > 256 || (uint64_t)p.oset + p.numc * 2 > (uint64_t)size)
+            return "Invalid palette data.";
+        if (r.oset >= (uint64_t)size)
+            return "Invalid pixel offset.";
+        return {};
+    }
+};
+void read_art(const fs::path &path, const std::vector<std::string> &names, AnimationPreview &out) {
+    ImgDirectory directory(path);
+    auto raw = directory.file.get();
+    auto size = directory.size;
+    const auto &palette_records = directory.palettes;
+    int palettes = (int)palette_records.size();
+    std::map<std::string, ImgImageDisk> images;
+    for (const auto &entry : directory.images)
+        require(images.emplace(entry.first, entry.second).second ||
+                    std::find(names.begin(), names.end(), entry.first) == names.end(),
+                "Duplicate animation image: " + entry.first);
+    size_t total_pixels = 0;
     auto bank = std::make_shared<AssetBank>();
     std::map<int, int> palette_slots;
     std::map<std::string, int> frame_slots;
@@ -125,8 +154,10 @@ void read_art(const fs::path &path, const std::vector<std::string> &names, Anima
             continue;
         }
         auto it = images.find(name);
-        require(it != images.end(), "MKBGANI.IMG is missing animation frame " + name);
+        require(it != images.end(), "IMG library is missing animation frame " + name);
         const auto &record = it->second;
+        auto problem = directory.problem(record);
+        require(problem.empty(), name + ": " + problem);
         int palette = (int)record.palnum - IMG_NUM_DEFAULT_PALS;
         require(palette >= 0 && palette < palettes, "Missing source palette for " + name);
         if (!palette_slots.count(palette)) {
@@ -152,6 +183,8 @@ void read_art(const fs::path &path, const std::vector<std::string> &names, Anima
         require(image.w <= 4096 && image.h > 0 && image.h <= 4096 &&
                     (uint64_t)image.w * image.h <= 2097152,
                 "Invalid animation dimensions.");
+        total_pixels += (size_t)image.w * image.h;
+        require(total_pixels <= 2097152, "Selected frames exceed the two-million-pixel limit.");
         image.pix.resize((size_t)image.w * image.h);
         require(img_decode_pixels(raw, size, &record, image.w, image.h, image.pix.data(), nullptr,
                                   nullptr) != 0,
@@ -170,6 +203,57 @@ void read_art(const fs::path &path, const std::vector<std::string> &names, Anima
 }
 } // namespace
 
+AnimationLibrary inspect_animation_library(const std::string &path) {
+    AnimationLibrary out;
+    out.path = path;
+    try {
+        ImgDirectory directory(fs::u8path(path));
+        std::map<std::string, int> counts;
+        for (const auto &entry : directory.images)
+            counts[entry.first]++;
+        for (const auto &entry : directory.images) {
+            const auto &r = entry.second;
+            auto problem = directory.problem(r);
+            if (entry.first.empty())
+                problem = "Unnamed image.";
+            else if (counts[entry.first] != 1)
+                problem = "Duplicate image label.";
+            out.images.push_back({entry.first, problem, r.w, r.h,
+                                  (int)r.palnum - IMG_NUM_DEFAULT_PALS, img_s16(r.anix),
+                                  img_s16(r.aniy)});
+        }
+    } catch (const std::exception &e) {
+        out.error = e.what();
+        out.images.clear();
+    }
+    return out;
+}
+AnimationPreview load_animation_selection(const std::string &path,
+                                          const std::vector<std::string> &labels,
+                                          int preview_ticks) {
+    AnimationPreview out;
+    try {
+        require(!labels.empty() && labels.size() <= 128, "Select between 1 and 128 frame entries.");
+        require(preview_ticks >= 1 && preview_ticks <= 60, "Preview duration must be 1..60 ticks.");
+        std::vector<std::string> names;
+        for (const auto &label : labels) {
+            require(!label.empty(), "An image label is empty.");
+            names.push_back(upper(label));
+        }
+        read_art(fs::u8path(path), names, out);
+        out.anchors.push_back({0, 0});
+        out.frame_ticks = preview_ticks;
+        out.manual_sequence = true;
+        out.source = path;
+        out.notice = "Manual IMG comparison: selection order and preview timing only. "
+                     "IMG frame anchors are preserved; runtime sequence, actors, palette changes "
+                     "and driver behavior are not verified.";
+    } catch (const std::exception &e) {
+        out = {};
+        out.notice = e.what();
+    }
+    return out;
+}
 size_t AnimationPreview::frame_at(double seconds) const {
     if (sequence.empty() || !std::isfinite(seconds) || seconds < 0)
         return 0;

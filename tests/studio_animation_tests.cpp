@@ -1,7 +1,9 @@
 #include "Core/studio_animation.h"
+#include "Core/studio_animation_optimizer.h"
 #include "Core/studio_game_export.h"
 #include "Core/img_format.h"
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -126,6 +128,54 @@ int main(int argc, char **argv) {
         require(read(root / "src" / "BGND.ASM") == source &&
                     read(root / "data" / "MKBGANI.IMG") == img,
                 "Preview loading modified source files");
+        auto library_path = (root / "data" / "MKBGANI.IMG").u8string();
+        auto library = inspect_animation_library(library_path);
+        require(library.error.empty() && library.images.size() == 2 &&
+                    library.images[0].label == "TREEANI1" && library.images[0].anchor_x == -2 &&
+                    library.images[1].anchor_y == -5 && library.images[1].problem.empty(),
+                "IMG catalog lost labels, palette ownership or signed anchors.");
+        auto manual =
+            load_animation_selection(library_path, {"treeani2", "TREEANI1", "TREEANI2"}, 7);
+        require(manual.ready() && manual.manual_sequence && manual.frame_ticks == 7 &&
+                    manual.anchors.size() == 1 && manual.sequence == std::vector<int>({0, 1, 0}) &&
+                    manual.frames[0].label == "TREEANI2" && manual.rect(0, 0, {}).x == -3 &&
+                    manual.rect(0, 0, {}).y == 5 && !preview.manual_sequence,
+                "Manual IMG order/timing/anchors or runtime isolation failed.");
+        auto analysis = analyze_animation(manual);
+        require(analysis.error.empty() && analysis.alternatives.size() == 5 &&
+                    animation_analysis_report(analysis).find("Manual IMG comparison") !=
+                        std::string::npos,
+                "Manual source provenance was lost during optimization.");
+        require(!load_animation_selection(library_path, {}, 5).ready() &&
+                    !load_animation_selection(library_path, {"MISSING"}, 5).ready() &&
+                    !load_animation_selection(library_path, {"TREEANI1"}, 0).ready() &&
+                    !load_animation_selection(library_path,
+                                              std::vector<std::string>(129, "TREEANI1"), 5)
+                         .ready(),
+                "Invalid selection or preview timing accepted.");
+        auto duplicate = img;
+        auto second_offset = sizeof(ImgLibHeaderDisk) + sizeof(ImgImageDisk);
+        duplicate.replace(second_offset, 16, img.substr(sizeof(ImgLibHeaderDisk), 16));
+        write(root / "data" / "MKBGANI.IMG", duplicate);
+        auto duplicate_catalog = inspect_animation_library(library_path);
+        require(duplicate_catalog.error.empty() && !duplicate_catalog.images[0].problem.empty() &&
+                    !duplicate_catalog.images[1].problem.empty() &&
+                    !load_animation_selection(library_path, {"TREEANI1"}).ready(),
+                "Ambiguous IMG selection was accepted.");
+        auto invalid = img;
+        ImgImageDisk invalid_record{};
+        std::memcpy(&invalid_record, invalid.data() + sizeof(ImgLibHeaderDisk),
+                    sizeof invalid_record);
+        invalid_record.palnum = 0;
+        std::memcpy(&invalid[sizeof(ImgLibHeaderDisk)], &invalid_record, sizeof invalid_record);
+        write(root / "data" / "MKBGANI.IMG", invalid);
+        require(!inspect_animation_library(library_path).images[0].problem.empty() &&
+                    !load_animation_selection(library_path, {"TREEANI1"}).ready(),
+                "Unavailable default/external palette was accepted.");
+        write(root / "data" / "MKBGANI.IMG", img);
+        require(read(root / "src" / "BGND.ASM") == source && doc.state().assets == bank &&
+                    doc.state().revision == revision,
+                "IMG comparison modified the stage or game source.");
         // A later tab/load must not invalidate an already-owned preview.
         write(root / "data" / "MKBGANI.IMG", img.substr(0, 10));
         auto missing = load_animation_preview(doc, root.u8string());
@@ -145,6 +195,29 @@ int main(int argc, char **argv) {
             require(actual.frames.size() == 7 && actual.sequence.size() == 20 &&
                         actual.anchors.size() == 3,
                     "Unexpected local Forest animation shape");
+            auto catalog = inspect_animation_library(
+                (fs::u8path(argv[3]) / "data" / "MKBGANI.IMG").u8string());
+            require(catalog.error.empty() && catalog.images.size() > 7, catalog.error);
+            std::vector<std::string> selected_labels;
+            for (const auto &entry : catalog.images)
+                if (entry.label.rfind("TREEANI", 0) == 0)
+                    selected_labels.push_back(entry.label);
+            auto selected_preview = load_animation_selection(catalog.path, selected_labels, 7);
+            require(selected_preview.ready() && selected_preview.frames.size() == 7 &&
+                        selected_preview.sequence.size() == 7 && selected_preview.manual_sequence,
+                    "Local IMG selection failed.");
+            if (argc >= 5) {
+                std::vector<std::string> other_labels;
+                for (const auto &entry : catalog.images)
+                    if (entry.label.rfind(argv[4], 0) == 0 && entry.problem.empty())
+                        other_labels.push_back(entry.label);
+                auto other = load_animation_selection(catalog.path, other_labels, 5);
+                require(other.ready(), other.notice);
+                auto other_analysis = analyze_animation(other);
+                require(other_analysis.error.empty() && other_analysis.alternatives.size() == 5,
+                        other_analysis.error);
+                std::cout << animation_analysis_report(other_analysis);
+            }
             std::cout << "Local Forest: 7 images, 20 sequence steps, 3 faces loaded.\n";
         }
         std::cout << "Animation decode, timing, anchors, actor slots, isolation and "

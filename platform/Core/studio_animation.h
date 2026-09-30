@@ -17,6 +17,7 @@ struct AnimationPreview {
     int frame_ticks = 5;
     double scroll = 1;
     std::string source, notice;
+    bool manual_sequence = false; // IMG selection order; no runtime driver is inferred.
     bool ready() const { return !sequence.empty() && !anchors.empty(); }
     size_t frame_at(double seconds) const;
     Rect rect(size_t actor, size_t step, Point camera) const;
@@ -25,4 +26,18 @@ struct AnimationPreview {
 // Recognizes the Forest tree animator in the selected checkout. Unsupported sources
 // produce an explanation and no speculative animation. All reads are local and read-only.
 AnimationPreview load_animation_preview(const Document &document, const std::string &game_root);
+struct AnimationLibraryImage {
+    std::string label, problem;
+    int width = 0, height = 0, palette = 0, anchor_x = 0, anchor_y = 0;
+};
+struct AnimationLibrary {
+    std::string path, error;
+    std::vector<AnimationLibraryImage> images;
+};
+// Directory inspection does not decode pixels. Selected frames are reread and validated
+// when loaded; they never enter the stage document or its runtime animation overlay.
+AnimationLibrary inspect_animation_library(const std::string &path);
+AnimationPreview load_animation_selection(const std::string &path,
+                                          const std::vector<std::string> &labels,
+                                          int preview_ticks = 5);
 } // namespace studio

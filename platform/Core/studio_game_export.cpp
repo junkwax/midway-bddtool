@@ -1,4 +1,6 @@
 #include "Core/studio_game_export.h"
+#include "Core/studio_rom_receipt.h"
+#include "Core/studio_cave_export.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -420,6 +422,12 @@ bool prepare_game_export(const Document &document, const std::string &game_root,
         const auto name = document.state().name;
         check(std::regex_match(name, std::regex("[A-Za-z_][A-Za-z0-9_]{0,7}")),
               "Game export requires a stage name of up to eight letters, digits or underscores.");
+        if (upper(name) == "MK3CAVE" && fs::exists(root / "tools/make_mk3cave.py")) {
+            check(stage_label.empty() || upper(stage_label) == "MK3CAVE_MOD", "The cave stage label is MK3CAVE_MOD.");
+            if (!prepare_cave_export(document, root.u8string(), folder.u8string(), result, error)) return false;
+            result.requested_label = upper(stage_label);
+            return true;
+        }
         const std::string stem = "data/" + name;
         auto asm_path = target(root, "src/BGND.ASM");
         check(fs::is_regular_file(asm_path) && fs::is_regular_file(target(root, stem + ".BDB")) &&
@@ -438,20 +446,46 @@ bool prepare_game_export(const Document &document, const std::string &game_root,
                   "New module " + std::string(plane.source.name) +
                       " needs a runtime binding and LOAD2 integration before export.");
         bool lod = false;
+        std::vector<GameExportFile> dependencies;
+        std::set<std::string> packs;
+        auto remember = [&](const std::string &relative) {
+            auto path = target(root, relative);
+            GameExportFile dependency;
+            dependency.relative = relative;
+            dependency.existed = fs::exists(path);
+            if (dependency.existed)
+                dependency.before = read(path);
+            dependencies.push_back(std::move(dependency));
+        };
         for (const auto &entry : fs::directory_iterator(root / "data"))
             if (upper(entry.path().extension().u8string()) == ".LOD") {
-                std::istringstream lines(read(entry.path()));
+                auto lod_bytes = read(entry.path());
+                std::istringstream lines(lod_bytes);
                 std::string line;
+                bool referenced = false;
                 while (std::getline(lines, line)) {
                     std::istringstream fields(code(line));
                     std::string op, value;
                     fields >> op >> value;
                     if (upper(op) == "BBB>" && upper(value) == upper(name))
-                        lod = true;
+                        referenced = lod = true;
+                }
+                if (referenced) {
+                    dependencies.push_back({"data/" + entry.path().filename().u8string(),
+                                            std::move(lod_bytes),
+                                            {},
+                                            true});
+                    packs.insert(upper(entry.path().stem().u8string()) + ".IRW");
                 }
             }
         check(lod, "No LOAD2 BBB> entry references " + name +
                        " in this checkout. Add its LOD integration first.");
+        remember("makevrom.py");
+        RomSlotPolicy policy;
+        if (dependencies.back().existed) {
+            policy = read_rom_slot_policy(root.u8string());
+            check(policy.valid, "Cannot review the current ROM slot policy: " + policy.error);
+        }
         // Validate against the live model first, before source repacking adjusts exported origins.
         AssemblyExport preview;
         auto asm_before = read(asm_path);
@@ -471,6 +505,13 @@ bool prepare_game_export(const Document &document, const std::string &game_root,
         out.label = preview.label;
         out.requested_label = upper(stage_label);
         out.revision = document.state().revision;
+        out.dependencies = dependencies;
+        for (const auto &dependency : out.dependencies) {
+            auto path = target(root, dependency.relative);
+            check(fs::exists(path) == dependency.existed &&
+                      (!dependency.existed || read(path) == dependency.before),
+                  "Export dependency changed during preparation: " + dependency.relative);
+        }
         for (const auto &relative :
              std::vector<std::string>{stem + ".BDB", stem + ".BDD", stem + ".BDD.meta",
                                       stem + ".bddstudio", "src/BGND.ASM"}) {
@@ -494,6 +535,24 @@ bool prepare_game_export(const Document &document, const std::string &game_root,
         for (const auto &file : out.files)
             report << file.relative << (file.before == file.after ? " (unchanged)" : " (updated)")
                    << "\n";
+        report << "\nROM slot review (new packed size is not known until LOAD2 runs):\n";
+        if (policy.declared) {
+            for (const auto &pack : packs) {
+                auto slot = std::find_if(policy.slots.begin(), policy.slots.end(),
+                                         [&](const RomSlot &s) { return upper(s.name) == pack; });
+                if (slot != policy.slots.end())
+                    report << pack << ": fixed slot " << (slot->end - slot->start) << " bytes at 0x"
+                           << std::hex << slot->start << "..0x" << slot->end << std::dec
+                           << " (end exclusive).\n";
+                else
+                    report << pack
+                           << ": no declared custom slot; the game build must check its range.\n";
+            }
+        } else
+            report << "No literal custom slot policy is available. Physical free space is not "
+                      "proof of allocatable capacity.\n";
+        report << "Referenced LODs and makevrom.py are checked again before Apply. Capture a new "
+                  "ROM receipt after packing to verify actual slot bases and sizes.\n";
         report
             << "\nApply updates these source files with backups. Then run the game's full build.py "
                "(LOAD2 + assembly), followed by its normal ROM packaging and emulator check.\n"
@@ -523,6 +582,16 @@ bool apply_game_export(GameExport &package, std::string &error) {
         const auto root = fs::canonical(fs::u8path(package.root)),
                    folder = fs::canonical(fs::u8path(package.folder));
         auto lock = root / ".bddstudio-applying";
+        auto check_dependencies = [&]() {
+            for (const auto &dependency : package.dependencies) {
+                auto path = target(root, dependency.relative);
+                check(fs::exists(path) == dependency.existed &&
+                          (!dependency.existed || read(path) == dependency.before),
+                      "Game packing configuration changed since review: " + dependency.relative +
+                          ". Prepare again.");
+            }
+        };
+        check_dependencies();
         check(!fs::exists(lock), "Another bddtool apply is active or unfinished in this checkout.");
         check(!fs::exists(folder / "APPLYING.txt"),
               "This export has an unfinished apply transaction. Restore its backups first.");
@@ -560,6 +629,7 @@ bool apply_game_export(GameExport &package, std::string &error) {
                 write(fs::path(target(root, file.relative).u8string() + ".studio-apply-tmp"),
                       file.after);
             // Recheck after staging, immediately before replacing the first game source.
+            check_dependencies();
             for (const auto &file : package.files) {
                 auto dest = target(root, file.relative);
                 check(fs::exists(dest) == file.existed &&

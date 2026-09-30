@@ -163,6 +163,34 @@ Open **Build & Check** and use the game integration controls:
 6. Use the game's normal ROM packaging and emulator workflow to verify it.
    A successful build is not a claim of visual parity in MAME.
 
+The export report includes declared ROM slot capacities for the LODs referencing
+the stage. Their packed sizes remain unknown until LOAD2 runs. Referenced LOD
+files and `makevrom.py` are read dependencies: Apply rechecks them, including a
+previously absent `makevrom.py`, and asks for a fresh export if they changed.
+They are never installed as package output. Capture a ROM receipt after the
+full packing build to check actual slot bases and sizes.
+
+MK3CAVE uses its own generator for original-coordinate moves, packed water rows
+and multiple ROM packs. Open its BDB from a supported game checkout to bind that
+runtime automatically. The cavern/water layer starts locked, and optimization
+preserves the seven runtime palettes. Its version-2 `.bddstudio` sidecar retains
+source-coordinate moves; saving keeps the original module rectangles.
+
+For this stage, **Prepare game export** creates the source pair, four ROM pack
+pairs, a packing manifest, a generator adapter and a build helper. Review the
+per-pack estimates against the checkout's current reservations, then apply with
+the same backup and stale-source checks. Static artwork and layer offsets can
+change; this first export profile requires the water artwork, palettes, camera,
+floor, layer order and parallax rates to remain intact. An old unbound layout
+must be reopened from the original-coordinate source before editing.
+
+**Build & verify ROMs** runs the full game build, verifies every decoded cave
+pixel and pack boundary, rebuilds water spans, and packages `rom/bddtool/mk2.zip`
+without installing it. A successful run writes `tmp/bddtool-cave/verification.json`.
+Existing game-build guards still apply. The current validation snapshot stops
+at an unrelated Cage logo consistency guard; separate cave pixel and emulator
+checks passed. See [MK3CAVE validation](MK3CAVE_VALIDATION.md) for that distinction.
+
 Packages live under the application's preferences directory in `exports/`.
 Each has a unique directory and keeps its original backups. `APPLIED.txt`
 records a completed apply; `APPLYING.txt` identifies an interrupted transaction
@@ -221,8 +249,9 @@ History retains up to 64 edits. Image imports currently require at most 255
 opaque RGB555 colors; palette reduction, pixel editing, IMG/LOD workflows,
 full LOAD2 diagnostics and ROM deployment remain in the specialist editor.
 **Build & Check** currently checks missing references, layer assignment,
-runtime binding availability, and MK2 width constraints. It is not yet the full
-complete ROM packaging pipeline.
+runtime binding availability, and MK2 width constraints. MK3CAVE additionally
+supports the verified packing workflow above; other stages use the game's
+normal packaging tools.
 
 ## Verification
 
