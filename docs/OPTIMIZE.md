@@ -79,6 +79,29 @@ ones. Images carrying animation anchors, LOD references or other runtime
 metadata, locked placements, unassigned artwork, and incompatible source
 geometry are excluded or refused rather than silently changed.
 
+Lossless verification also compares each layer using the game's Z-then-Y insertion
+order, testing both X arrival directions for ties. This catches a split that
+reconstructs its source image exactly but changes which neighboring artwork covers
+it. A failed or unavailable check disables **Apply verified proposal** and identifies
+the affected layer. Try a different source image or fewer pieces; a combined scan
+is refused if any part fails this check. Shared-base and pattern-packing proposals
+use the same verifier. Deliberate pattern edits are compared against their intended
+edited artwork, not against the original appearance.
+
+Game export sorts an isolated copy's objects by X within each layer for LOAD2's
+lookup tables, retaining object flags and custom cave offsets. It reopens the
+serialized package and compares its runtime composition with the edited document
+before allowing Apply. The export review includes this result. Ordinary document
+Save keeps the authoring order. The comparison includes editor-hidden objects
+because they remain in exported game data.
+
+These are static RGB555 comparisons, bounded to 16 million pixels per layer and a
+128-million-unit work budget. They do not prove every camera arrival history,
+animation/actor behavior, packed pixels or object/DMA capacity. A package roundtrip
+proves preservation of the **edited** scene; it does not establish that intentional
+artwork changes match the previous game build. ROM receipts and emulator comparisons
+remain necessary.
+
 ## Palette-aware reuse
 
 **Find palette reuse** normalizes whole images for sharing, including X/Y flips,
@@ -357,9 +380,10 @@ This uses the declared slot map; it does not prove that every remaining gap is
 usable by all runtime code. **Declared ROM slots** shows asset sizes and capacities,
 with a filter for names such as `MK3CV`. Slot capacity alone is not growth permission.
 
-New receipts save that slot map in version 2. Version 1 receipts still load, with
-slot reservations explicitly unknown. Checkouts without a slot declaration also
-retain the physical budget without inventing an unreserved budget.
+New receipts use version 3, saving both the slot map and static background
+fingerprints. Version 1 and 2 receipts still load, with artwork comparison
+explicitly unavailable; version 1 also lacks slot reservations. Checkouts without
+a slot declaration retain the physical budget without inventing an unreserved budget.
 
 Capture reconstructs the packed flat image and compares **every byte in all
 twelve interleaved chip lanes**. It re-reads the inputs afterward to detect
@@ -368,11 +392,25 @@ than producing a receipt. Literal `0xff` payload bytes count as occupied;
 file size and non-`0xff` counts are not treated as free-space measurements.
 
 Use the verified current capture as a baseline and save it as `.romreceipt`.
-After applying your reviewed export and building the game, capture again.
+Preparing a game export automatically captures the existing build if no valid
+baseline is present. Apply and Build wait for this capture to finish. If the
+checkout has no packaged build, the editor explains why the baseline is unavailable;
+it does not invent a comparison. After applying your reviewed export and building
+the game, capture again.
 A successful build launched through bddtool starts a new capture automatically;
 view its result under ROM receipts. Save/load controls preserve the baseline
 and comparison between sessions. Receipts store counts, ranges and change
 identifiers, not game artwork or ROM contents.
+
+For MK7 backgrounds, capture decodes each active stage's generated image headers
+against the verified IRW payload and records indexed-pixel and dimension
+fingerprints alongside the exact BDD/BDB source fingerprints. Relocation alone
+does not count as an artwork change. If a stage's source is unchanged but its
+decoded images differ, **ROM receipts** and **Build & Check** show a regression.
+Changed, added or removed stage sources require visual review. Missing inputs or
+unsupported tables leave artwork coverage unavailable without discarding a valid
+byte-budget receipt. Source pairs, the LOD and headers are also re-read to detect
+changes during capture.
 
 The comparison reports actual packed payload bytes, physical free bytes and
 largest contiguous gap per bank, plus per-IRW changes and relocated payloads.
@@ -383,9 +421,10 @@ Change identifiers are noncryptographic; receipts are not signed attestations.
 
 Matching IRWs and chips can both be stale relative to edited sources. Manual
 captures therefore leave source freshness unproven. Program-ROM tables and
-palette bytes remain separately labeled document estimates; decoded-art identity,
-runtime effects and object/DMA peaks require their own checks. No emulator or
-optimized game build is run by the optimizer tests.
+palette bytes remain separately labeled document estimates. Static comparison
+covers indexed pixels and dimensions, not palette appearance, IMG animation,
+runtime bindings, edited-stage equivalence or object/DMA peaks. Those require
+separate checks. No emulator or optimized game build is run by the optimizer tests.
 
 ## Research reviewed
 

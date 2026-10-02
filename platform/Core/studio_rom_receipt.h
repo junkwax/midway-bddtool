@@ -1,4 +1,5 @@
 #pragma once
+#include "Core/studio_packed_art.h"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -31,6 +32,7 @@ struct RomReceipt {
     std::array<RomBankBudget, 2> banks{};
     bool valid = false, after_successful_build = false;
     bool slots_checked = false;
+    PackedArtwork artwork;
 };
 // Reads literal CUSTOM_VIDEO_SLOTS; never executes Python. Missing declarations remain unknown.
 RomSlotPolicy read_rom_slot_policy(const std::string &root);

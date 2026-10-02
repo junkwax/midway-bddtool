@@ -171,6 +171,9 @@ int main(int argc, char **argv) {
         require(read(game / "src" / "BGND.ASM") == assembly(1), "Preparing modified game sources");
         require(package.report.find("STAGE.IRW: fixed slot 4096 bytes") != std::string::npos,
                 "Current slot capacity missing from export review");
+        require(package.report.find("Runtime Z/Y order:") != std::string::npos &&
+                    package.report.find("0 changed pixel samples") != std::string::npos,
+                "Export review omitted runtime roundtrip verification");
         write(game / "makevrom.py",
               "CUSTOM_VIDEO_SLOTS = {'STAGE.IRW': (0x800000, 0x800800, 'shrunk')}\n");
         require(!apply_game_export(package, error) &&

@@ -163,3 +163,10 @@ entries. That guard remains enabled. No success receipt was emitted. The emulato
 comparison used a separately packaged diagnostic ROM after that failure; it is
 evidence for cave parity, not a successful end-to-end helper run. The live game
 checkout and emulator installation were not modified.
+
+Later investigation traced those logo-check messages in isolated copies to
+missing Git reference history. Supplying the supported `MK2_GIT_DIR` reference
+makes the check pass without artwork or guard changes. The [fresh BATTLE/NUPOOL
+validation](STAGE_SAVINGS_VALIDATION.md#october-1-fresh-source-full-build-validation)
+now includes full baseline/candidate builds through Phase E. It does not replace
+the cave helper's own end-to-end validation described above.

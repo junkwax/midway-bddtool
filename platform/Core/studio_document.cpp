@@ -1,6 +1,7 @@
 #include "Core/studio_document.h"
 #include "Core/studio_optimizer.h"
 #include "Core/studio_visibility.h"
+#include "Core/studio_runtime_order.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +13,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <tuple>
 
 namespace studio {
 namespace fs = std::filesystem;
@@ -870,6 +872,31 @@ BddCoreStage Document::export_stage(std::vector<Plane> &planes) const {
                   (int)out.bdb.objects.size());
     out.bdb.header = header;
     return out;
+}
+
+bool Document::save_game_sources(const std::string &path, std::string &report,
+                                 std::string &error) const {
+    Document copy = *this;
+    // Each module receives a constant translation during repacking, so sorting
+    // source X here also sorts the generated X table within every module.
+    std::stable_sort(copy.state_.objects.begin(), copy.state_.objects.end(),
+                     [](const Placement &a, const Placement &b) {
+                         return std::make_tuple(a.plane, a.object.depth, a.object.sy, a.object.order) <
+                                std::make_tuple(b.plane, b.object.depth, b.object.sy, b.object.order);
+                     });
+    for (size_t i = 0; i < copy.state_.objects.size(); ++i)
+        copy.state_.objects[i].object.order = (int)i;
+    if (!copy.save(path, error, true)) return false;
+    Document reopened;
+    if (!reopened.load(path, error)) return false;
+    if (!reopened.notice().empty()) { error = reopened.notice(); return false; }
+    auto check = compare_runtime_order(state_, reopened.state());
+    report = "Exported object tables sorted by X for runtime lookup.\n" + check.report;
+    if (!check.checked || !check.equivalent) {
+        error = "Game export did not preserve the edited runtime scene: " + check.error;
+        return false;
+    }
+    return true;
 }
 
 bool Document::save(const std::string &path, std::string &error, bool recovery) {

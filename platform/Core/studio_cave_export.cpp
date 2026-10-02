@@ -305,8 +305,9 @@ bool prepare_cave_export(const Document &doc, const std::string &root_path,
             out.files.push_back(std::move(file));
         };
         fs::create_directories(folder / "data");
-        Document copy = doc;
-        need(copy.save((folder / "data/MK3CAVE.BDB").u8string(), error, true), error);
+        std::string runtime_report;
+        need(doc.save_game_sources((folder / "data/MK3CAVE.BDB").u8string(), runtime_report, error),
+             error);
         for (const auto &rel : {"data/MK3CAVE.BDB", "data/MK3CAVE.BDD", "data/MK3CAVE.BDD.meta",
                                 "data/MK3CAVE.bddstudio"})
             add(rel, read(folder / rel));
@@ -358,6 +359,7 @@ bool prepare_cave_export(const Document &doc, const std::string &root_path,
                  << fingerprint(read(root / "makevrom.py")) << "\"},\n\"packs\":[";
         report << "MK3CAVE custom export\nOriginal source coordinates retained. Cavern/water and "
                   "all seven palettes protected.\n\n";
+        report << runtime_report << '\n';
         for (int k = 0; k < 4; ++k) {
             auto name = "MK3CV" + std::to_string(k + 1);
             auto &g = groups[k];

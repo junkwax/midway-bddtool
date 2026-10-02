@@ -273,6 +273,7 @@ RomReceipt capture_rom_receipt(const std::string &root_path, bool successful) {
         std::regex filename("[\"']([A-Za-z0-9_.-]+\\.[Ii][Rr][Ww])[\"']");
         residue_ok(files, filename);
         std::string flat(0xc00000, (char)0xff);
+        result.artwork.error = "MK7MIL.IRW is not in the captured packing list.";
         std::vector<std::pair<fs::path, std::string>> read_back;
         for (std::sregex_iterator i(files.begin(), files.end(), filename), end; i != end; ++i) {
             auto name = (*i)[1].str();
@@ -307,6 +308,15 @@ RomReceipt capture_rom_receipt(const std::string &root_path, bool successful) {
             check(offset <= flat.size() && payload.size() <= flat.size() - offset,
                   "IRW exceeds video capacity: " + name);
             result.payloads.push_back({name, (int)bank, offset, payload.size(), hash(payload)});
+            if (name == "MK7MIL.IRW") {
+                std::vector<std::pair<std::string, std::string>> evidence;
+                if (bank == 1)
+                    result.artwork = capture_packed_artwork(root.u8string(), payload, base, evidence);
+                else
+                    result.artwork.error = "Static artwork capture expects MK7 in bank 1.";
+                for (auto &file : evidence)
+                    read_back.emplace_back(fs::u8path(file.first), std::move(file.second));
+            }
             flat.replace((size_t)offset, payload.size(), payload);
             read_back.emplace_back(path, std::move(bytes));
         }
@@ -363,8 +373,9 @@ bool save_rom_receipt(const RomReceipt &receipt, const std::string &path, std::s
         check(receipt.valid, "No verified ROM receipt to save.");
         auto validated = receipt;
         budgets(validated);
+        validate_packed_artwork(receipt.artwork);
         std::ostringstream out;
-        out << "BDDROM 2\n"
+        out << "BDDROM 3\n"
             << std::quoted(receipt.root) << ' ' << std::quoted(receipt.captured) << ' '
             << receipt.packing_fingerprint << ' ' << receipt.after_successful_build << '\n';
         out << receipt.payloads.size() << '\n';
@@ -374,6 +385,14 @@ bool save_rom_receipt(const RomReceipt &receipt, const std::string &path, std::s
         out << receipt.slots_checked << ' ' << receipt.slots.size() << '\n';
         for (const auto &slot : receipt.slots)
             out << std::quoted(slot.name) << ' ' << slot.start << ' ' << slot.end << '\n';
+        out << receipt.artwork.valid << ' ' << std::quoted(receipt.artwork.error) << ' '
+            << receipt.artwork.stages.size() << '\n';
+        for (const auto &stage : receipt.artwork.stages) {
+            out << std::quoted(stage.stage) << ' ' << std::quoted(stage.table) << ' '
+                << stage.source << ' ' << stage.images.size() << '\n';
+            for (const auto &im : stage.images)
+                out << im.width << ' ' << im.height << ' ' << im.pixels << '\n';
+        }
         std::ofstream file(fs::u8path(path), std::ios::binary | std::ios::trunc);
         file << out.str();
         file.close();
@@ -387,13 +406,13 @@ bool save_rom_receipt(const RomReceipt &receipt, const std::string &path, std::s
 RomReceipt load_rom_receipt(const std::string &path) {
     RomReceipt result;
     try {
-        std::istringstream in(read(fs::u8path(path), 1024 * 1024));
+        std::istringstream in(read(fs::u8path(path), 8 * 1024 * 1024));
         std::string magic;
         int version = 0;
         size_t count = 0;
         in >> magic >> version >> std::quoted(result.root) >> std::quoted(result.captured) >>
             result.packing_fingerprint >> result.after_successful_build >> count;
-        check(in && magic == "BDDROM" && (version == 1 || version == 2) && count > 0 &&
+        check(in && magic == "BDDROM" && (version >= 1 && version <= 3) && count > 0 &&
                   count <= 4096,
               "Invalid ROM receipt.");
         for (size_t i = 0; i < count; i++) {
@@ -402,7 +421,7 @@ RomReceipt load_rom_receipt(const std::string &path) {
             check((bool)in, "Truncated ROM receipt.");
             result.payloads.push_back(p);
         }
-        if (version == 2) {
+        if (version >= 2) {
             in >> result.slots_checked >> count;
             check(in && count <= 4096, "Invalid ROM slot receipt.");
             for (size_t i = 0; i < count; ++i) {
@@ -412,6 +431,27 @@ RomReceipt load_rom_receipt(const std::string &path) {
                 result.slots.push_back(slot);
             }
         }
+        if (version >= 3) {
+            in >> result.artwork.valid >> std::quoted(result.artwork.error) >> count;
+            check(in && count <= 512, "Invalid artwork receipt.");
+            size_t total = 0;
+            for (size_t i = 0; i < count; ++i) {
+                PackedStageArtwork stage;
+                size_t images = 0;
+                in >> std::quoted(stage.stage) >> std::quoted(stage.table) >> stage.source >> images;
+                check(in && images <= 65536 && total + images <= 65536, "Invalid artwork count.");
+                total += images;
+                for (size_t j = 0; j < images; ++j) {
+                    PackedImageFingerprint im;
+                    in >> im.width >> im.height >> im.pixels;
+                    check((bool)in, "Truncated artwork receipt.");
+                    stage.images.push_back(im);
+                }
+                result.artwork.stages.push_back(std::move(stage));
+            }
+            validate_packed_artwork(result.artwork);
+        } else
+            result.artwork.error = "Older receipt has no static artwork fingerprints; capture again.";
         in >> std::ws;
         check(in.eof(), "Unexpected receipt data.");
         budgets(result);
@@ -430,6 +470,7 @@ std::string compare_rom_receipts(const RomReceipt &before, const RomReceipt &aft
         << after.captured << '\n';
     if (before.packing_fingerprint != after.packing_fingerprint)
         out << "Packing configuration changed between captures.\n";
+    out << compare_packed_artwork(before.artwork, after.artwork).report << '\n';
     for (int i = 0; i < 2; i++) {
         const auto &a = before.banks[i], &b = after.banks[i];
         out << "Bank " << i << ": used " << a.used << " -> " << b.used << " B; freed "
@@ -468,7 +509,7 @@ std::string compare_rom_receipts(const RomReceipt &before, const RomReceipt &aft
                "CUSTOM_VIDEO_SLOTS reservations; other runtime restrictions still apply.\n";
     out << "Physical gaps may be reserved by the game's slot policy. Changes cover the entire "
            "build, not only this stage.\n"
-           "Source freshness, decoded-pixel identity, program tables/palettes and runtime "
+           "Source freshness, artwork outside the static comparison, program tables/palettes and runtime "
            "object/DMA costs are separate checks.\n";
     return out.str();
 }

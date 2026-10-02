@@ -151,7 +151,10 @@ tools/*
 !tools/studio_savings_audit.cpp
 !tools/audit_bdd_library.py
 !tools/studio_validation_candidate.cpp
+!tools/studio_validation_checks.h
 !tools/verify_static_stage_packing.py
+!tools/preserve_stage_pixels.py
+!tools/reviewed_stage_build.py
 !docs/BDD_LIBRARY_AUDIT.md
 !docs/STAGE_SAVINGS_VALIDATION.md
 

@@ -494,8 +494,9 @@ bool prepare_game_export(const Document &document, const std::string &game_root,
               "Choose a new export folder; an existing package will not be overwritten.");
         fs::create_directories(folder / "data");
         fs::create_directories(folder / "src");
-        Document copy = document;
-        check(copy.save((folder / fs::u8path(stem + ".BDB")).u8string(), error, true), error);
+        std::string runtime_report;
+        check(document.save_game_sources((folder / fs::u8path(stem + ".BDB")).u8string(),
+                                          runtime_report, error), error);
         // Produce ASM from the original live model: its scene is identical to the repacked copy,
         // but it still identifies untouched, unbound source modules correctly.
         write(folder / "src" / "BGND.ASM", preview.text);
@@ -531,7 +532,8 @@ bool prepare_game_export(const Document &document, const std::string &game_root,
             out.files.push_back(std::move(file));
         }
         std::ostringstream report;
-        report << preview.report << "\nGame folder: " << root.u8string() << "\n\nFiles to apply:\n";
+        report << preview.report << '\n' << runtime_report
+               << "\nGame folder: " << root.u8string() << "\n\nFiles to apply:\n";
         for (const auto &file : out.files)
             report << file.relative << (file.before == file.after ? " (unchanged)" : " (updated)")
                    << "\n";
@@ -553,6 +555,9 @@ bool prepare_game_export(const Document &document, const std::string &game_root,
                       "proof of allocatable capacity.\n";
         report << "Referenced LODs and makevrom.py are checked again before Apply. Capture a new "
                   "ROM receipt after packing to verify actual slot bases and sizes.\n";
+        report << "Keep the pre-edit ROM receipt. The new receipt also compares decoded MK7 "
+                  "backgrounds against unchanged source files; savings alone do not establish "
+                  "visual equivalence. Edited stages still need an emulator comparison.\n";
         report
             << "\nApply updates these source files with backups. Then run the game's full build.py "
                "(LOAD2 + assembly), followed by its normal ROM packaging and emulator check.\n"

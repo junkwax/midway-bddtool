@@ -1,4 +1,5 @@
 #include "Core/studio_optimizer.h"
+#include "studio_validation_checks.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -6,47 +7,35 @@
 #include <stdexcept>
 #include <algorithm>
 #include <tuple>
+#include <set>
 using namespace studio;
 namespace fs = std::filesystem;
 void need(bool ok, const std::string &error) {
     if (!ok)
         throw std::runtime_error(error);
 }
-std::vector<uint32_t> layer(const Document &doc, int index, const BddCoreModule &box) {
-    int w = box.x2 - box.x1 + 1, h = box.y2 - box.y1 + 1;
-    need(w > 0 && h > 0 && uint64_t(w) * h < 16000000, "Layer too large");
-    std::vector<uint32_t> out(size_t(w) * h);
-    std::vector<Placement> objects;
-    for (const auto &p : doc.state().objects)
-        if (p.plane == index)
-            objects.push_back(p);
-    std::stable_sort(objects.begin(), objects.end(), [](const auto &a, const auto &b) {
-        return std::tie(a.object.depth, a.object.sy) < std::tie(b.object.depth, b.object.sy);
-    });
-    for (const auto &p : objects) {
-        const auto &im = *doc.image(p.object.ii);
-        const auto &pal = doc.state().assets->data.palettes.at(p.object.fl);
-        for (int y = 0; y < im.h; ++y)
-            for (int x = 0; x < im.w; ++x) {
-                int v = im.pix[size_t(p.object.wx & 32 ? im.h - 1 - y : y) * im.w +
-                               (p.object.wx & 16 ? im.w - 1 - x : x)];
-                if (!v)
-                    continue;
-                need(v < pal.count, "Invalid palette");
-                int dx = p.object.depth - box.x1 + x, dy = p.object.sy - box.y1 + y;
-                need(dx >= 0 && dx < w && dy >= 0 && dy < h, "Layer bounds changed");
-                out[size_t(dy) * w + dx] = 0x10000 | pal.rgb555[v];
-            }
-    }
-    return out;
-}
 // Private integration experiment: keep original source coordinates for LOAD2 and
 // compare its generated bounds before adjusting the isolated runtime placement.
 int main(int argc, char **argv) {
     try {
-        need(
-            argc == 3 || (argc == 4 && std::string(argv[3]) == "--runtime-order"),
-            "Usage: studio_validation_candidate source.BDB new-output-directory [--runtime-order]");
+        need(argc >= 3, "Usage: studio_validation_candidate source.BDB new-output-directory "
+                        "[--runtime-order] [--exclude-image=DECIMAL_ID ...]");
+        bool runtime_order = false;
+        std::set<int> excluded;
+        for (int i = 3; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--runtime-order")
+                runtime_order = true;
+            else if (arg.rfind("--exclude-image=", 0) == 0) {
+                auto value = arg.substr(16);
+                size_t used = 0;
+                int id = std::stoi(value, &used);
+                need(used == value.size() && id >= 0, "Invalid excluded image ID");
+                excluded.insert(id);
+            } else
+                need(false, "Unknown argument: " + arg);
+        }
+        need(excluded.empty() || runtime_order, "Exclusions require --runtime-order");
         fs::path folder = fs::absolute(fs::u8path(argv[2]));
         need(!fs::exists(folder), "Output already exists");
         Document doc;
@@ -57,7 +46,7 @@ int main(int argc, char **argv) {
         options.compact_palettes = false;
         options.max_added_objects = 24;
         std::ostringstream audit;
-        if (argc == 4) {
+        if (runtime_order) {
             auto original = doc;
             std::vector<std::pair<uint64_t, int>> sources;
             for (const auto &im : doc.state().assets->data.images)
@@ -65,6 +54,16 @@ int main(int argc, char **argv) {
             std::stable_sort(sources.begin(), sources.end(),
                              [](auto a, auto b) { return a.first > b.first; });
             for (auto entry : sources) {
+                if (excluded.count(entry.second)) {
+                    audit << "Image " << entry.second << ": excluded by request\n";
+                    continue;
+                }
+                if (validation::protects_unaligned(original.state().assets->data.images,
+                                                   entry.second)) {
+                    audit << "Image " << entry.second
+                          << ": skipped - preserves LOAD2 unaligned-image buffer context\n";
+                    continue;
+                }
                 options.source_image = entry.second;
                 options.max_added_objects =
                     24 - int(doc.state().objects.size() - original.state().objects.size());
@@ -75,8 +74,11 @@ int main(int argc, char **argv) {
                 need(next.apply_optimization(plan, error), error);
                 bool exact = true;
                 for (size_t i = 0; i < doc.state().planes.size(); ++i)
-                    exact &= layer(original, (int)i, original.state().planes[i].source) ==
-                             layer(next, (int)i, original.state().planes[i].source);
+                    for (bool reverse : {false, true})
+                        exact &= validation::layer(original.state(), (int)i,
+                                                   original.state().planes[i].source, reverse) ==
+                                 validation::layer(next.state(), (int)i,
+                                                   original.state().planes[i].source, reverse);
                 audit << "Image " << entry.second
                       << (exact ? ": accepted\n"
                                 : ": REJECTED - runtime layer order changes pixels\n");
@@ -102,6 +104,12 @@ int main(int argc, char **argv) {
         std::vector<BddCoreObject> objects;
         for (const auto &p : s.objects)
             objects.push_back(p.object);
+        // BAKGND.ASM searches the block table by X. LOAD2 retains input order.
+        std::stable_sort(objects.begin(), objects.end(), [](const auto &a, const auto &b) {
+            return std::tie(a.depth, a.sy, a.order) < std::tie(b.depth, b.sy, b.order);
+        });
+        for (size_t i = 0; i < objects.size(); ++i)
+            objects[i].order = (int)i;
         std::ostringstream header;
         header << s.name << ' ' << s.world_w << ' ' << s.world_h << ' ' << s.depth << ' '
                << s.planes.size() << ' ' << s.assets->data.palettes.size() << ' ' << objects.size();

@@ -98,6 +98,7 @@ struct Tab {
     int heat_kind = 0;
     std::vector<OptimizeRegion> heat_regions;
     std::future<RomReceipt> receipt_job;
+    bool receipt_to_baseline = false;
     std::unique_ptr<RomReceipt> receipt_before, receipt_after;
     std::future<ArtAudit> audit_job;
     std::shared_ptr<OptimizeProgress> audit_progress;
@@ -1359,6 +1360,8 @@ class App {
         if (prepare_game_export(t.document, t.game_root, folder.u8string(), *package, error,
                                 t.game_label)) {
             t.game_export = std::move(package);
+            if ((!t.receipt_before || !t.receipt_before->valid) && !t.receipt_job.valid())
+                start_receipt(t, t.game_export->root, false, true);
             toast("Export prepared. Review the changes below before applying.");
         }
     }
@@ -1381,6 +1384,12 @@ class App {
         if (ImGui::Button("Prepare game export"))
             prepare_game(t);
         ImGui::EndDisabled();
+        if (t.receipt_job.valid() && t.receipt_to_baseline)
+            ImGui::TextColored(accent, "Capturing the existing build before source changes...");
+        else if (t.receipt_before && !t.receipt_before->valid)
+            ImGui::TextWrapped("Baseline capture unavailable: %s. Build and package the existing "
+                               "stage first to enable a before/after comparison.",
+                               t.receipt_before->error.c_str());
         if (t.game_export) {
             auto &package = *t.game_export;
             std::error_code path_error;
@@ -1403,7 +1412,7 @@ class App {
             if (ImGui::Button("Copy export folder"))
                 ImGui::SetClipboardText(package.folder.c_str());
             ImGui::SameLine();
-            ImGui::BeginDisabled(busy || !current || package.applied);
+            ImGui::BeginDisabled(busy || t.receipt_job.valid() || !current || package.applied);
             if (ImGui::Button("Apply reviewed export")) {
                 if (apply_game_export(package, error))
                     toast(package.build_script == "build.py"
@@ -1412,7 +1421,7 @@ class App {
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::BeginDisabled(busy || !current || !package.applied);
+            ImGui::BeginDisabled(busy || t.receipt_job.valid() || !current || !package.applied);
             if (ImGui::Button(package.build_script == "build.py" ? "Build game" : "Build & verify ROMs")) {
                 bool unchanged = true;
                 for (const auto &file : package.files) {
@@ -1429,8 +1438,10 @@ class App {
                 if (unchanged &&
                     t.game_build.start(
                         package.root, (fs::u8path(package.folder) / "build.log").u8string(), error,
-                        package.build_script))
+                        package.build_script)) {
+                    t.receipt_after.reset();
                     toast("Game build started. The log is shown below.");
+                }
             }
             ImGui::EndDisabled();
             if (package.applied)
@@ -1463,6 +1474,24 @@ class App {
                 ImGui::TextUnformatted(text.c_str());
                 ImGui::EndChild();
             }
+        }
+        if (t.receipt_before && t.receipt_after && t.receipt_before->valid && t.receipt_after->valid) {
+            auto artwork = compare_packed_artwork(t.receipt_before->artwork, t.receipt_after->artwork);
+            if (artwork.available && artwork.regressions)
+                ImGui::TextColored(ImVec4(1.f, .4f, .35f, 1.f),
+                                   "Artwork check failed: %zu regression(s) in unedited stages.",
+                                   artwork.regressions);
+            else if (artwork.available)
+                ImGui::TextWrapped("Unedited background check: %zu matching images. %zu edited "
+                                   "stage(s) still need visual review.",
+                                   artwork.unchanged_images, artwork.review_stages);
+            else
+                ImGui::TextWrapped("Decoded background comparison is unavailable for these receipts.");
+            if (ImGui::SmallButton("Review ROM and artwork comparison")) {
+                page = 3;
+                t.optimize_mode = 3;
+            }
+            ImGui::TextDisabled("Comparison uses captured builds; rebuilds require a new capture.");
         }
         ImGui::Separator();
     }
@@ -1645,8 +1674,9 @@ class App {
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
-        ImGui::TextDisabled("%s", plan.verified ? "Exact reconstruction passed"
-                                                : "Reconstruction not verified");
+        ImGui::TextDisabled("%s", plan.verified ? (plan.changes.empty() ? "No changes proposed"
+                                           : "Exact reconstruction and static runtime order passed")
+                                                : "Reconstruction or runtime order not verified");
         if (plan.changes.empty()) {
             ImGui::TextWrapped("No net savings found within these limits. Try Deep search or a "
                                "different placement/palette budget.");
@@ -2987,7 +3017,9 @@ class App {
         if (ImGui::CollapsingHeader("Coverage and interpretation", ImGuiTreeNodeFlags_DefaultOpen))
             for (const auto &note : audit.notes) ImGui::TextWrapped("%s", note.c_str());
     }
-    void start_receipt(Tab &t, const std::string &root, bool successful = false) {
+    void start_receipt(Tab &t, const std::string &root, bool successful = false, bool baseline = false) {
+        t.receipt_to_baseline = baseline;
+        if (baseline) t.receipt_after.reset();
         t.receipt_job = std::async(std::launch::async, [root, successful]() {
             return capture_rom_receipt(root, successful);
         });
@@ -2995,7 +3027,8 @@ class App {
     void rom_receipts(Tab &t) {
         heading("ROM receipts", "Compare measured packed video data between builds.");
         ImGui::TextWrapped("Capture reads the generated IRWs and verifies every byte against all "
-                           "twelve video chips. Save a baseline before editing, then capture again "
+                           "twelve video chips. It also compares decoded MK7 background artwork. "
+                           "Save a baseline before editing, then capture again "
                            "after building the optimized stage.");
         bool busy = t.receipt_job.valid() || game_build_running();
         ImGui::BeginDisabled(busy);
@@ -3034,7 +3067,20 @@ class App {
             load(t.receipt_after);
         ImGui::EndDisabled();
         if (t.receipt_job.valid())
-            ImGui::TextColored(accent, "Checking packing declarations, IRWs and chip lanes...");
+            ImGui::TextColored(accent, "Checking ROM bytes and decoding background artwork...");
+        if (t.receipt_before && t.receipt_before->valid && t.receipt_after && t.receipt_after->valid) {
+            const auto artwork = compare_packed_artwork(t.receipt_before->artwork,
+                                                        t.receipt_after->artwork);
+            if (artwork.available && artwork.regressions)
+                ImGui::TextColored(ImVec4(1.f, .4f, .35f, 1.f),
+                                   "Artwork regression: unchanged source renders differently.");
+            else if (artwork.available)
+                ImGui::TextWrapped("%zu unedited image(s) match; %zu stage(s) need visual review.",
+                                   artwork.unchanged_images, artwork.review_stages);
+            else
+                ImGui::TextWrapped("Static artwork not compared. Capture new receipts with "
+                                   "background source files and build tables present.");
+        }
         if (t.receipt_after && !t.receipt_after->valid)
             ImGui::TextWrapped("Capture refused: %s", t.receipt_after->error.c_str());
         if (t.receipt_after && t.receipt_after->valid) {
@@ -3042,6 +3088,10 @@ class App {
             ImGui::TextColored(accent, "Chip-byte verification passed | %zu packed payloads",
                                receipt.payloads.size());
             ImGui::TextWrapped("Captured: %s | %s", receipt.captured.c_str(), receipt.root.c_str());
+            if (receipt.artwork.valid)
+                ImGui::Text("Static artwork captured: %zu stages", receipt.artwork.stages.size());
+            else
+                ImGui::TextWrapped("Static artwork unavailable: %s", receipt.artwork.error.c_str());
             ImGui::TextDisabled(
                 "%s", receipt.after_successful_build
                           ? "Captured after a successful build launched by bddtool."
@@ -3118,7 +3168,6 @@ class App {
                 save(*t.receipt_before);
             if (t.receipt_after && t.receipt_after->valid) {
                 auto report = compare_rom_receipts(*t.receipt_before, *t.receipt_after);
-                ImGui::SameLine();
                 if (ImGui::Button("Copy ROM comparison"))
                     ImGui::SetClipboardText(report.c_str());
                 ImGui::BeginChild("rom-comparison", ImVec2(0, 230), ImGuiChildFlags_Border);
@@ -3128,7 +3177,8 @@ class App {
         }
         ImGui::TextWrapped(
             "These are whole-build video measurements. Reserved slots can limit use of physical "
-            "gaps. Source freshness, decoded artwork, program-ROM tables/palettes and runtime "
+            "gaps. Static artwork checks exclude IMG animations. Source freshness, edited-stage "
+            "appearance, program-ROM tables/palettes and runtime "
             "object/DMA usage need separate checks. Save receipts to keep them between sessions.");
         auto authoring = optimization_budget(t.document.state());
         ImGui::Text("Current document estimates: tables %llu B | palettes %llu B | %d placements",
@@ -3557,8 +3607,13 @@ class App {
                 t->game_export && !t->receipt_job.valid())
                 start_receipt(*t, t->game_export->root, true);
             if (t->receipt_job.valid() && t->receipt_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                try { t->receipt_after = std::make_unique<RomReceipt>(t->receipt_job.get()); }
+                try {
+                    auto captured = std::make_unique<RomReceipt>(t->receipt_job.get());
+                    if (t->receipt_to_baseline) t->receipt_before = std::move(captured);
+                    else t->receipt_after = std::move(captured);
+                }
                 catch (const std::exception &e) { error = e.what(); }
+                t->receipt_to_baseline = false;
             }
             if (t->pattern_search_job.valid() &&
                 t->pattern_search_job.wait_for(std::chrono::seconds(0)) ==
@@ -3979,6 +4034,22 @@ int run(int argc, char **argv) {
     AnimationSmoke animation_smoke;
     bool test_animation = smoke && argc >= 5 && std::string(argv[4]) == "--animations";
     bool test_review = smoke && argc >= 5 && std::string(argv[4]) == "--optimize-review";
+    bool test_receipts = smoke && argc >= 7 && std::string(argv[4]) == "--artwork-receipts";
+    if (test_receipts && app.tab()) {
+        auto &t = *app.tab();
+        t.receipt_before = std::make_unique<RomReceipt>(capture_rom_receipt(argv[5]));
+        t.receipt_after = std::make_unique<RomReceipt>(capture_rom_receipt(argv[6]));
+        auto artwork = compare_packed_artwork(t.receipt_before->artwork, t.receipt_after->artwork);
+        bool expect_regression = argc >= 8 && std::string(argv[7]) == "--expect-regression";
+        if (!t.receipt_before->valid || !t.receipt_after->valid || !artwork.available ||
+            (artwork.regressions != 0) != expect_regression) {
+            std::fprintf(stderr, "Artwork receipt smoke failed: %s | %s | %s\n",
+                         t.receipt_before->error.c_str(), t.receipt_after->error.c_str(),
+                         artwork.report.c_str());
+            rc = 1;
+            app.running = false;
+        }
+    }
     bool test_shared = smoke && argc >= 5 && std::string(argv[4]) == "--shared";
     bool test_palette_reuse = smoke && argc >= 5 && std::string(argv[4]) == "--palette-reuse";
     bool test_art_audit = smoke && argc >= 5 && std::string(argv[4]) == "--art-audit";
@@ -4090,6 +4161,10 @@ int run(int argc, char **argv) {
         if (test_animation)
             animation_smoke.input(app, frames);
         ImGui::NewFrame();
+        if (test_receipts && app.tab()) {
+            app.page = 3;
+            app.tab()->optimize_mode = 3;
+        }
         app.frame();
         if (test_navigation && !navigation_smoke.check(app, frames)) {
             rc = 1; app.running = false;

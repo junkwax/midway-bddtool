@@ -1,5 +1,6 @@
 #include "Core/studio_cave_export.h"
 #include "Core/studio_optimizer.h"
+#include "Core/studio_runtime_order.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -42,14 +43,10 @@ int main(int argc, char **argv) {
         Document saved;
         require(saved.load((folder / "data/MK3CAVE.BDB").u8string(), error), error);
         require(saved.state().runtime_profile == "mk3cave", "Custom profile did not survive save");
-        for (Point camera : {Point{0, 0}, Point{350, -7}, Point{700, -7}}) {
-            auto a = d.scene(camera), b = saved.scene(camera);
-            require(a.size() == b.size(), "Roundtrip lost placements");
-            for (size_t i = 0; i < a.size(); ++i)
-                require(a[i].rect.x == b[i].rect.x && a[i].rect.y == b[i].rect.y &&
-                            a[i].hflip == b[i].hflip && a[i].vflip == b[i].vflip,
-                        "Roundtrip changed runtime geometry");
-        }
+        require(d.state().objects.size() == saved.state().objects.size(),
+                "Roundtrip lost placements");
+        auto runtime = compare_runtime_order(d.state(), saved.state());
+        require(runtime.checked && runtime.equivalent, runtime.error);
         auto bad = d;
         for (size_t i = 0; i < bad.state().planes.size(); ++i)
             if (bad.state().planes[i].name == "mk3cave3") {

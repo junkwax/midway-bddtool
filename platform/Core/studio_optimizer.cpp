@@ -1,4 +1,5 @@
 #include "Core/studio_optimizer.h"
+#include "Core/studio_runtime_order.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -1559,6 +1560,10 @@ bool verify_optimization(const OptimizationPlan &plan, std::string &error) {
                                 "Reconstruction changed a color or transparency.");
             }
         }
+        if (!plan.changes.empty()) {
+            const auto runtime = compare_runtime_order(plan.before, plan.after);
+            require(runtime.checked && runtime.equivalent, runtime.error);
+        }
         return true;
     } catch (const std::exception &e) {
         error = e.what();
@@ -1568,6 +1573,9 @@ bool verify_optimization(const OptimizationPlan &plan, std::string &error) {
 std::string optimization_report(const OptimizationPlan &p) {
     std::ostringstream out;
     out << "bddtool lossless optimization\nStage: " << p.before.name << "\n";
+    if (p.verified && !p.changes.empty())
+        out << "Exact image reconstruction and static runtime Z/Y ordering passed for both X "
+               "arrival directions. Camera history and generated ROM pixels still need checks.\n";
     out << "Video data estimate: " << (p.baseline.video_bits + 7) / 8 << " -> "
         << (p.proposed.video_bits + 7) / 8 << " bytes\n";
     out << "Table estimate: " << p.baseline.table_bytes << " -> " << p.proposed.table_bytes

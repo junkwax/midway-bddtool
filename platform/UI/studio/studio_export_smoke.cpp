@@ -142,22 +142,37 @@ int game_export_smoke(const std::string &output, const std::string &input,
         for (int camera : {0, 123, 333}) {
             auto expected = doc.scene({(double)camera, 7}),
                  actual = imported.scene({(double)camera, 7});
-            std::vector<ObjectId> expected_order, actual_order;
+            // File row numbers (and therefore ObjectIds) change when export sorts
+            // X tables. Match placement content, and compare layer order separately.
+            std::vector<int> expected_order, actual_order;
+            std::vector<bool> matched(actual.size());
             for (const auto &item : actual) {
-                auto *original = doc.object(item.id);
-                if (original && original->plane >= 0 && doc.state().planes[original->plane].bound)
-                    actual_order.push_back(item.id);
+                auto *object = imported.object(item.id);
+                if (object->plane >= 0 && doc.state().planes[object->plane].bound)
+                    actual_order.push_back(object->plane);
             }
             for (const auto &item : expected) {
                 auto *object = doc.object(item.id);
                 if (object->plane < 0 || !doc.state().planes[object->plane].bound)
                     continue;
-                expected_order.push_back(item.id);
-                auto found = std::find_if(actual.begin(), actual.end(),
-                                          [&](const SceneItem &x) { return x.id == item.id; });
-                check(found != actual.end() && std::abs(found->rect.x - item.rect.x) <= 1 &&
-                          std::abs(found->rect.y - item.rect.y) <= 1,
-                      "Applied assembly re-import did not reproduce the edited scene.");
+                expected_order.push_back(object->plane);
+                size_t found = actual.size();
+                for (size_t i = 0; i < actual.size(); ++i) {
+                    const auto &candidate = actual[i];
+                    const auto *other = imported.object(candidate.id);
+                    if (!matched[i] && other->plane == object->plane &&
+                        other->object.ii == object->object.ii && candidate.palette == item.palette &&
+                        candidate.hflip == item.hflip && candidate.vflip == item.vflip &&
+                        candidate.rect.w == item.rect.w && candidate.rect.h == item.rect.h &&
+                        std::abs(candidate.rect.x - item.rect.x) <= 1 &&
+                        std::abs(candidate.rect.y - item.rect.y) <= 1) {
+                        found = i;
+                        break;
+                    }
+                }
+                check(found != actual.size(),
+                      "Applied assembly re-import did not reproduce the edited placement.");
+                matched[found] = true;
             }
             if (expected_order != actual_order) {
                 for (size_t i = 0; i < doc.state().planes.size(); i++)
@@ -166,7 +181,7 @@ int game_export_smoke(const std::string &output, const std::string &input,
                               << imported.state().planes[i].rank << '\n';
                 for (size_t i = 0; i < std::min(expected_order.size(), actual_order.size()); i++)
                     if (expected_order[i] != actual_order[i]) {
-                        std::cerr << "First differing object " << expected_order[i] << " -> "
+                        std::cerr << "First differing layer " << expected_order[i] << " -> "
                                   << actual_order[i] << '\n';
                         break;
                     }

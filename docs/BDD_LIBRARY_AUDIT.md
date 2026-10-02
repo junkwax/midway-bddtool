@@ -1,8 +1,19 @@
 # Current BDD library audit
 
 Follow-up: [isolated BATTLE/NUPOOL validation](STAGE_SAVINGS_VALIDATION.md) measured
-4,460 bytes saved with 114 matching BATTLE captures. NUPOOL candidates were rejected
-for rendering differences. The scan estimates below remain the original audit results.
+4,460 bytes saved for BATTLE and 5,592 for corrected NUPOOL, each with 114 matching
+target-stage captures. A combined diagnostic saves 10,054 bytes with 228 matching
+captures. Raw output changes pixels in unedited backgrounds. An explicit,
+isolated baseline-pixel preservation pass now retains all 479 other static
+headers, with the same 10,054-byte saving and 228 matching captures. Sprite
+checks report no new changes; 233 inherited undecodable records remain. No
+candidate has been installed. The scan estimates below remain the original audit results.
+
+The October 1 refresh reproduced the 10,054-byte saving with full baseline and
+candidate builds against a new 5,537-file snapshot, followed by the explicit
+preservation pass. All 228 captures and 479 untouched background images still
+match. The [remaining-work list](STAGE_SAVINGS_VALIDATION.md#remaining-work)
+separates build automation, runtime stress checks and editor features.
 
 The September 29, 2026 snapshot of `mk2-main` contains 68 BDD files under
 `data/` and `stage_packs/`, including nested imports. All were scanned on frozen
@@ -25,8 +36,8 @@ are reported separately to avoid counting the same artwork twice.
 | TOMB.BDD | 1,200 bytes | 4,856 bytes |
 | NUPOOL.BDD | 3,902 bytes | 3,902 bytes |
 
-The next isolated-build candidates are BATTLE and NUPOOL with their palettes
-preserved. Larger palette proposals need cycling and runtime-budget review:
+BATTLE and NUPOOL have now been tested in isolated builds with their palettes
+preserved; see the follow-up above. Larger palette proposals need cycling and runtime-budget review:
 MOUNTAIN and FOREST2 reach 45 palettes, while BATTLE reaches 44. All six best
 proposals above add 24 placements; object/DMA pressure and program-ROM table
 growth still require measurement. Forest IMG animations are outside this scan.

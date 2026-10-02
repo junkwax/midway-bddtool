@@ -166,7 +166,14 @@ int main(int argc, char **argv) {
             require(bdd_core_save_bdd((dir / "fixture.BDD").u8string().c_str(), &artwork, 1,
                                       palettes, 2, &saved) != 0,
                     saved.error);
-            fs::copy_file(root / "fixture.BDB", dir / "fixture.BDB");
+            // Exercise reconstruction without incidental overlap between flipped uses.
+            // Runtime overlap regressions have dedicated fixtures in studio_runtime_order.
+            std::ofstream placements(dir / "fixture.BDB");
+            placements << "OPTCASE 800 254 255 1 2 4\nLAYER1 0 799 0 253\n";
+            for (int i = 0; i < 4; ++i)
+                placements << std::hex << (0x4000 | (i << 4)) << std::dec << ' '
+                           << 20 + i * (artwork.w + 16) << " 20 7 " << i % 2 << '\n';
+            placements.close();
             Document d;
             require(d.load((dir / "fixture.BDB").u8string(), error), error);
             return d;

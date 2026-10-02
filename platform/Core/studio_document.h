@@ -82,6 +82,8 @@ class Document {
   public:
     bool load(const std::string &path, std::string &error);
     bool save(const std::string &path, std::string &error, bool recovery = false);
+    // Isolated export copy, sorted for LOAD2's X lookup; checks the serialized scene.
+    bool save_game_sources(const std::string &path, std::string &report, std::string &error) const;
     static Document demo();
     static Document empty();
     const State &state() const { return state_; }
