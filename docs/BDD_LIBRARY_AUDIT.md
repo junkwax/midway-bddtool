@@ -1,19 +1,32 @@
 # Current BDD library audit
 
-Follow-up: [isolated BATTLE/NUPOOL validation](STAGE_SAVINGS_VALIDATION.md) measured
-4,460 bytes saved for BATTLE and 5,592 for corrected NUPOOL, each with 114 matching
-target-stage captures. A combined diagnostic saves 10,054 bytes with 228 matching
-captures. Raw output changes pixels in unedited backgrounds. An explicit,
-isolated baseline-pixel preservation pass now retains all 479 other static
-headers, with the same 10,054-byte saving and 228 matching captures. Sprite
-checks report no new changes; 233 inherited undecodable records remain. No
-candidate has been installed. The scan estimates below remain the original audit results.
+**October 3 follow-up:** [TOMB testing](TOMB_SAVINGS_VALIDATION.md) measured a
+4,512-byte bank increase from the original 566-byte local saving estimate because
+an image already shared with other stages was subdivided. Protecting shared
+images yields a 174-byte packed saving, but three runtime transition captures
+differ. TOMB remains on hold. [MOUNTAIN testing](MOUNTAIN_SAVINGS_VALIDATION.md)
+confirms 610 packed bytes saved, but ladder and Yoteigai Tor captures differ and
+combat DMA losses increase. It also remains on hold. [SPIRAL validation](SPIRAL_SAVINGS_VALIDATION.md)
+measures 5,348 packed bytes saved with zero added placements and unchanged
+unedited art, but three runtime captures differ and Outer Haven DMA losses
+increase. It remains on hold; a single-image palette experiment is next. Estimates below are
+not additive packed savings.
 
-The October 1 refresh reproduced the 10,054-byte saving with full baseline and
-candidate builds against a new 5,537-file snapshot, followed by the explicit
-preservation pass. All 228 captures and 479 untouched background images still
-match. The [remaining-work list](STAGE_SAVINGS_VALIDATION.md#remaining-work)
-separates build automation, runtime stress checks and editor features.
+**October 2: work has moved to other stages.** The
+[fresh focused audit](NEXT_STAGE_SAVINGS.md) checks MK3CAVE, TOMB, SPIRAL and
+MOUNTAIN at zero, four and 24 added placements. The [cave build follow-up](MK3CAVE_VALIDATION.md#october-2-fresh-build-and-combat-validation)
+reproduced 3,096 packed bytes saved but found runtime differences; TOMB was tested
+subsequently as recorded above.
+Most MOUNTAIN proposals fail the stricter static draw-order
+verification, so its historical estimates below must not be treated as current
+verified opportunities.
+
+The [BATTLE/NUPOOL experiments](STAGE_SAVINGS_VALIDATION.md) remain on hold.
+The earlier 10,054-byte result passed limited captures but failed broader runtime
+checks. Smaller candidates still show dense round-introduction differences.
+NUPOOL's rotating acid bodies are background animations; the user has deferred
+further savings work there. No candidate has been installed. The September scan
+and totals below are historical, not a list of integration-approved changes.
 
 The September 29, 2026 snapshot of `mk2-main` contains 68 BDD files under
 `data/` and `stage_packs/`, including nested imports. All were scanned on frozen

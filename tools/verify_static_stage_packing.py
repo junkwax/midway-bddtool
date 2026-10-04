@@ -78,7 +78,8 @@ def inspect(root, stage):
     reader = module(root / 'tools/stage_preview.py', 'preview')
     video = module(root / 'makevrom.py', 'video')
     images, order, palettes = reader.load_bdd(root / 'data' / (stage + '.BDD'))
-    label = {'BATTLE': 'leHDRS', 'NUPOOL': 'OLHDRS'}[stage]
+    label = {'BATTLE': 'leHDRS', 'NUPOOL': 'OLHDRS', 'TOMB': 'HDRS',
+             'MOUNTAIN': 'tainHDRS', 'SPIRAL': 'alHDRS'}[stage]
     table = (root / 'tmp/load2/BGNDTBL.MK7').read_text()
     tables = header_tables(table, reader._num)
     headers = tables[label]

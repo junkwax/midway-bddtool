@@ -10,8 +10,23 @@ namespace fs = std::filesystem;
 // Analysis only: this utility never applies a proposal or saves a document.
 int main(int argc, char **argv) {
     try {
-        if (argc != 3)
-            throw std::runtime_error("Usage: studio_savings_audit source.BDD new-report-directory");
+        if (argc < 3)
+            throw std::runtime_error("Usage: studio_savings_audit source.BDD new-report-directory "
+                                     "[--max-added-objects=COUNT]");
+        int max_added_objects = 24;
+        for (int i = 3; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg.rfind("--max-added-objects=", 0) != 0)
+                throw std::runtime_error("Unknown argument: " + arg);
+            const auto value = arg.substr(20);
+            if (value.empty() || value.find_first_not_of("0123456789") != std::string::npos)
+                throw std::runtime_error("Invalid added-object limit (expected 0..256)");
+            size_t used = 0;
+            const int count = std::stoi(value, &used);
+            if (used != value.size() || count > 256)
+                throw std::runtime_error("Invalid added-object limit (expected 0..256)");
+            max_added_objects = count;
+        }
         auto folder = fs::absolute(fs::u8path(argv[2]));
         if (fs::exists(folder))
             throw std::runtime_error("Report directory already exists");
@@ -49,11 +64,13 @@ int main(int argc, char **argv) {
                   << "\npalettes=" << base.palettes << "\nbaseline_bytes=" << base.video_bits / 8
                   << "\nundeduplicated_bytes=" << payload_sum << "\nunplaced_images=" << unused
                   << "\nunplaced_bytes=" << unplaced << "\nunassigned_placements=" << unassigned
-                  << "\npaired=" << doc.state().has_bdb << "\nnotice=" << doc.notice() << '\n';
+                  << "\npaired=" << doc.state().has_bdb
+                  << "\nmax_added_objects=" << max_added_objects
+                  << "\nnotice=" << doc.notice() << '\n';
         for (int mode = 0; mode < 4; ++mode) {
             OptimizeOptions options;
             options.deep = true;
-            options.max_added_objects = 24;
+            options.max_added_objects = max_added_objects;
             options.compact_palettes = mode >= 2;
             const std::string name = mode == 0   ? "preserve"
                                      : mode == 1 ? "preserve_shared"

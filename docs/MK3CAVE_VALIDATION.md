@@ -1,5 +1,13 @@
 # MK3CAVE: measured lossless optimization
 
+**October 2 follow-up: the 24-added-placement candidate is on hold.** A fresh
+snapshot reproduces the 3,096-byte packed saving and all 69 navigation/water
+captures, but broader projectile and natural-combat probes find 20 changed
+captures. Both baseline and candidate full builds also stop at an unrelated
+shock-palette guard. See [the fresh validation](#october-2-fresh-build-and-combat-validation).
+The September results below describe narrower coverage and do not approve
+integration of this candidate.
+
 Validated September 29, 2026 in isolated MK2 build snapshots. The optimized stage
 saved **3,096 bytes of packed video data**, while all 69 captured MAME screens
 matched the baseline pixel-for-pixel. The live game project was not an output
@@ -170,3 +178,99 @@ makes the check pass without artwork or guard changes. The [fresh BATTLE/NUPOOL
 validation](STAGE_SAVINGS_VALIDATION.md#october-1-fresh-source-full-build-validation)
 now includes full baseline/candidate builds through Phase E. It does not replace
 the cave helper's own end-to-end validation described above.
+
+## October 2: fresh build and combat validation
+
+The new isolated snapshot contains **5,592 source/build files**. Separate
+baseline and candidate copies use the current native protected exporter; no
+live source files or installed ROMs are output targets. Export retained source
+coordinates, seven palettes and the locked cavern/water layer, sorted the
+runtime object tables by X, and passed both static Z/Y arrival-order checks.
+
+Both copies completed LOAD2 and assembly/link, then failed Phase D identically:
+`ALLDUDES.IMG: no palette record for BGELPUR_P`, from
+`tools/make_shock_palettes.py --check`. The guard remains enabled and the
+candidate helper emitted no success receipt. `MK2_GIT_DIR` was supplied for
+reference-history checks; the previous Cage-logo failure was not the stopping
+condition in this run. Fixing the missing shock-palette source is separate from
+cave optimization.
+
+The already generated outputs were independently checked and packaged into
+**diagnostic** ZIPs with `--no-install`. These are not successful full builds.
+CRC adjustments were restricted to padding outside every verified IRW extent;
+all occupied video bytes in both ZIPs match the native-verified chips.
+
+Packed results:
+
+- Cave payload: **203,194 → 200,098 bytes**, saving **3,096 bytes**.
+- All four world-space layers, seven palettes, eight water spans, wave data,
+  floor pixels and 4,640 baseline / 5,497 candidate image rows match.
+- Only MK3CV1–4 differ among 107 IRW files; all 167 source TBL files match.
+  The only changed ASM file is the generated `MK3CAVBG.ASM`.
+- The linked COFF grows by 432 bytes. The native receipt verifies all twelve
+  video chip lanes and 561 unchanged MK7 static background images.
+- Bank 1 used bytes: 4,124,742 → 4,121,646. Spare capacity inside declared
+  slots grows by 3,096 bytes; the largest unreserved gap remains 6,878 bytes.
+  Slot boundaries are unchanged, so the saving is not automatically available
+  to neighboring assets.
+
+The runtime harness now accepts cave scenarios (stage 25 decimal / `19` hex).
+Captured RGB images are compared in full, with matching relative frame/state
+traces. Controlled projectile/fatality probes manipulate health and position;
+natural-play probes set the matchup before fighting, then use walking inputs
+against the CPU with natural damage and dense transition captures.
+
+| Check | Matching captures | Result |
+| --- | ---: | --- |
+| Stage selection, camera stops and 64 water phases | 69 / 69 | Pass |
+| Raiden projectile test | 231 / 240 | Fail: nine changed frames |
+| Baraka decapitation | 43 / 43 | Pass |
+| Liu Kang versus Jax, natural play/transitions | 125 / 129 | Fail: four changed frames |
+| Baraka versus Scorpion, natural play/transitions | 122 / 129 | Fail: seven changed frames |
+
+Baseline-versus-itself controls for the three failing scenarios match **498/498**
+captures, including identical measured pressure and natural-play state. This
+reproduces the baseline independently and rules out observed capture variation
+in those control runs; it does not identify the candidate's drawing defect.
+
+The first projectile difference occupies the lower screen (x 6–171, y 207–250,
+1,217 changed pixels), including ground/shadow rendering. The first Kang/Jax
+transition difference includes the foreground spikes at x 51–399, y 178–222.
+The precise cause is not isolated; neither correct static reconstruction nor
+the passing water animation explains away these frame differences.
+
+Runtime object use increases by 13–15 at the measured minima. Queue-word peaks
+increase by 48–72, while remaining below the 3,000-word capacity. No new queue
+overflow or miscellaneous DMA drop was measured, and late-frame/lost-entry
+counters do not increase. The candidate still fails because full-screen pixels
+change. Both natural-play cases traverse camera x 0–350 and include natural
+damage and round transitions; they do not establish every possible camera or
+combat history.
+
+The next independent savings candidate is **TOMB**, using the four-placement
+proposal in [the next-stage list](NEXT_STAGE_SAVINGS.md). Cave integration stays
+on hold; smaller cave proposals remain unbuilt alternatives, not validated fixes.
+
+Evidence is local under `tmp/cave-refresh-20261002/`:
+
+- `snapshot.json`, `source/`, `baseline/`, `candidate/` and `package/` pin the
+  source snapshot and protected export. Apply backups remain in the candidate.
+- `baseline-build.log` and `candidate-build.log` retain the full-build failures.
+- `packed-comparison.json`, both `.romreceipt` files and both
+  `*-diagnostic.json` receipts record packed checks and diagnostic ZIP hashes.
+- `water-runtime/comparison.json` and `runtime/summary.json` record the passing
+  narrow check and failing broader checks, with individual PNGs and logs.
+- `runtime-control/` holds baseline-versus-itself checks for the failing cases.
+- `SUMMARY.json` pins the final artifact hashes and hold decision;
+  `source-recheck-final2.json` records live, reference and frozen-copy rechecks.
+
+All 5,592 frozen source files and all 654 reference inputs retain their hashes.
+The live tree changed during validation: `data/MKSHOCK.IMG` changed, and
+`data/GORO2.IMG` and `data/MK3BLOOD.IMG` appeared after capture. These later inputs
+were not part of either build. Results apply to the frozen snapshot, not the
+subsequently changed live tree. No live file or installed ROM was edited by this
+validation.
+
+Validation tooling: the four native cave/optimizer/runtime-order/check tests and
+all 11 Python runtime-harness tests pass. Tool tests passing is separate from
+the candidate's failed runtime comparisons.

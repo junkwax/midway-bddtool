@@ -326,12 +326,12 @@ add_executable(bdd_rom_verify platform/studio_rom_verify.cpp)
 target_link_libraries(bdd_rom_verify PRIVATE bdd_studio_document)
 add_dependencies(bddview bdd_rom_verify)
 add_custom_target(studio_build_adapter ALL
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:bddview>/verified_build"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:bdd_rom_verify>/verified_build"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/reviewed_stage_build.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/preserve_stage_pixels.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_static_stage_packing.py"
-        "$<TARGET_FILE_DIR:bddview>/verified_build"
+        "$<TARGET_FILE_DIR:bdd_rom_verify>/verified_build"
 )
 add_dependencies(bddview studio_build_adapter)
 if(BUILD_TESTING)

@@ -1,5 +1,29 @@
 # BATTLE and NUPOOL isolated savings validation
 
+**Current priority: move to other stages.** NUPOOL's bodies that fall into the
+acid and change each round are background animations. At the user's request,
+NUPOOL savings work and the combined BATTLE/NUPOOL investigation are deferred.
+The [fresh next-stage audit](NEXT_STAGE_SAVINGS.md) covers MK3CAVE, TOMB, SPIRAL
+and MOUNTAIN. The [fresh cave validation](MK3CAVE_VALIDATION.md#october-2-fresh-build-and-combat-validation)
+reproduced its saving but found combat/transition differences. The
+[TOMB follow-up](TOMB_SAVINGS_VALIDATION.md) saves 174 packed bytes after retaining
+cross-stage sharing, but still differs in three round-redraw captures. The
+[MOUNTAIN follow-up](MOUNTAIN_SAVINGS_VALIDATION.md) confirms 610 packed bytes
+saved but finds ladder/Peak rendering differences and higher combat DMA losses.
+It is also on hold. The [SPIRAL validation](SPIRAL_SAVINGS_VALIDATION.md)
+measures 5,348 packed bytes saved with no added placements and all unedited art
+matching. Three runtime captures differ and Outer Haven DMA losses increase;
+it remains on hold. Next is a single-image palette experiment to isolate those
+failures. This changes the
+work order, not the validation status of the experiments below.
+
+**October 2 status: the combined candidate remains on hold after broader testing.**
+Reducing subdivisions removes the measured pressure increases, but dense capture
+still finds round-introduction differences—even in a zero-added-placement control.
+The earlier 10,054-byte candidate remains rejected. Nothing has been installed
+into the live game. See [the reduced-cost experiments](#october-2-reducing-subdivision-cost)
+for the latest results and why placement count alone is insufficient.
+
 September 2026 experiments use separate copies under
 `tmp/stage-savings-validation/`. No candidate was applied to the live game or
 installed into MAME. The raw candidates change pixels in unedited backgrounds.
@@ -332,12 +356,24 @@ Rejecting the experiment still requires no live-file rollback.
 
 ## Remaining work
 
-1. **Reproducible editor build workflow.** Integrate baseline capture, reviewed
-   preservation where needed, final chip/artwork checks and no-install packaging
-   into one recorded job. Refuse stale inputs and unreviewed corrections. Keep a
-   deterministic LOAD2 repair and authored-art corrections as separate projects.
-2. **Broader runtime validation.** Exercise longer combat, effects-heavy encounters
-   and fatalities before promoting candidates or reallocating their saved space.
+**Active next step:** follow the [next-stage work order](NEXT_STAGE_SAVINGS.md),
+isolating SPIRAL's runtime differences with one palette-compacted image (start
+with image 51), then repeating the failing Portal/Outer Haven probes. The BATTLE/NUPOOL transition investigation
+below is retained for a future return, not the next task.
+
+1. **Build workflow follow-up.** Prepared MK7 preservation jobs now run from the
+   editor with pinned inputs, final chip/artwork checks and no-install packaging
+   (see below). Initial job preparation remains on the command line. A future
+   preparation UI and support for other candidate types can build on this path.
+   Deterministic LOAD2 repair and authored-art corrections remain separate projects.
+2. **Deferred: resolve transition drawing differences.** The BATTLE screen-edge regression
+   is resolved. Smaller candidates eliminate the measured pressure increases,
+   but dense capture still exposes round-introduction differences, including in
+   a zero-added-placement control. Isolate background reload and drawing timing
+   around `MAIN.ASM:play_1_round` / `do_a11_background` and the queue reset in
+   `MKDISP.ASM:init_dma_regs`; no engine fix has been made. Placement limits alone
+   do not establish equivalence. Rerun the dense checks before live integration.
+   More matchups, active attack sequences and camera histories still remain.
 3. **Library-wide savings view.** Bring the existing read-only batch audit into the
    editor, distinguish source masters from generated packs, and rerun estimates
    through the stricter runtime-order verifier. The September estimates are historical.
@@ -348,3 +384,445 @@ Rejecting the experiment still requires no live-file rollback.
 
 No candidate has been promoted or installed. LOAD2 buffer-context and bit-overflow
 behavior remain separate from the static runtime-order model.
+
+## Reviewed rebuild workflow
+
+The editor now has **Build & Check → Reviewed rebuild** for prepared MK7 jobs.
+See [Reviewed stage rebuilds](REVIEWED_STAGE_BUILDS.md) for preparation and use.
+Jobs pin the baseline, raw candidate, retail reference and verification tools;
+each run creates independent scratch copies and repeats the full build,
+explicitly reviewed preservation, chip/artwork checks, strict sprite comparison
+and no-install packaging. Only a fully checked run receives `SUCCESS.json`.
+Initial job preparation remains a command-line operation.
+
+The first end-to-end run exposed a separate packaging defect: the existing
+CRC fallback recognized zero-filled bytes inside `SKSOUL4.IRW` as padding and
+changed 16 occupied video bytes. Raw chips and decoded-art checks passed, but
+the new ZIP check rejected the package. This does not establish visible sprite
+corruption, and previous BATTLE/NUPOOL screenshots did not cover all affected
+artwork. The rejected run remains at `tmp/reviewed-stage-run/`, without a success
+receipt.
+
+The adapter now supplies the existing packager with checksum patch locations
+outside every verified video payload, records the offsets, and verifies both
+occupied bytes and emulator CRC targets after packaging. This adjustment is
+limited to the isolated packaging process; the live `crc_spoof.py` and game
+sources remain unchanged. Native and Python regressions cover process arguments,
+stale input/tool rejection, failed-build evidence, source preservation and the
+zero-filled-artwork packaging case.
+
+The corrected job completed from fresh copies at
+`tmp/reviewed-stage-run-safe-crc/`, using
+`tmp/reviewed-stage-job-safe-crc/job.json`. Its full build passed through Phase E;
+raw MK7/header hashes and the one-bit preservation receipt reproduced exactly.
+Final checks report **10,054 bytes saved**, **479 unchanged background images**,
+zero unedited-stage regressions, and the same 10,268 sprite records with no pixel
+changes/additions/removals. The ZIP changes 48 video padding bytes and **zero
+occupied video bytes**, and all twelve video CRCs match the emulator targets.
+The original input inventories still match their pinned hashes.
+
+The new ZIP was also run through the two existing emulator probes: NUPOOL
+114/114 and BATTLE 114/114 full RGB captures match the fresh-source baseline.
+Sampled free-object minima remain 242 and 291, respectively; both have zero
+sampled DMA drops and peak overload 2. `emulator-captures.json` records these
+comparisons alongside `SUCCESS.json`, step logs, ROM receipts, the raw MK7
+backup and preservation artifact. The 233 inherited undecodable sprite records
+and longer combat/effects/fatality coverage remain limitations.
+
+Validation: Release build, all 13 native CTests, 11 reviewed-build Python tests
+(plus the existing 14 preservation/packing tests), and the editor UI smoke pass.
+No candidate or packaging-script change was installed into the live game.
+
+## October 2: extended runtime validation
+
+`tools/stage_runtime_validation.py` now runs the game's existing controlled Lua
+probes against independently selected baseline/candidate ROMs. It hashes the
+ROMs, emulator, maps and probe inputs, directs logs/captures/emulator state into
+a new output folder, and compares full RGB screenshots. Added metrics sample
+the free-object list, DMA drops, overload and stage identity on every fighting
+frame. Timeouts, missing success markers, incorrect stages, broken/exhausted
+object lists, changed pixels, DMA drops or increased peak overload prevent a
+passing report. Capture timing is compared relative to the fighting captures;
+a constant boot-frame offset is allowed.
+
+The completed six-case run is `tmp/runtime-stress-20261002-final/`. It compares
+the October 1 baseline ZIP with `tmp/reviewed-stage-run-safe-crc/rom/mk2.zip`.
+
+| Controlled scenario | Matching RGB captures | Minimum free objects, baseline → candidate | Result |
+| --- | ---: | ---: | --- |
+| NUPOOL, repeated Raiden lightning and uppercuts | 240 / 240 | 228 → 214 | Pass |
+| NUPOOL, Baraka decapitation | 43 / 43 | 269 → 253 | Pass |
+| BATTLE, repeated Raiden lightning and uppercuts | **167 / 240** | 301 → 278 | **Fail: right-edge pixels** |
+| BATTLE, Baraka decapitation | 43 / 43 | 317 → 294 | Pass |
+| NUPOOL stage fatality, victim x=310, attacker on right | 42 / 42 | 237 → 224 | Pass |
+| NUPOOL stage fatality, victim x=830, attacker on left | 45 / 45 | 246 → 232 | Pass |
+
+Both combat cases measure 7,203 fighting frames, exercise three camera positions
+twice, and observe 79 lightning specials plus 40 uppercuts per build. Baraka's
+probe confirms the fatality and follow-through pose; the Dead Pool probe observes
+the body fall, acid splash and skeleton after triggering the stage fatality.
+All six candidates have zero measured DMA drops, peak overload 2 (same as
+baseline), correct stage identity and no broken free-object chains.
+
+The BATTLE mismatches contain 65–96 changed pixels per affected capture, all
+within the rightmost three screen columns (x=397..399). The first is
+`lightning-2/*/screens/mk2/0043.png`; `lightning-2/diff-0043.png` shows the
+baseline, candidate and RGB difference. This points to a screen-edge behavior
+that the whole-layer static compositor and previous camera stops did not cover.
+At this point the exact cause had not been established; the follow-up below
+isolates it to placement-row order. No pixel tolerance or cropped comparison
+was used to pass it. The overall `summary.json` reports `passed: false`, and
+`FAILED.txt` retains the failure. The prior build receipt remains a record of
+packing verification, not a runtime approval.
+
+These probes set fighter selection, health, timer and/or positions in emulator
+RAM. They cover selected effects, camera positions and fatalities, not normal
+match pacing, all camera histories, all fighters or long tournament sessions.
+Combat snapshots occur every 30 measured frames, with five-frame sampling while
+the death flag is active; the stage-fatality probe also takes event snapshots.
+The same inherited undecodable sprite coverage limitations still apply.
+Early launcher trials that did not reach a complete probe are retained separately
+and are not counted as passing evidence. Four harness regression tests pass,
+covering timing alignment, pixel/pressure failures, incomplete captures and
+unexpected probe versions. Live game sources and installed ROMs remain untouched.
+
+To run all current cases from the tool workspace (Pillow and the local game's
+named Lua probes are required; the runner now includes four input-driven cases):
+
+```powershell
+python -B tools/stage_runtime_validation.py BASELINE_CHECKOUT CANDIDATE_CHECKOUT BASELINE_ROM_DIR/mk2.zip CANDIDATE_ROM_DIR/mk2.zip MAME_EXE NEW_OUTPUT_FOLDER
+```
+
+Use repeated `--scenario` options to narrow a run, for example
+`--scenario lightning-2`. Every run requires a new output folder. Review
+`inputs.json`, `summary.json`, each case's `comparison.json`, and the retained
+screenshots/logs before accepting a candidate. The failed candidate above remains
+rejected; the separate corrected candidate and its evidence follow.
+
+## October 2: BATTLE placement-order correction
+
+Runtime tracing found unsorted X rows in the experimental BATTLE source's BAT4
+and BAT7 modules. In BAT4 a mirrored split emitted X=687 before X=627. LOAD2
+preserves this row order, while `BAKGND.ASM`'s `disp_add` uses `bsrch1stxb` and
+stops scanning beyond the viewport. At the failing camera positions the visible
+rock piece was skipped. The missing pixels were a placement lookup failure;
+the packed artwork itself was unchanged.
+
+The new `edge-20261002-candidate/` copy under `tmp/stage-savings-validation/`
+changes only BATTLE.BDB row order, stably sorting X then Y. Row contents, module
+bounds, palettes and BATTLE.BDD remain unchanged. A full build through Phase E
+produces the same raw MK7 payload and decoded image headers as the prior raw
+candidate. Placement tables change as intended. All 5,540 inventoried files in
+the prior candidate still match their original hashes.
+
+The reviewed build adapter now checks edited modules for nondecreasing X order
+when preparing a job, before a run creates scratch copies, and after building.
+It rejects the old candidate and accepts the corrected BATTLE/NUPOOL pair.
+Existing editor game exports already sort placements; this guard also covers
+externally prepared jobs. It refuses invalid input rather than silently changing
+the reviewed source. A regression test covers the mirrored split, equal-X rows
+and independent module origins. All 30 Python tests pass across reviewed builds,
+preservation, packing and runtime validation, and the updated adapter is bundled
+beside the editor.
+
+The new pinned job, `tmp/battle-edge-reviewed-job/job.json`, completed at
+`tmp/battle-edge-reviewed-run/`. Its `SUCCESS.json` records:
+
+- **10,054 bytes saved**, with the same explicit one-bit preservation correction.
+- All twelve video chips verified; **479 unchanged background images**, zero
+  unedited-stage regressions, and two edited stages requiring runtime review.
+- 10,268 sprite records, zero changed/additional/removed records, and one
+  relocation with identical pixels. The same 233 inherited undecodable records
+  remain outside pixel coverage.
+- Correct emulator CRCs, zero occupied-video-byte changes during packaging,
+  and 48 padding bytes changed for CRC correction.
+- Unchanged pinned source inputs; no live installation.
+
+The packaged ZIP SHA256 is
+`6e6263cefa4952e81796fa5c8002d8a08a25683ae77ffbab067b24283859778b`.
+The six-case runtime comparison at `tmp/battle-edge-runtime/` uses this exact
+ZIP and its built checkout against the October 1 baseline:
+
+| Controlled scenario | Matching RGB captures | Minimum free objects, baseline → candidate |
+| --- | ---: | ---: |
+| BATTLE, repeated Raiden lightning and uppercuts | **240 / 240** | 301 → 278 |
+| BATTLE, Baraka decapitation | 43 / 43 | 317 → 294 |
+| NUPOOL, repeated Raiden lightning and uppercuts | 240 / 240 | 228 → 214 |
+| NUPOOL, Baraka decapitation | 43 / 43 | 269 → 253 |
+| NUPOOL stage fatality, victim x=310, attacker on right | 42 / 42 | 237 → 224 |
+| NUPOOL stage fatality, victim x=830, attacker on left | 45 / 45 | 246 → 232 |
+
+All **653/653 full RGB captures match**, with no tolerance or cropped comparisons.
+All cases have zero sampled DMA drops, peak overload 2 (matching baseline),
+correct stage identity and intact free-object lists. Each combat case measures
+7,203 fighting frames. The new runtime `summary.json` reports `passed: true`;
+the earlier failed report is retained unchanged.
+
+These controlled RAM setups cover selected matchups, effects and camera positions.
+They do not establish equivalence for every frame, camera history or ordinary
+match. Candidate object usage remains higher than baseline, as the minima show.
+The live build and installed ROMs remain untouched, and the measured saving has
+not been reallocated. Rejecting this experiment requires no live rollback.
+
+## October 2: natural-play and object-drawing validation
+
+The runner now includes four `play-*` scenarios: Liu Kang versus Jax and Baraka
+versus Scorpion on BATTLE and NUPOOL. They use the game's
+`battle_stability_sweep.lua` with matchup/stage setup before combat, a CPU
+opponent, and natural health, timer and round outcomes. P1 walks left first,
+reversing every 600 frames through ordinary input fields. No fighter positions,
+health or winner state are pinned during fighting. This is scripted walking
+against the CPU, not a human playthrough or comprehensive attack coverage.
+
+Optional local sweep add-ons are disabled, inherited probe environment settings
+are cleared, and the selected probe sources are hashed. Measurements require
+at least 600 fighting samples within a 2,400-frame observation window, at least
+100 pixels of camera travel, actual damage and the requested matchup. Capture
+traces compare camera/health during fighting and state/timing through natural
+round and result transitions. Snapshots continue after combat ends.
+
+The first trials exposed coverage gaps rather than passing evidence: one natural
+KO ended before an arbitrary 1,200-fighting-frame minimum; the original late
+walking reversal also left the BATTLE/Jax camera within only 28 pixels. The final
+tests retain a full observation window after a KO and use repeated, earlier
+reversals. No pixel tolerance or transition exclusion was introduced.
+
+The repeated BATTLE/Baraka mismatch also exposed a missing measurement.
+`qdma_drops` counts the miscellaneous queue, not abandoned object drawing.
+`MPROC.ASM` and `MKDISP.ASM:init_dma_regs` expose separate counters:
+
+- `deep_dmaq`: maximum object queue depth, in words (six words per entry).
+- `dmaq_over`: object queue overflows.
+- `dmaq_late`: frames starting while the previous object queue still had work.
+- `dmaq_lost`: maximum number of entries abandoned by a queue reset.
+
+The harness now resets these write-only diagnostic counters at the first sampled
+fight and reads them through subsequent transitions and emulator exit. It refuses
+missing measurements, any candidate object overflow, queue depth above the
+500-entry capacity, or increases in late frames or worst abandoned-entry count.
+Inherited late drawing is recorded and compared, not described as zero drops.
+CPU overload and miscellaneous drops are also monitored outside fighting.
+
+The complete rerun is `tmp/runtime-pressure-20261002/`, using the same corrected
+candidate ZIP recorded above. All input hashes still match after the run.
+
+| Scenario | Matching RGB captures | Worst abandoned entries, baseline → candidate | Decision |
+| --- | ---: | ---: | --- |
+| BATTLE, walking Kang / CPU Jax | 80 / 80 | 104 → 100 | Pass |
+| BATTLE, walking Baraka / CPU Scorpion | **81 / 82** | 111 → 108 | **Fail: round-introduction pixels** |
+| NUPOOL, walking Kang / CPU Jax | 80 / 80 | **111 → 117** | **Fail: drawing pressure** |
+| NUPOOL, walking Baraka / CPU Scorpion | 81 / 81 | **118 → 128** | **Fail: drawing pressure** |
+| BATTLE, repeated lightning / uppercuts | 240 / 240 | 0 → 0 | Pass |
+| BATTLE, decapitation | 43 / 43 | 136 → 132 | Pass |
+| NUPOOL, repeated lightning / uppercuts | 240 / 240 | 0 → 0 | Pass |
+| NUPOOL, decapitation | 43 / 43 | **125 → 138** | **Fail: drawing pressure** |
+| NUPOOL stage fatality, attacker on right | 42 / 42 | 0 → 0 | Pass |
+| NUPOOL stage fatality, attacker on left | 45 / 45 | 0 → 0 | Pass |
+
+**975/976 sampled captures match, but only six of ten scenarios pass all checks.**
+All have zero object-queue overflows and miscellaneous-queue drops. Every case
+with nonzero abandoned entries has one late-drawing frame in each build. CPU
+peak overload is 2 except the natural BATTLE/Jax case, where both builds reach 3.
+No wrong fighting stages, changed matchups or broken free-object chains occur.
+The natural BATTLE camera ranges from -2 to 442; NUPOOL ranges from 0 to 373.
+All four input-driven cases observe P1's health reach zero without a health pin.
+
+The visible failure repeats at `play-baraka-scorpion-2/*/screens/mk2/0036.png`,
+frame 2516, `gs_round_intro` (7). Its 10,488 differing pixels include the upper
+background and HUD. `tmp/natural-play-battle-repeat/` reproduces it, while
+`tmp/natural-play-battle-baseline-control/` compares the baseline against itself
+with 82/82 matching captures. This is not explained by baseline capture variation.
+
+`tmp/natural-transition-trace/` adds diagnostic captures on every frame from
+2500 through 2530. Both builds abandon queued work at frame 2514 during round
+setup. The screenshots differ on frames **2515 and 2516**, then match from 2517
+through the end of that trace window. Game state and health agree on every traced
+frame. Queue depth at frame 2516 is 618 → 750 words. The trace narrows the problem
+to round setup/drawing completion; it does not yet prove which subdivision or
+draw operation should change. The diagnostic comparison has three differing
+captures because frame 2516 is captured by both the normal and extra sampler.
+Its wrapper is retained at `tmp/trace_natural_transition.py`, and its generated
+Lua, logs and difference images are retained with the output.
+
+Ten runtime-harness regression tests pass, including natural-play coverage,
+negative camera coordinates, optional add-on exclusion, state divergence,
+object-queue pressure increases, missing measurements and inherited late drawing.
+The earlier six-case 653/653 pixel result remains accurate for its coverage;
+its limited counters did not establish transition drawing equivalence.
+
+The 10,054-byte saving is still measured, but the candidate remains on hold.
+Next: isolate and reduce the placement/draw-cost contribution in a new scratch
+candidate, then rerun this ten-case matrix. No live game source, installed ROM,
+or source candidate was changed by these tests, and no savings were reallocated.
+
+## October 2: reducing subdivision cost
+
+The candidate helper now accepts `--max-added-objects=COUNT` (0–256, default 24)
+and reports estimated bytes saved and added placements for each accepted image.
+The limit applies to the whole stage, including when proposals are evaluated
+one image at a time. Existing runtime-order, unaligned-input and shared-artwork
+exclusions still apply. This is a limit on authored placements, not a guarantee
+about visible objects or DMA completion at every camera position.
+
+The original candidates add 24 placements to each stage. Searches from the
+unchanged October 1 baseline give these smaller alternatives:
+
+| Stage | Added-placement limit | Accepted image IDs | Estimated saving |
+| --- | ---: | --- | ---: |
+| BATTLE | 0 | 27 | 18 bytes |
+| NUPOOL | 0 | 84, 221 | 26 bytes |
+| BATTLE | 4 | 21, 27 | 674 bytes |
+| NUPOOL | 4 | 21, 84, 30, 221 | 344 bytes |
+
+The four-placement pair retains the original palettes and module bounds, with
+63 BATTLE placements (originally 59) and 231 NUPOOL placements (originally 227).
+Its first full build passes through Phase E and measures **1,024 bytes saved**,
+compared with the 1,018-byte source estimate. BATTLE's four and NUPOOL's three
+inherited authored/packed discrepancies retain their baseline decoded hashes.
+
+The new packing layout changes one pixel in unchanged MK1CAVE artwork:
+`fu7HDRS` header 26, pixel (0,0), baseline index 57 versus raw candidate 56.
+The preservation pass restores that one physical bit plus the IRW checksum,
+checks 570 sprite spans, and verifies the other static background tables.
+The explicit selection is `--keep MK1CAVE:fu7HDRS:26`; the prior NUENT selection
+is specific to the larger candidate and must not be reused blindly.
+
+Sources and audit output are retained at `tmp/draw-cost-battle-four/` and
+`tmp/draw-cost-nupool-four/`; the built raw copy is
+`tmp/stage-savings-validation/draw-cost-four-candidate/`.
+`tmp/draw-cost-four-inputs.json` pins the baseline inventory and replacement source
+hashes, and `tmp/draw-cost-four-preservation/preservation.json` records the repair.
+The prepared job is `tmp/draw-cost-four-ready-job/job.json`. The first preparation
+attempt correctly refused stale copied video chips; after running makerom and
+makevrom in the scratch copy, preparation passed. No reviewed source was changed
+to bypass the check.
+
+Individual four-placement searches also find larger estimated savings than the
+current largest-image-first selection: BATTLE image 42 saves 1,280 bytes, image 6
+saves 922, and image 9 saves 832; NUPOOL image 96 saves 616 and image 57 saves 176.
+These are separate alternatives under `tmp/draw-cost-profile/`, not additive
+savings or runtime-approved candidates. Ranking by saved bytes per added
+placement warrants a separate comparison after establishing the runtime result
+for the first reduced-cost pair.
+
+Validation: candidate helper Release build, rejected negative/over-limit/malformed
+CLI limits, and all three optimizer/runtime-order/validation CTests pass.
+The independent reviewed rebuild completed at `tmp/draw-cost-four-reviewed-run/`:
+479 unchanged background images, zero regressions, unchanged decoded sprite
+identities, all twelve video chips checked, and zero occupied video bytes altered
+by packaging. The ZIP SHA256 is
+`daac55007bd83a8fd09470704f5297aab17f24c074edd0fa2cb50d7bfa79e531`.
+
+The four previously failing scenarios were rerun at `tmp/draw-cost-four-runtime/`:
+
+| Scenario | Matching RGB captures | Worst abandoned entries, baseline → candidate | Decision |
+| --- | ---: | ---: | --- |
+| BATTLE, walking Baraka / CPU Scorpion | 82 / 82 | 111 → 110 | Pass |
+| NUPOOL, walking Kang / CPU Jax | 80 / 80 | 111 → 112 | Fail: drawing pressure |
+| NUPOOL, walking Baraka / CPU Scorpion | 81 / 81 | 118 → 120 | Fail: drawing pressure |
+| NUPOOL, decapitation | 43 / 43 | 125 → 125 | Pass |
+
+All 286 sampled captures now match, but the combined four-placement candidate
+still fails two pressure checks. BATTLE's sampled free-object minimum improves
+from 288 in the 24-placement candidate to 306, versus 310 in the baseline.
+The next isolated comparison retains this BATTLE source and uses NUPOOL's
+zero-added-placement alternative. Passing one BATTLE scenario does not yet
+establish that the new combination passes the full matrix. No candidate has been
+installed or promoted.
+
+The mixed candidate keeps BATTLE's four added placements and NUPOOL's original
+placement count. Its first full build and independent reviewed rebuild both pass
+through Phase E. The measured MK7 payload is **1,544,314 bytes**, saving **704
+bytes** against the 1,545,018-byte baseline. Raw packing already matches all 479
+unchanged background images: the compatibility check makes **zero bit changes**,
+with identical input/output IRW hashes and an empty repair list.
+
+Reproduce its source pairs from that frozen baseline, using separate new folders:
+
+```text
+studio_validation_candidate BASELINE/data/BATTLE.BDB NEW_BATTLE_FOLDER --runtime-order --max-added-objects=4
+studio_validation_candidate BASELINE/data/NUPOOL.BDB NEW_NUPOOL_FOLDER --runtime-order --max-added-objects=0 --exclude-image=36 --exclude-image=39 --exclude-image=87 --exclude-image=90
+```
+
+The source copy is `tmp/stage-savings-validation/draw-cost-mixed-candidate/`;
+`tmp/draw-cost-mixed-job/job.json` pins its independent rebuild at
+`tmp/draw-cost-mixed-reviewed-run/`. The verified diagnostic ZIP SHA256 is
+`31c65c4af68b2df3e7154d4ca82e0d3f7a9cdad19fe75e7d1a62322dc9601633`.
+All twelve chips, unchanged background artwork and sprite identities pass;
+packaging changes 48 padding bytes and no occupied video bytes. The earlier
+four-placement-per-stage candidate and its failed runtime report remain intact.
+
+`tmp/draw-cost-mixed-runtime/` passes all ten periodic-capture cases: **976/976
+captures** and no increased pressure counters. However, the additional
+frame-by-frame round-introduction check at `tmp/draw-cost-mixed-transition/`
+still fails: **112/113 captures** match. Frame 2515 differs in 2,144 pixels in
+the rectangle x=347..399, y=93..157; the following frame now matches. The smaller
+candidate resolves the pressure increases and reduces the transient mismatch,
+but does not eliminate it. It remains on hold despite the periodic matrix pass.
+
+Natural-play cases now capture every frame for the first eight frames of each
+game-state change, including round setup, round introduction, fighting and result
+transitions. This uses observed state changes rather than a hardcoded failing
+frame. The standard runner reproduces the mixed candidate's failure directly at
+`tmp/draw-cost-mixed-dense/`: **120/121 captures** match. Reports now print explicit
+PASS/FAIL and retain specific failure reasons even when every sampled screenshot
+matches but a pressure counter increases. All ten harness regression tests pass.
+
+The denser baseline-versus-itself control at
+`tmp/draw-cost-dense-baseline-control/` passes **121/121 captures**. Thus the
+new sampling reproduces the candidate difference without introducing baseline
+capture drift in this case.
+
+A zero-added-placement control was also checked: BATTLE image 27 and NUPOOL
+images 84/221, retaining 59 and 227 placements respectively. Its first full build
+measures **44 bytes saved**. This layout needs one physical bit restored at a
+shared NUENT1/NUENT2 payload: both header index 3, pixel (3,2), raw index 0 versus
+baseline index 2. The pass verifies all 570 parsed sprite spans and the unedited
+background tables. Its explicit selections are `NUENT1:T1HDRS:3` and
+`NUENT2:T2HDRS:3`. The source copy is
+`tmp/stage-savings-validation/draw-cost-zero-candidate/`, the preservation receipt
+is `tmp/draw-cost-zero-preservation/preservation.json`, and the pinned job is
+`tmp/draw-cost-zero-job/job.json`. This is a diagnostic control, not a claim that
+44 bytes is the best achievable saving.
+
+The independent reviewed run at `tmp/draw-cost-zero-reviewed-run/` passes the
+full build, all twelve video-chip checks, 479 unchanged background images, and
+the strict sprite comparison. Its diagnostic ZIP SHA256 is
+`b30965955c6c47dbab4c2a3cbb93a59b268a6490709dbe4a812e79b48e94a612`.
+Pinned input inventories remain unchanged; the explicit one-bit preservation
+correction reproduces exactly. No occupied video bytes change during packaging.
+
+The strengthened ten-case run is `tmp/draw-cost-zero-runtime/`:
+
+| Scenario | Matching RGB captures | Worst abandoned entries, baseline → candidate | Decision |
+| --- | ---: | ---: | --- |
+| BATTLE, walking Baraka / CPU Scorpion | 121 / 121 | 111 → 111 | Pass |
+| NUPOOL, walking Kang / CPU Jax | **119 / 121** | 111 → 110 | **Fail: round-introduction pixels** |
+| NUPOOL, walking Baraka / CPU Scorpion | 112 / 112 | 118 → 118 | Pass |
+| NUPOOL, decapitation | 43 / 43 | 125 → 124 | Pass |
+| BATTLE, walking Kang / CPU Jax | 129 / 129 | 104 → 104 | Pass |
+| BATTLE, repeated lightning / uppercuts | 240 / 240 | 0 → 0 | Pass |
+| BATTLE, decapitation | 43 / 43 | 136 → 136 | Pass |
+| NUPOOL, repeated lightning / uppercuts | 240 / 240 | 0 → 0 | Pass |
+| NUPOOL stage fatality, attacker on right | 42 / 42 | 0 → 0 | Pass |
+| NUPOOL stage fatality, attacker on left | 45 / 45 | 0 → 0 | Pass |
+
+**Nine of ten cases pass; 1,134/1,136 captures match.** Every case has the same
+sampled free-object minimum as baseline, zero object/miscellaneous queue
+overflows, and no increased pressure counter. The failure is visual, not a
+larger count of abandoned entries: NUPOOL/Kang frames 2684 and 2685, both in
+`gs_round_intro`, differ by 9,450 and 286 pixels respectively. The changed
+rectangles are x=288..341, y=0..174 and x=339..348, y=0..61. Difference images
+are retained beside that case's `comparison.json`.
+
+The same dense NUPOOL/Kang scenario compared against the unchanged baseline
+twice passes **121/121 captures** at `tmp/draw-cost-dense-nupool-control/`, so
+baseline capture variation does not explain this result in the control run.
+
+This rules out extra placements as a sufficient explanation for all observed
+differences. It does not yet establish the exact drawing operation to repair.
+The 44-byte control, 704-byte mixed candidate, 1,024-byte four-placement pair and
+10,054-byte larger candidate all remain unpromoted. The next investigation is
+round-reload drawing timing, using the dense capture gate; simply reducing the
+placement cap is not enough. All source/ROM changes remain in separate scratch
+copies, and no live rollback or reallocation has occurred.

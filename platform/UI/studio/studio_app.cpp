@@ -67,6 +67,9 @@ struct Tab {
     ImGuiTextFilter rom_slot_filter;
     std::unique_ptr<GameExport> game_export;
     GameBuild game_build;
+    char reviewed_job[2048] = {};
+    bool reviewed_build = false;
+    std::string reviewed_output;
     AnimationPreview animation;
     std::string animation_root;
     std::future<AnimationAnalysis> animation_analysis_job;
@@ -1439,6 +1442,7 @@ class App {
                     t.game_build.start(
                         package.root, (fs::u8path(package.folder) / "build.log").u8string(), error,
                         package.build_script)) {
+                    t.reviewed_build = false;
                     t.receipt_after.reset();
                     toast("Game build started. The log is shown below.");
                 }
@@ -1449,11 +1453,52 @@ class App {
                     ? "Sources applied. ROM packaging and emulator verification follow the game build."
                     : "Sources applied. Build & verify ROMs packages a local ROM set without installing it.");
         }
+        if (t.reviewed_job[0]) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+        if (ImGui::CollapsingHeader("Reviewed rebuild")) {
+            ImGui::TextWrapped("Repeat a prepared savings job in a fresh scratch folder. The job "
+                               "pins the reviewed sources and corrections, verifies packed artwork "
+                               "and creates a local ROM ZIP. Nothing is installed.");
+            ImGui::BeginDisabled(busy || t.receipt_job.valid());
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputTextWithHint("##reviewed-job", "Prepared job.json", t.reviewed_job,
+                                     sizeof t.reviewed_job);
+            if (ImGui::Button("Choose reviewed job..."))
+                file_dialog_open("Choose reviewed build job", "Reviewed job\0*.json\0", t.reviewed_job,
+                                 sizeof t.reviewed_job);
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!t.reviewed_job[0] || !t.game_root[0]);
+            if (ImGui::Button("Run reviewed rebuild")) {
+                try {
+                    auto plan = fs::canonical(fs::u8path(t.reviewed_job));
+                    auto baseline = load_rom_receipt((plan.parent_path() / "baseline.romreceipt").u8string());
+                    if (!baseline.valid) throw std::runtime_error(baseline.error);
+                    auto stamp = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+                    auto output = plan.parent_path() / ("run-" + std::to_string(stamp));
+                    char *base = SDL_GetBasePath();
+                    if (!base) throw std::runtime_error("Cannot locate the bundled build adapter.");
+                    auto adapter = fs::u8path(base) / "verified_build";
+                    SDL_free(base);
+                    if (t.game_build.start_reviewed(t.game_root, output.u8string() + ".log",
+                            adapter.u8string(), plan.u8string(), output.u8string(), error)) {
+                        t.reviewed_build = true;
+                        t.reviewed_output = output.u8string();
+                        t.receipt_before = std::make_unique<RomReceipt>(std::move(baseline));
+                        t.receipt_after.reset();
+                        toast("Reviewed rebuild started in a new scratch folder.");
+                    }
+                } catch (const std::exception &e) { error = e.what(); }
+            }
+            ImGui::EndDisabled();
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("Select the job's candidate checkout above. Changed inputs stop the run.");
+        }
         if (t.game_build.started()) {
             if (t.game_build.running())
                 ImGui::TextColored(accent, "Game build running...");
             else if (t.game_build.exit_code() == 0)
-                ImGui::TextColored(accent, "%s", t.game_export && t.game_export->build_script != "build.py"
+                ImGui::TextColored(accent, "%s", t.reviewed_build
+                    ? "Reviewed rebuild verified. Local ZIP ready; emulator stress testing is next."
+                    : t.game_export && t.game_export->build_script != "build.py"
                     ? "Packed pixels and ROM build verified. ROMs: rom/bddtool/mk2.zip. Emulator check is next."
                     : "Game build finished successfully. Package and verify it in the emulator next.");
             else
@@ -1462,6 +1507,13 @@ class App {
                                    t.game_build.exit_code());
             if (ImGui::SmallButton("Copy build log path"))
                 ImGui::SetClipboardText(t.game_build.log_path().c_str());
+            if (t.reviewed_build) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Copy scratch folder"))
+                    ImGui::SetClipboardText(t.reviewed_output.c_str());
+                ImGui::TextWrapped("Output: %s", t.reviewed_output.c_str());
+                ImGui::TextDisabled("Successful runs contain SUCCESS.json and rom/mk2.zip.");
+            }
             std::ifstream log(fs::u8path(t.game_build.log_path()),
                               std::ios::binary | std::ios::ate);
             if (log) {
@@ -3604,8 +3656,12 @@ class App {
             }
             t->game_build.poll();
             if (was_building && !t->game_build.running() && t->game_build.exit_code() == 0 &&
-                t->game_export && !t->receipt_job.valid())
-                start_receipt(*t, t->game_export->root, true);
+                !t->receipt_job.valid()) {
+                if (t->reviewed_build)
+                    start_receipt(*t, (fs::u8path(t->reviewed_output) / "checkout").u8string(), true);
+                else if (t->game_export)
+                    start_receipt(*t, t->game_export->root, true);
+            }
             if (t->receipt_job.valid() && t->receipt_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 try {
                     auto captured = std::make_unique<RomReceipt>(t->receipt_job.get());
@@ -4035,6 +4091,11 @@ int run(int argc, char **argv) {
     bool test_animation = smoke && argc >= 5 && std::string(argv[4]) == "--animations";
     bool test_review = smoke && argc >= 5 && std::string(argv[4]) == "--optimize-review";
     bool test_receipts = smoke && argc >= 7 && std::string(argv[4]) == "--artwork-receipts";
+    bool test_reviewed_build = smoke && argc >= 7 && std::string(argv[4]) == "--reviewed-build";
+    if (test_reviewed_build && app.tab()) {
+        std::snprintf(app.tab()->reviewed_job, sizeof app.tab()->reviewed_job, "%s", argv[5]);
+        std::snprintf(app.tab()->game_root, sizeof app.tab()->game_root, "%s", argv[6]);
+    }
     if (test_receipts && app.tab()) {
         auto &t = *app.tab();
         t.receipt_before = std::make_unique<RomReceipt>(capture_rom_receipt(argv[5]));
@@ -4161,6 +4222,7 @@ int run(int argc, char **argv) {
         if (test_animation)
             animation_smoke.input(app, frames);
         ImGui::NewFrame();
+        if (test_reviewed_build) app.page = 2;
         if (test_receipts && app.tab()) {
             app.page = 3;
             app.tab()->optimize_mode = 3;

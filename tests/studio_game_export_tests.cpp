@@ -251,6 +251,30 @@ int main(int argc, char **argv) {
         require(!job.running() && job.exit_code() == 0 &&
                     read(root / "cave-build.log").find("CAVE_HELPER_OK") != std::string::npos,
                 "Custom cave build helper did not run");
+        auto adapter = root / "reviewed adapter with spaces";
+        fs::create_directories(adapter);
+        auto reviewed_plan = root / "job with spaces.json";
+        auto reviewed_output = root / "new output with spaces";
+        write(reviewed_plan, "reviewed job");
+        write(adapter / "reviewed_stage_build.py",
+              "import pathlib,sys\n"
+              "assert len(sys.argv)==6 and sys.argv[1]=='run' and sys.argv[4]=='--candidate'\n"
+              "assert pathlib.Path(sys.argv[2]).read_text()=='reviewed job'\n"
+              "assert pathlib.Path(sys.argv[5]).resolve()==pathlib.Path.cwd()\n"
+              "p=pathlib.Path(sys.argv[3]);p.mkdir();(p/'ok').write_text('ok')\n");
+        require(job.start_reviewed(game.u8string(), (root / "reviewed.log").u8string(),
+                                   adapter.u8string(), reviewed_plan.u8string(),
+                                   reviewed_output.u8string(), error), error);
+        require(!job.start_reviewed(game.u8string(), (root / "blocked.log").u8string(),
+                                    adapter.u8string(), reviewed_plan.u8string(),
+                                    reviewed_output.u8string(), error), "Concurrent reviewed build accepted");
+        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (job.running() && std::chrono::steady_clock::now() < deadline) {
+            job.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        require(!job.running() && job.exit_code() == 0 && fs::exists(reviewed_output / "ok"),
+                "Reviewed adapter arguments or working directory were incorrect");
         if (argc >= 4) {
             Document real;
             require(real.load(argv[2], error), error);

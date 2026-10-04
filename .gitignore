@@ -153,10 +153,18 @@ tools/*
 !tools/studio_validation_candidate.cpp
 !tools/studio_validation_checks.h
 !tools/verify_static_stage_packing.py
+!tools/audit_spiral_consumers.py
 !tools/preserve_stage_pixels.py
 !tools/reviewed_stage_build.py
+!tools/stage_runtime_validation.py
+!tools/stage_runtime_metrics.lua
 !docs/BDD_LIBRARY_AUDIT.md
+!docs/NEXT_STAGE_SAVINGS.md
+!docs/TOMB_SAVINGS_VALIDATION.md
+!docs/MOUNTAIN_SAVINGS_VALIDATION.md
+!docs/SPIRAL_SAVINGS_VALIDATION.md
 !docs/STAGE_SAVINGS_VALIDATION.md
+!docs/REVIEWED_STAGE_BUILDS.md
 
 # Removed MK2 tool sources kept locally for revisiting (not shipped)
 /platform/_local/

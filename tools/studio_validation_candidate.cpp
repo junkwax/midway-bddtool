@@ -19,13 +19,29 @@ void need(bool ok, const std::string &error) {
 int main(int argc, char **argv) {
     try {
         need(argc >= 3, "Usage: studio_validation_candidate source.BDB new-output-directory "
-                        "[--runtime-order] [--exclude-image=DECIMAL_ID ...]");
+                        "[--runtime-order | --shared] [--max-added-objects=COUNT] "
+                        "[--exclude-image=DECIMAL_ID ...] [--compact-palettes]");
         bool runtime_order = false;
+        bool shared = false;
+        bool compact_palettes = false;
+        int max_added_objects = 24;
         std::set<int> excluded;
         for (int i = 3; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--runtime-order")
                 runtime_order = true;
+            else if (arg == "--shared")
+                shared = true;
+            else if (arg == "--compact-palettes")
+                compact_palettes = true;
+            else if (arg.rfind("--max-added-objects=", 0) == 0) {
+                auto value = arg.substr(20);
+                size_t used = 0;
+                int count = std::stoi(value, &used);
+                need(used == value.size() && count >= 0 && count <= 256,
+                     "Invalid added-object limit (expected 0..256)");
+                max_added_objects = count;
+            }
             else if (arg.rfind("--exclude-image=", 0) == 0) {
                 auto value = arg.substr(16);
                 size_t used = 0;
@@ -36,6 +52,8 @@ int main(int argc, char **argv) {
                 need(false, "Unknown argument: " + arg);
         }
         need(excluded.empty() || runtime_order, "Exclusions require --runtime-order");
+        need(!shared || !runtime_order, "--shared and --runtime-order select different searches");
+        need(!shared || !compact_palettes, "--shared does not support palette compaction");
         fs::path folder = fs::absolute(fs::u8path(argv[2]));
         need(!fs::exists(folder), "Output already exists");
         Document doc;
@@ -43,9 +61,11 @@ int main(int argc, char **argv) {
         need(doc.load(argv[1], error), error);
         OptimizeOptions options;
         options.deep = true;
-        options.compact_palettes = false;
-        options.max_added_objects = 24;
+        options.compact_palettes = compact_palettes;
+        options.max_added_objects = max_added_objects;
         std::ostringstream audit;
+        audit << "Maximum added placements: " << max_added_objects << '\n';
+        audit << "Palette compaction: " << (compact_palettes ? "enabled; external consumers need review" : "disabled") << '\n';
         if (runtime_order) {
             auto original = doc;
             std::vector<std::pair<uint64_t, int>> sources;
@@ -66,7 +86,7 @@ int main(int argc, char **argv) {
                 }
                 options.source_image = entry.second;
                 options.max_added_objects =
-                    24 - int(doc.state().objects.size() - original.state().objects.size());
+                    max_added_objects - (int(doc.state().objects.size()) - int(original.state().objects.size()));
                 auto plan = find_lossless_savings(doc, options);
                 if (!plan.verified || plan.proposed.video_bits >= plan.baseline.video_bits)
                     continue;
@@ -83,6 +103,10 @@ int main(int argc, char **argv) {
                       << (exact ? ": accepted\n"
                                 : ": REJECTED - runtime layer order changes pixels\n");
                 if (exact)
+                    audit << "  Estimated bytes saved: "
+                          << (plan.baseline.video_bits - plan.proposed.video_bits) / 8
+                          << "; added placements: " << plan.proposed.objects - plan.baseline.objects << '\n';
+                if (exact)
                     doc = std::move(next);
             }
             auto a = optimization_budget(original.state()), b = optimization_budget(doc.state());
@@ -90,8 +114,13 @@ int main(int argc, char **argv) {
                   << b.video_bits / 8 << " bytes; placements " << a.objects << " -> " << b.objects
                   << '\n';
         } else {
-            auto plan = find_lossless_savings(doc, options);
+            auto plan = shared ? find_shared_savings(doc, options) : find_lossless_savings(doc, options);
             need(plan.verified, plan.error);
+            if (shared)
+                for (const auto &change : plan.changes)
+                    need(!validation::protects_unaligned(doc.state().assets->data.images,
+                                                         change.source_image),
+                         "Shared proposal changes LOAD2 unaligned-image buffer context");
             need(doc.apply_optimization(plan, error), error);
             audit << optimization_report(plan);
         }
