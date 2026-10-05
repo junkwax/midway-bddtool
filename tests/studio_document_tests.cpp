@@ -1,4 +1,5 @@
 #include "Core/studio_document.h"
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +11,54 @@ void require(bool ok, const std::string &message) {
         throw std::runtime_error(message);
 }
 bool near(double a, double b) { return std::abs(a - b) < 0.00001; }
+void validation_tests() {
+    auto d = Document::demo();
+    auto &state = const_cast<State &>(d.state());
+    auto bank = std::make_shared<AssetBank>(*state.assets);
+    state.assets = bank;
+    auto count = [&](const char *text) {
+        auto issues = d.validate();
+        return std::count_if(issues.begin(), issues.end(), [&](const Issue &i) {
+            return i.message.find(text) != std::string::npos;
+        });
+    };
+    auto &im = bank->data.images.front();
+    im.w = 253; im.pix.resize(size_t(im.w) * im.h, 1);
+    require(count("250-pixel") == 1 && count("multiple of 4") == 1,
+            "Image constraints duplicated for repeated placements");
+    auto issues = d.validate();
+    auto width = std::find_if(issues.begin(), issues.end(), [](const Issue &i) { return i.message.find("250-pixel") != std::string::npos; });
+    require(width != issues.end() && width->error && width->image_slot == 0 && width->object &&
+            width->group == IssueGroup::Load2 && !width->next_step.empty(), "Width finding has no actionable target");
+    // Different palette variants of the same image must each be validated, once per pair.
+    BddCorePalette short_palette = bank->data.palettes.front(); short_palette.count = 2;
+    bank->data.palettes.push_back(short_palette);
+    for (auto &p : state.objects) if (p.object.ii == im.idx) { p.object.fl = 1; p.hidden = true; }
+    im.pix[0] = 3;
+    require(count("exceeds palette 1") == 1, "Hidden/repeated palette variant escaped validation or duplicated findings");
+    auto orphan = state.objects.front(); orphan.id = 9999; orphan.object.ii = 60000;
+    orphan.object.fl = -2; orphan.plane = (int)state.planes.size(); state.objects.push_back(orphan);
+    require(count("missing image 60000") == 1 && count("missing palette -2") == 1 &&
+            count("no valid layer") == 1, "Missing image masked independent reference errors");
+    im.pix.resize(1);
+    require(count("pixel storage") == 1, "Malformed pixels reached pixel readers");
+    auto spare = bank->data.images.back(); spare.idx = 500; spare.w = 5; spare.h = 1; spare.pix = {0,1,0,1,0};
+    bank->data.images.push_back(spare); bank->default_palettes.push_back(0);
+    require(count("multiple of 4") == 1, "Unplaced artwork escaped validation");
+    issues = d.validate();
+    require(std::is_sorted(issues.begin(), issues.end(), [](const Issue &a, const Issue &b) {
+        return a.error != b.error ? a.error > b.error : a.group < b.group;
+    }), "Findings not ordered by severity/category");
+    auto ptr = state.assets; auto revision = state.revision;
+    bool dirty = d.dirty(); d.validate();
+    require(state.assets == ptr && state.revision == revision && d.dirty() == dirty, "Validation mutated document");
+    bank->data.images.push_back(spare);
+    require(count("duplicate ID") == 1, "Duplicate image IDs escaped validation");
+    bank->data.palettes[0].count = 300;
+    require(count("invalid color count") == 1, "Invalid palette size escaped validation");
+    bank->data.images.resize(BDD_CORE_MK2_LOAD2_MAX_IMAGE_HEADERS + 1, spare);
+    require(count("Image headers:") == 1, "LOAD2 image header cap escaped validation");
+}
 void same_scene(const Document &a, const Document &b) {
     auto x = a.scene({73, 11}), y = b.scene({73, 11});
     require(x.size() == y.size(), "Scene count changed after reopen");
@@ -24,6 +73,7 @@ int main(int argc, char **argv) {
         require(argc >= 2, "Expected scratch folder");
         fs::path root = argv[1];
         fs::create_directories(root);
+        validation_tests();
         Viewport v;
         v.pan = {-40, 123};
         Point origin{12, 55}, mouse{314, 225};

@@ -1108,29 +1108,6 @@ bool Document::save(const std::string &path, std::string &error, bool recovery) 
     }
 }
 
-std::vector<Issue> Document::validate() const {
-    std::vector<Issue> issues;
-    for (const auto &p : state_.objects) {
-        auto *im = image(p.object.ii);
-        if (!im) {
-            issues.push_back({"Missing image", p.id, true});
-            continue;
-        }
-        if (p.plane < 0)
-            issues.push_back({"Artwork is not assigned to a layer", p.id, true});
-        if (p.object.fl < 0 || p.object.fl >= (int)state_.assets->data.palettes.size())
-            issues.push_back({"Palette is missing", p.id, true});
-        if (im->w > BDD_CORE_MK2_RUNTIME_WIDEST_BLOCK)
-            issues.push_back({"Image exceeds MK2's 250-pixel block width", p.id, false});
-        if (im->w % 4)
-            issues.push_back({"Image width is not a multiple of 4 for LOAD2", p.id, false});
-    }
-    for (const auto &p : state_.planes)
-        if (!p.bound)
-            issues.push_back(
-                {p.name + ": no game-plane binding; composition is estimated", 0, false});
-    return issues;
-}
 
 Document Document::demo() {
     Document d = empty();

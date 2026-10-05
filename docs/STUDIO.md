@@ -276,16 +276,25 @@ History retains up to 64 edits. Raster imports require at most 255 opaque
 RGB555 colors. Pixel/palette editing and selected IMG import are in Assets;
 advanced palette reduction/grouping, IMG-folder/LOD import and specialist exports
 still use the original editor. See the asset migration checklist above.
-**Build & Check** currently checks missing references, layer assignment,
-runtime binding availability, and MK2 width constraints. MK3CAVE additionally
-supports the verified packing workflow above; other stages use the game's
-normal packaging tools.
+**Build & Check** begins with a searchable findings list, with severity/category
+filters and a copyable report. It checks references, layer assignment, image
+storage/IDs, palette counts and pixel-index ranges (including alternate placed
+palettes), runtime bindings, and LOAD2 width/capacity constraints. Repeated
+placements share image-level findings. Open artwork or inspect the affected
+palette directly; Locate placement selects and frames the piece in Stage.
+Checks include hidden/unplaced art and refresh after edits/undo. They do not
+repair files or establish in-game equivalence. See the [workflow decisions](ASSET_TOOL_MIGRATION.md)
+for exact coverage and remaining diagnostics.
+
+MK3CAVE additionally supports the verified packing workflow above; other stages
+use the game's normal packaging tools.
 
 ## Verification
 
 ```text
 ctest --test-dir build -C Release --output-on-failure
 bddview --studio-smoke tmp/studio-ui
+bddview --studio-smoke tmp/checks-ui --demo --checks
 studio_document_tests tmp/fixture-test path/to/fixture.BDB
 studio_game_export_tests tmp/export-test [path/to/fixture.BDB path/to/BGND.ASM]
 bddview --studio-export-smoke tmp/runtime-test

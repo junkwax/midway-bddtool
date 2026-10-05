@@ -24,6 +24,40 @@ It does not delete the old implementation or remove access through `--legacy-ui`
 Rows describing consolidation are design decisions; they are not claims that
 every listed legacy check has already been extracted.
 
+### Consolidated authoring checks — October 4, 2026
+
+Build & Check now puts a bounded, searchable findings list ahead of game
+integration. Filter by severity or References, Artwork/palettes, LOAD2 and
+Layers. Errors appear first. Each finding explains the next step; applicable
+findings open the artwork, inspect its specific palette variant, or select and
+frame the placement on Stage. Layer findings select the layer. Hidden content
+stays hidden, with a notice when located. Copy report includes all findings,
+even when the list is filtered.
+
+The document-owned checker covers missing image/palette/layer references,
+duplicate or invalid image IDs, dimensions/pixel storage, palette counts and
+pixel-index ranges for both default and placed palette variants. It includes
+hidden and unplaced artwork. Image-level findings are emitted once per image;
+palette-index findings once per image/palette pair, instead of once per repeat.
+Independent placement errors remain visible even when its image is missing.
+
+LOAD2 checks cover width alignment, MK2's block scan width, image-header/palette/
+module caps, an explicitly uncompressed block-size estimate, and a warning
+when static placements use more than 35 background palettes. Width faults on
+placed images are errors; unplaced width faults are warnings. These are static
+diagnostics, not new Save blockers or proof of runtime failure/success. Compression
+and runtime allocation require build/game checks. “No current authoring issues”
+does not mean animation, visibility or packed output was tested.
+
+The file-info badge and findings list share results, refreshed after edits and
+undo/redo. Checking or following a finding does not repair, save, or modify the
+artwork. Counts/backups/readback remain automatic on Save; runtime X-order
+preparation remains part of the isolated game-export copy.
+
+Remaining consolidation work includes sampled object/palette pressure, camera
+coverage and generated-output freshness in this list. Existing Optimize/export
+tools still own their deeper analyses; those checks have not all been migrated.
+
 ### Why a generic cleanup-on-save is not appropriate
 
 The old [readiness gate](../platform/UI/tools/mk2_stage_readiness_gate.cpp)
@@ -128,6 +162,7 @@ isolation, invalid color rejection, undo/redo, and exact save/reopen behavior.
 ctest --test-dir BUILD -C Release -R "^studio_(document|animation)$" --output-on-failure
 bddview --studio-smoke NEW_OUTPUT --demo --asset-tools [FIXTURE.IMG]
 bddview --studio-smoke NEW_OUTPUT --demo --batch-import
+bddview --studio-smoke NEW_OUTPUT --demo --checks
 ```
 
 The UI smoke paints a continuous stroke through ImGui events, applies it,
@@ -146,3 +181,10 @@ reuse, one-step undo/redo, failed-file rejection, Cancel and verified Save.
 Save/reopen and repacking checks also pass on a frozen local SPIRAL pair.
 Malformed serialized palette data and undersized pixel buffers are rejected
 before replacing originals. No live game checkout or ROM installation changed.
+
+The consolidated-checks pass passes the document and game-export suites plus
+the checks, canvas, navigation and asset-tools UI smokes. At 900×640 the checks
+smoke exercises severity/category/search filters, placement framing, artwork
+navigation, report copying and cache refresh after undo. Core tests exercise
+repeated and hidden placements, alternate palettes, unplaced artwork, malformed
+storage, duplicate IDs, independent reference errors and the LOAD2 header cap.

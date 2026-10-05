@@ -10,6 +10,7 @@
 #include "Core/studio_rom_receipt.h"
 #include "Core/studio_art_audit.h"
 #include "Core/studio_visibility.h"
+#include "Core/studio_camera_checks.h"
 #include <future>
 #include <fstream>
 #include "libs/stb_image.h"
@@ -62,6 +63,18 @@ struct Tab {
     OptimizeBudget info_budget;
     uint64_t info_revision = UINT64_MAX;
     int info_errors = 0, info_warnings = 0;
+    std::vector<Issue> check_issues, authoring_issues;
+    CameraCheckOptions camera_check_options;
+    std::future<CameraCheck> camera_check_job;
+    std::shared_ptr<OptimizeProgress> camera_check_progress;
+    std::unique_ptr<CameraCheck> camera_check;
+    std::string camera_check_error;
+    std::shared_ptr<const AssetBank> check_assets;
+    uint64_t check_revision = UINT64_MAX;
+    ImGuiTextFilter check_filter;
+    int check_severity = 0, check_group = 0;
+    ObjectId focus_object = 0;
+    bool reveal_asset = false;
     std::vector<std::pair<std::string, std::string>> info_files;
     Viewport view;
     std::vector<ObjectId> selected;
@@ -152,6 +165,7 @@ struct Tab {
     int pattern_source_plane = -2;
     std::string pattern_source_error;
     ~Tab() {
+        if (camera_check_progress) camera_check_progress->cancel = true;
         if (animation_analysis_progress) animation_analysis_progress->cancel = true;
         if (optimize_progress)
             optimize_progress->cancel = true;
@@ -243,6 +257,8 @@ class App {
     Point animation_pause_point, animation_next_point, animation_library_edit_point, animation_library_close_point;
     Point block_paint_point, block_apply_point, palette_apply_point, import_apply_point;
     Point batch_review_point, batch_import_point, batch_cancel_point;
+    Point check_locate_point, check_artwork_point, check_report_point, camera_scan_point, camera_jump_point;
+    int check_visible_count = 0;
     Tab *tab() { return active >= 0 && active < (int)tabs.size() ? tabs[active].get() : nullptr; }
     void toast(const std::string &text) {
         message = text;
@@ -258,6 +274,9 @@ class App {
             t->optimize_options.max_added_objects = 24;
         }
         t->camera = {(double)t->document.state().start_x, (double)t->document.state().start_y};
+        t->camera_check_options.min_x = t->document.state().start_x;
+        t->camera_check_options.max_x = std::max(t->document.state().start_x, t->document.state().world_w - 400);
+        t->camera_check_options.min_y = t->camera_check_options.max_y = t->document.state().start_y;
         t->visibility_options = {t->document.state().start_x,
             std::max(t->document.state().start_x, t->document.state().world_w - 400),
             t->document.state().start_y, t->document.state().start_y};
@@ -505,6 +524,23 @@ class App {
         ImGui::Separator();
         ImGui::Spacing();
     }
+    void refresh_checks(Tab &t) {
+        const auto &s = t.document.state();
+        if (t.camera_check_job.valid() && t.camera_check_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            try { t.camera_check = std::make_unique<CameraCheck>(t.camera_check_job.get()); }
+            catch (const std::exception &e) { t.camera_check_error = e.what(); }
+        }
+        if (t.check_assets != s.assets || t.check_revision != s.revision) {
+            t.check_assets = s.assets; t.check_revision = s.revision;
+            t.authoring_issues = t.document.validate();
+        }
+        t.check_issues = t.authoring_issues;
+        if (t.camera_check && camera_check_current(*t.camera_check, s, t.camera_check_options))
+            t.check_issues.insert(t.check_issues.end(), t.camera_check->issues.begin(), t.camera_check->issues.end());
+        t.info_errors = t.info_warnings = 0;
+        for (const auto &issue : t.check_issues)
+            issue.error ? ++t.info_errors : ++t.info_warnings;
+    }
     void file_info(Tab &t) {
         const auto &s = t.document.state();
         bool assets_changed = t.info_assets != s.assets;
@@ -513,12 +549,8 @@ class App {
             t.info_assets = s.assets;
             t.info_budget = optimization_budget(s);
         }
-        if (assets_changed || t.info_revision != s.revision) {
-            t.info_revision = s.revision;
-            t.info_errors = t.info_warnings = 0;
-            for (const auto &issue : t.document.validate())
-                issue.error ? ++t.info_errors : ++t.info_warnings;
-        }
+        t.info_revision = s.revision;
+        refresh_checks(t);
         auto &b = t.info_budget;
         b.objects = (int)s.objects.size();
         b.table_bytes =
@@ -1040,6 +1072,19 @@ class App {
                        {0, 0, size.x, size.y});
             t.fit = false;
         }
+        if (t.focus_object) {
+            if (auto *p = t.document.object(t.focus_object)) {
+                auto *im = t.document.image(p->object.ii);
+                Rect r{double(p->object.depth + p->runtime_dx), double(p->object.sy),
+                       im ? double(im->w) : 32.0, im ? double(im->h) : 32.0};
+                if (p->plane >= 0 && p->plane < (int)t.document.state().planes.size()) {
+                    const auto &plane = t.document.state().planes[p->plane];
+                    r.x += plane.x - plane.source.x1; r.y += plane.y - plane.source.y1;
+                }
+                t.view.fit({r.x - 80, r.y - 80, r.w + 160, r.h + 160}, {0, 0, size.x, size.y});
+            }
+            t.focus_object = 0;
+        }
         Point cam = t.camera_preview ? t.camera : Point{};
         auto navigation_items = t.document.scene(cam, t.source, t.solo);
         Rect navigation_bounds{0, 0, 400, 254};
@@ -1382,6 +1427,9 @@ class App {
                 float width = ImGui::GetContentRegionAvail().x, height = full ? 114.0f : 84.0f;
                 bool click =
                     ImGui::Selectable("##asset", t.asset == (int)i, 0, ImVec2(width, height));
+                if (full && t.reveal_asset && t.asset == (int)i) {
+                    ImGui::SetScrollHereY(.5f); t.reveal_asset = false;
+                }
                 if (click)
                     t.asset = (int)i;
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -3318,6 +3366,7 @@ class App {
                     (unsigned long long)authoring.table_bytes,
                     (unsigned long long)authoring.palette_bytes, authoring.objects);
     }
+    #include "studio_checks.inc"
     void checks(Tab &t) {
         heading("Build & Check", "Review your layout, apply it to the game, and follow the build.");
         if (!t.document.notice().empty())
@@ -3326,8 +3375,10 @@ class App {
                            "transforms. Runtime actors, game-specific floor effects and compiled "
                            "ROM output are not verified in this workspace.");
         ImGui::Spacing();
+        authoring_checks(t);
+        ImGui::Spacing();
         game_integration(t);
-        ImGui::TextUnformatted("Runtime animation preview");
+        ImGui::SeparatorText("Runtime animation preview");
         if (t.animation_root != t.game_root)
             ImGui::TextColored(accent, "Checkout changed. Reload animations to use this source.");
         ImGui::TextWrapped("%s", t.animation.notice.c_str());
@@ -3341,30 +3392,8 @@ class App {
         if (t.animation.ready())
             ImGui::TextWrapped("Faces stay at their game-defined positions when artwork moves. "
                                "They are preview overlays and are not saved into your background.");
-        ImGui::Separator();
-        auto issues = t.document.validate();
-        ImGui::Text("%zu authoring issues", issues.size());
-        for (size_t i = 0; i < issues.size(); i++) {
-            const auto &issue = issues[i];
-            ImGui::PushID((int)i);
-            ImGui::TextColored(issue.error ? ImVec4(0.98f, .48f, .42f, 1)
-                                           : ImVec4(.85f, .73f, .47f, 1),
-                               "%s", issue.error ? "FIX" : "REVIEW");
-            ImGui::SameLine();
-            ImGui::TextWrapped("%s", issue.message.c_str());
-            if (issue.object) {
-                ImGui::SameLine();
-                if (ImGui::SmallButton("Locate")) {
-                    t.selected = {issue.object};
-                    page = 0;
-                    t.fit = true;
-                }
-            }
-            ImGui::PopID();
-        }
         ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::TextUnformatted("Specialist tools");
+        ImGui::SeparatorText("Specialist tools");
         ImGui::TextWrapped(
             "PNG/IMG import, pixel painting and palette editing are available in Assets. "
             "The existing editor still provides palette grouping/reduction, tone matching, LOD "
@@ -3843,6 +3872,8 @@ class App {
 // Deterministic input through ImGui's normal event path, used only by --studio-smoke.
 #include "studio_asset_smoke.inc"
 #include "studio_batch_smoke.inc"
+#include "studio_checks_smoke.inc"
+#include "studio_camera_checks_smoke.inc"
 
 struct InteractionSmoke {
     ObjectId id = 0;
@@ -4174,6 +4205,10 @@ int run(int argc, char **argv) {
     InteractionSmoke interactions;
     AssetToolsSmoke asset_smoke;
     BatchImportSmoke batch_smoke;
+    ChecksSmoke checks_smoke;
+    CameraChecksSmoke camera_checks_smoke;
+    bool test_camera_checks = smoke && argc >= 5 && std::string(argv[4]) == "--camera-checks";
+    bool test_checks = smoke && argc >= 5 && std::string(argv[4]) == "--checks";
     bool test_batch_import = smoke && argc >= 5 && std::string(argv[4]) == "--batch-import";
     bool test_asset_tools = smoke && argc >= 5 && std::string(argv[4]) == "--asset-tools";
     if (test_asset_tools && argc >= 6) asset_smoke.img_path = argv[5];
@@ -4308,6 +4343,8 @@ int run(int argc, char **argv) {
             if (frames == 9 || frames == 10 || frames == 15 || frames == 16)
                 io.AddMouseButtonEvent(0, frames == 9 || frames == 15);
         }
+        if (test_camera_checks) camera_checks_smoke.input(app, frames);
+        if (test_checks) checks_smoke.input(app, frames);
         if (test_asset_tools) asset_smoke.input(app, frames);
         if (test_batch_import) batch_smoke.input(app, frames);
         if (test_navigation) navigation_smoke.input(app, frames);
@@ -4322,6 +4359,8 @@ int run(int argc, char **argv) {
             app.tab()->optimize_mode = 3;
         }
         app.frame();
+        if (test_camera_checks && !camera_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
+        if (test_checks && !checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_batch_import && !batch_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_asset_tools && !asset_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_navigation && !navigation_smoke.check(app, frames)) {
@@ -4472,14 +4511,14 @@ int run(int argc, char **argv) {
                     } else t.receipt_before = std::make_unique<RomReceipt>(*t.receipt_after);
                 }
             }
-            if (frames == 4 && !test_asset_tools && !test_batch_import) {
+            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks) {
                 SDL_SetWindowSize(app.window, 1000, 720);
                 if (app.tab() && !test_navigation)
                     app.tab()->fit = true;
             }
-            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation)
+            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks)
                 app.page = 1;
-            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation) {
+            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks) {
                 app.page = 2;
                 if (argc >= 5 && std::string(argv[4]) == "--prepare" && app.tab())
                     app.prepare_game(*app.tab());

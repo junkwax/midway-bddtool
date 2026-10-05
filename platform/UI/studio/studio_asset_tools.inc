@@ -1,9 +1,9 @@
 // Asset workflows owned by App. Dialog drafts stay local until Apply/Import.
-void open_palette_editor(Tab &t) {
+void open_palette_editor(Tab &t, int palette = -1) {
     cancel_gesture();
     error.clear();
     if (t.asset < 0 || t.asset >= (int)t.document.state().assets->data.images.size()) return;
-    t.edit_palette = asset_palette(t, t.asset);
+    t.edit_palette = palette >= 0 ? palette : asset_palette(t, t.asset);
     if (t.edit_palette < 0 || t.edit_palette >= (int)t.document.state().assets->data.palettes.size()) return;
     t.edit_image = t.document.state().assets->data.images[t.asset].idx;
     t.edit_original = t.document.state().assets;

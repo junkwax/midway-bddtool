@@ -3,7 +3,10 @@
 **October 4 implementation follow-up:** the [workflow decisions](ASSET_TOOL_MIGRATION.md)
 classify old tools as core editing, consolidated workflows, automatic Save/export
 behavior, or retired/deferred specialist interfaces. Legacy feature parity is
-not the target. The assessment below remains the original redesign evidence.
+not the target. Build & Check now consolidates static authoring findings with
+filters, actionable navigation and shared file-info counts; the linked decisions
+record its tested coverage and remaining checks. The assessment below remains
+the original redesign evidence.
 
 **Recommendation: retain the format and asset-processing code, and rebuild the editing application around a unified stage document.** Replace the current workspace, canvas interaction, document state, and command handling. Extract the runtime interpretation into a testable service. A complete rewrite would discard useful, tested knowledge; a cosmetic UI pass would leave the main placement problems intact.
 

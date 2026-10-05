@@ -74,10 +74,16 @@ struct SceneItem {
     Rect rect;
     bool hflip = false, vflip = false, locked = false;
 };
+enum class IssueGroup { References, Artwork, Load2, Layers, Camera };
 struct Issue {
     std::string message;
     ObjectId object = 0;
     bool error = false;
+    IssueGroup group = IssueGroup::References;
+    std::string next_step;
+    int image_slot = -1, palette = -1, plane = -1;
+    bool has_camera = false;
+    Point camera;
 };
 std::vector<SceneItem> scene_items(const State &state, Point camera = {}, bool source = false,
                                  int solo = -1);
