@@ -1,6 +1,7 @@
 #include "Core/zip_writer.h"
 
 #include <cstdio>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -21,17 +22,15 @@ struct ZipEntry {
 
 unsigned long crc32_update(unsigned long crc, const unsigned char *buf, size_t len)
 {
-    static unsigned long table[256];
-    static bool built = false;
-    if (!built) {
+    static const auto table = [] {
+        std::array<unsigned long, 256> values{};
         for (unsigned long n = 0; n < 256; n++) {
             unsigned long c = n;
-            for (int k = 0; k < 8; k++)
-                c = (c & 1) ? (0xEDB88320UL ^ (c >> 1)) : (c >> 1);
-            table[n] = c;
+            for (int k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320UL ^ (c >> 1)) : (c >> 1);
+            values[n] = c;
         }
-        built = true;
-    }
+        return values;
+    }();
     crc ^= 0xFFFFFFFFUL;
     while (len--)
         crc = table[(crc ^ *buf++) & 0xFF] ^ (crc >> 8);
@@ -41,8 +40,14 @@ unsigned long crc32_update(unsigned long crc, const unsigned char *buf, size_t l
 void dos_stamp(unsigned short *dos_time, unsigned short *dos_date)
 {
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    if (!t) {
+    struct tm value{};
+#ifdef _WIN32
+    bool valid = localtime_s(&value, &now) == 0;
+#else
+    bool valid = localtime_r(&now, &value) != nullptr;
+#endif
+    const auto *t = &value;
+    if (!valid) {
         *dos_time = 0;
         *dos_date = 0x21;   /* 1980-01-01 */
         return;

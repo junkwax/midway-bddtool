@@ -9,8 +9,9 @@ body:
         Thanks for sharing a stage!
 
         The easiest way to fill this in is **File > Share Stage...** in bddtool — it
-        builds the bundle, pre-fills this form, and writes a wiki-ready page with
-        enable instructions generated from your stage's real plane bindings.
+        builds a local bundle and wiki-ready page, then opens a submission draft.
+        Attach the ZIP and review it before submitting. In the new editor this is
+        also available under Help > Share a stage.
 
         Accepted stages get published to the
         [wiki](https://github.com/junkwax/midway-bddtool/wiki).
@@ -19,7 +20,7 @@ body:
     id: stage-name
     attributes:
       label: Stage name
-      description: The 8-character LOAD2 name from the BDB header.
+      description: Bundle/wiki name; mention the internal stage name if different.
       placeholder: WAFFLE
     validations:
       required: true
@@ -30,7 +31,8 @@ body:
       label: Stage bundle
       description: |
         Drag `<NAME>-stage.zip` into this box. It should contain the BDB, the BDD,
-        `composite.png` and the generated `.md` page.
+        layout/metadata companions, `arena_layout.png`, `arena_game.png`, props,
+        and the generated `.md` page. Keep all companion files together.
       placeholder: Drop the zip here...
     validations:
       required: true

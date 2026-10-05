@@ -286,8 +286,31 @@ Checks include hidden/unplaced art and refresh after edits/undo. They do not
 repair files or establish in-game equivalence. See the [workflow decisions](ASSET_TOOL_MIGRATION.md)
 for exact coverage and remaining diagnostics.
 
+**Scan camera range** adds sampled object/palette pressure and horizontal gaps
+to the same findings list. Expand **Camera range and assumptions** to adjust X/Y
+bounds, step and the reserve for actors/fighters/effects. **View camera** opens
+the flagged sample on Stage. Hidden placements count because they are exported;
+the editor does not unhide them. These are bounds-based estimates, not pixel
+coverage or gameplay verification. Document/range changes mark the scan stale;
+rerun it to refresh findings. Scanning never saves or builds anything.
+
 MK3CAVE additionally supports the verified packing workflow above; other stages
 use the game's normal packaging tools.
+
+## Help and sharing
+
+Help contains **About / build information**, wiki and stage-catalog links, and
+editing shortcuts. Use **File → Share stage** or **Help → Share a stage** to
+prepare a local ZIP from the current applied edits. Enter a bundle/wiki name,
+author, credits/use terms and testing notes, then review the generated files.
+
+The bundle includes BDB/BDD, editor layout and metadata companions, static
+previews, props and a wiki page. **Open GitHub submission draft** opens the
+browser; attach the ZIP and submit it yourself. Accepted submissions use the
+repository's maintainer approval workflow. The app never posts automatically.
+Sharing preserves your current save point and undo history. Changed document
+contents or credits require rebuilding before submission. See the
+[sharing details and limits](ASSET_TOOL_MIGRATION.md#help-and-stage-sharing--october-5-2026).
 
 ## Verification
 
@@ -295,6 +318,8 @@ use the game's normal packaging tools.
 ctest --test-dir build -C Release --output-on-failure
 bddview --studio-smoke tmp/studio-ui
 bddview --studio-smoke tmp/checks-ui --demo --checks
+bddview --studio-smoke tmp/camera-checks-ui --demo --camera-checks
+bddview --studio-smoke tmp/help-share-ui --demo --help-share
 studio_document_tests tmp/fixture-test path/to/fixture.BDB
 studio_game_export_tests tmp/export-test [path/to/fixture.BDB path/to/BGND.ASM]
 bddview --studio-export-smoke tmp/runtime-test

@@ -11,6 +11,8 @@
 #include "Core/studio_art_audit.h"
 #include "Core/studio_visibility.h"
 #include "Core/studio_camera_checks.h"
+#include "Core/studio_share.h"
+#include "Core/app_version.h"
 #include <future>
 #include <fstream>
 #include "libs/stb_image.h"
@@ -59,6 +61,10 @@ struct Tab {
     uint64_t batch_revision = 0;
     uint64_t id = 0;
     Document document;
+    char share_name[64] = {}, share_author[96] = {}, share_description[512] = {}, share_sources[512] = {}, share_license[128] = {}, share_tested[256] = {};
+    bool share_requested = false, share_show_result = false;
+    std::future<ShareBundle> share_job;
+    std::unique_ptr<ShareBundle> share_bundle;
     std::shared_ptr<const AssetBank> info_assets;
     OptimizeBudget info_budget;
     uint64_t info_revision = UINT64_MAX;
@@ -257,6 +263,9 @@ class App {
     Point animation_pause_point, animation_next_point, animation_library_edit_point, animation_library_close_point;
     Point block_paint_point, block_apply_point, palette_apply_point, import_apply_point;
     Point batch_review_point, batch_import_point, batch_cancel_point;
+    bool about_requested = false;
+    Point help_menu_point, about_open_point, share_open_point, share_close_point, share_build_point, share_copy_point, about_close_point;
+    bool share_submission_enabled = false;
     Point check_locate_point, check_artwork_point, check_report_point, camera_scan_point, camera_jump_point;
     int check_visible_count = 0;
     Tab *tab() { return active >= 0 && active < (int)tabs.size() ? tabs[active].get() : nullptr; }
@@ -662,6 +671,7 @@ class App {
                     save(*tab());
                 if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S", false, tab() != nullptr))
                     save(*tab(), true);
+                if (ImGui::MenuItem("Share stage...", nullptr, false, tab() && tab()->document.state().has_bdb)) tab()->share_requested = true;
                 if (ImGui::MenuItem("Recovery copies..."))
                     show_recovery = true;
                 ImGui::Separator();
@@ -707,18 +717,24 @@ class App {
                 if (ImGui::MenuItem("Export selected artwork as PNG...", nullptr, false, available)) export_asset_png(*t);
                 ImGui::EndMenu();
             }
-            if (ImGui::BeginMenu("Help")) {
-                ImGui::TextUnformatted(
-                    "Drag to move. Shift-click to select more. Ctrl+D duplicates.");
-                ImGui::TextUnformatted(
-                    "Drag empty space to pan. Shift-drag empty space to box-select. "
-                    "Hand mode, middle-drag or Space-drag pans anywhere. Wheel zooms. Escape cancels.");
-                ImGui::TextUnformatted("Arrow keys nudge 1 pixel; Shift nudges 10 pixels.");
+            bool help_menu = ImGui::BeginMenu("Help");
+            help_menu_point = item_center();
+            if (help_menu) {
+                if (ImGui::MenuItem("About bddtool / build information...")) about_requested = true;
+                about_open_point = item_center();
+                if (ImGui::MenuItem("GitHub wiki")) open_link(wiki_url);
+                if (ImGui::MenuItem("Stage catalog")) open_link(std::string(wiki_url) + "/Stage-Catalog");
+                if (ImGui::MenuItem("Share a stage...", nullptr, false, tab() && tab()->document.state().has_bdb)) tab()->share_requested = true;
+                share_open_point = item_center();
                 ImGui::Separator();
-                ImGui::TextWrapped(
-                    "Use Assets for PNG/IMG import, block painting and palette editing. "
-                    "Additional legacy tools (LOD import, palette grouping and tone matching) "
-                    "remain available through bddview --legacy-ui [file.BDB].");
+                if (ImGui::BeginMenu("Editing shortcuts")) {
+                    ImGui::TextUnformatted("Drag artwork to move. Shift-click selects more. Ctrl+D duplicates.");
+                    ImGui::TextUnformatted("Drag empty space to pan; Shift-drag box-selects.");
+                    ImGui::TextUnformatted("Hand mode, middle-drag or Space-drag pans anywhere; wheel zooms.");
+                    ImGui::TextUnformatted("Arrows nudge 1 pixel; Shift nudges 10. Escape cancels.");
+                    ImGui::TextUnformatted("Ctrl+S saves; Ctrl+Z undoes; Ctrl+Y redoes.");
+                    ImGui::EndMenu();
+                }
                 ImGui::EndMenu();
             }
             if (auto *t = tab())
@@ -3366,6 +3382,7 @@ class App {
                     (unsigned long long)authoring.table_bytes,
                     (unsigned long long)authoring.palette_bytes, authoring.objects);
     }
+    #include "studio_help_share.inc"
     #include "studio_checks.inc"
     void checks(Tab &t) {
         heading("Build & Check", "Review your layout, apply it to the game, and follow the build.");
@@ -3863,6 +3880,7 @@ class App {
         } else
             ImGui::TextDisabled("Local files  /  Indexed artwork  /  Stage composition");
         ImGui::End();
+        help_share_dialogs();
         if (auto *t = tab()) asset_dialogs(*t);
         prompts();
         recover();
@@ -3874,6 +3892,7 @@ class App {
 #include "studio_batch_smoke.inc"
 #include "studio_checks_smoke.inc"
 #include "studio_camera_checks_smoke.inc"
+#include "studio_help_share_smoke.inc"
 
 struct InteractionSmoke {
     ObjectId id = 0;
@@ -4206,6 +4225,8 @@ int run(int argc, char **argv) {
     AssetToolsSmoke asset_smoke;
     BatchImportSmoke batch_smoke;
     ChecksSmoke checks_smoke;
+    HelpShareSmoke help_share_smoke;
+    bool test_help_share = smoke && argc >= 5 && std::string(argv[4]) == "--help-share";
     CameraChecksSmoke camera_checks_smoke;
     bool test_camera_checks = smoke && argc >= 5 && std::string(argv[4]) == "--camera-checks";
     bool test_checks = smoke && argc >= 5 && std::string(argv[4]) == "--checks";
@@ -4343,6 +4364,7 @@ int run(int argc, char **argv) {
             if (frames == 9 || frames == 10 || frames == 15 || frames == 16)
                 io.AddMouseButtonEvent(0, frames == 9 || frames == 15);
         }
+        if (test_help_share) help_share_smoke.input(app, frames);
         if (test_camera_checks) camera_checks_smoke.input(app, frames);
         if (test_checks) checks_smoke.input(app, frames);
         if (test_asset_tools) asset_smoke.input(app, frames);
@@ -4359,6 +4381,7 @@ int run(int argc, char **argv) {
             app.tab()->optimize_mode = 3;
         }
         app.frame();
+        if (test_help_share && !help_share_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_camera_checks && !camera_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_checks && !checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_batch_import && !batch_smoke.check(app, frames)) { rc = 1; app.running = false; }
@@ -4387,7 +4410,7 @@ int run(int argc, char **argv) {
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), app.renderer);
         if (smoke && (frames == 3 || frames == 7 || frames == 11 || frames == 31 ||
                       ((test_animation || test_review) && frames == 23) ||
-                      ((test_asset_tools || test_batch_import) && (frames == 13 || frames == 19 || frames == 23)))) {
+                      ((test_asset_tools || test_batch_import || test_help_share) && (frames == 13 || frames == 19 || frames == 23)))) {
             int w, h;
             SDL_GetRendererOutputSize(app.renderer, &w, &h);
             std::vector<uint8_t> rgba((size_t)w * h * 4);
@@ -4511,14 +4534,14 @@ int run(int argc, char **argv) {
                     } else t.receipt_before = std::make_unique<RomReceipt>(*t.receipt_after);
                 }
             }
-            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks) {
+            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks && !test_help_share) {
                 SDL_SetWindowSize(app.window, 1000, 720);
                 if (app.tab() && !test_navigation)
                     app.tab()->fit = true;
             }
-            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks)
+            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share)
                 app.page = 1;
-            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks) {
+            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share) {
                 app.page = 2;
                 if (argc >= 5 && std::string(argv[4]) == "--prepare" && app.tab())
                     app.prepare_game(*app.tab());

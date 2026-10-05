@@ -17,7 +17,7 @@ not evidence that the new UI needs another tool.
 | Automatic during game export | Runtime X-order preparation, bounds/table generation and equivalence checks | Belongs to the export copy. Save must not silently change overlap/drawing order |
 | Keep deliberate and reviewable | Palette/index remapping, unused-art removal, recoloring, crop/split/merge, runtime assembly changes | Can change sharing, external references, animation or game drawing even when the static editor picture matches |
 | Retire as separate new-UI concepts | “Run Safe Fixes,” guessed layer assignment, delete-outside shortcuts, redundant repair/readiness/preview panels, application-wide Simple/Advanced mode | Replace with explicit editing, useful diagnostics and automatic bookkeeping; do not copy the old workflow scaffolding |
-| Defer to optional specialist workflows | Stage-specific builders, actor/FX recipes, ROM reallocation, sharing/publishing, LOD workspace import | Useful for particular projects; not required to arrange or save a stage |
+| Defer to optional specialist workflows | Stage-specific builders, actor/FX recipes, ROM reallocation, LOD workspace import | Useful for particular projects; not required to arrange or save a stage |
 
 “Retire” here means no corresponding standalone tool in the rebuilt interface.
 It does not delete the old implementation or remove access through `--legacy-ui`.
@@ -54,9 +54,46 @@ undo/redo. Checking or following a finding does not repair, save, or modify the
 artwork. Counts/backups/readback remain automatic on Save; runtime X-order
 preparation remains part of the isolated game-export copy.
 
-Remaining consolidation work includes sampled object/palette pressure, camera
-coverage and generated-output freshness in this list. Existing Optimize/export
-tools still own their deeper analyses; those checks have not all been migrated.
+### Camera and resource checks — October 5, 2026
+
+**Build & Check → Scan camera range** runs a cancellable background scan. Its
+warnings join the same findings list under **Camera / resources**, with **View
+camera** links to the sampled position. No new tool window or repair operation
+is involved. The report includes the range, sampling step, reserve, peak counts
+and limits of the analysis.
+
+The initial horizontal range runs from the authored start to world width minus
+400 (or the start if larger); Y defaults to the authored start. These are
+editable assumptions, not verified gameplay limits. The scan samples a 400×254
+viewport, includes both range endpoints even when the step does not divide the
+range, and caps work at 2,048 samples / 8,192 placements. The default step is 16
+pixels; increase it or narrow the range for large two-dimensional scans.
+
+It counts intersecting static placement bounds and distinct visible palettes,
+including editor-hidden artwork because those placements are still saved.
+Object pressure includes an adjustable reserve (56 by default) for fighters,
+effects and stage actors against the shared 358-object pool. It warns above
+that capacity and about low remaining headroom. Palette pressure is flagged
+above 35 visible background palettes; allocation lifetime and animation
+palettes remain outside this estimate.
+
+Coverage finds horizontal spans with **no static artwork bounds anywhere in
+the viewport's height**. This catches potentially unintended blank columns,
+including an entirely empty viewport. Intentional gaps and runtime overlays
+can explain them. It does not check transparent pixels, vertical holes,
+occlusion, or prove that every camera between samples is safe. Missing source
+references are omitted and unmapped layers use authored transforms; unresolved
+mapping and custom stage profiles produce an explicit qualification.
+
+Document or scan-option changes mark the result stale and remove its findings
+from current counts/reports. Undo can restore a matching result. Partial or
+cancelled results are not used. Opening a camera only changes the editor view;
+hidden artwork remains hidden. A scan never saves, modifies pixels, prepares an
+export, runs a game build, or changes a checkout.
+
+Remaining consolidation work includes generated-output freshness and deeper
+pixel coverage in this list. Existing Optimize/export tools still own their
+analyses; their checks have not all been migrated.
 
 ### Why a generic cleanup-on-save is not appropriate
 
@@ -163,6 +200,7 @@ ctest --test-dir BUILD -C Release -R "^studio_(document|animation)$" --output-on
 bddview --studio-smoke NEW_OUTPUT --demo --asset-tools [FIXTURE.IMG]
 bddview --studio-smoke NEW_OUTPUT --demo --batch-import
 bddview --studio-smoke NEW_OUTPUT --demo --checks
+bddview --studio-smoke NEW_OUTPUT --demo --camera-checks
 ```
 
 The UI smoke paints a continuous stroke through ImGui events, applies it,
@@ -188,3 +226,69 @@ smoke exercises severity/category/search filters, placement framing, artwork
 navigation, report copying and cache refresh after undo. Core tests exercise
 repeated and hidden placements, alternate palettes, unplaced artwork, malformed
 storage, duplicate IDs, independent reference errors and the LOAD2 header cap.
+
+October 5 camera-scan verification: Windows Release build; camera checks,
+document, game-export and synthetic runtime-export suites (4/4); camera/checks,
+canvas, navigation and asset-tools UI smokes. The 900×640 camera smoke exercises
+scan launch, camera navigation, stale-result removal after edits/options,
+restoration after undo, and copying the report. Core tests cover viewport edge
+contact, interior gaps, endpoint sampling on both axes, fractional/negative
+parallax, source offsets, hidden placements, palette uniqueness, reserves,
+invalid/unresolved input, cancellation and bounded workloads. No game build or
+emulator was run for these estimates.
+
+## Help and stage sharing — October 5, 2026
+
+The new Help menu restores **About bddtool / build information**, **GitHub wiki**,
+**Stage catalog**, and **Share a stage**. About displays the application version,
+compile timestamp, architecture, compiler, SDL runtime and ImGui versions, with
+a copyable build summary. Editing shortcuts remain in Help. Sharing is also
+available through **File → Share stage**.
+
+Share Stage prepares a new local folder from a document snapshot, including
+current applied edits without changing the open document's save point, path,
+undo history or source files. Set a bundle/wiki name (letters, digits and
+underscores), author, description, sources, use/license, and game testing notes.
+The bundle name names the files/page; it does not rename internal game stage or
+module identifiers. Author and licensing context are required; no redistribution
+permission or emulator testing is assumed by default.
+
+The ZIP contains BDB, BDD, `.bddstudio`, `.BDD.meta`, an overview PNG, a 400×254
+start-camera PNG, every image as a prop PNG, and one wiki Markdown page. Previews
+include saved hidden placements and all BDD artwork is included in the archive,
+including unplaced images. The page records authoring findings and layer data.
+Game assembly, runtime IMG animations, emulator output and a scrolling movie
+are not bundled. It directs recipients through Build & Check rather than
+inventing stage-specific assembly bindings. The legacy animated-media exporter
+remains available separately.
+
+Review the folder/page, then choose **Open GitHub submission draft**. Attach the
+ZIP and submit it in the browser. The app does not authenticate, post an issue,
+upload files, approve a stage, or push the wiki. The existing repository workflow
+publishes accepted submissions after a maintainer's `stage-approved` label.
+Document or credit changes disable the draft action until a fresh bundle is
+built. Existing output folders are refused; failed work remains local and is
+never offered as a ready submission.
+
+The wiki publisher now copies and rewrites links to both editor companions and
+pins them with binary Git attributes, alongside BDB/BDD, so checkout line-ending
+conversion does not corrupt their bytes. Older wiki clones receive these new
+attributes too. Remote wiki availability and actual publication were not tested;
+no issue or wiki content was posted during development.
+
+Verification: Release build, `studio_share` snapshot/savepoint/undo/PNG tests,
+ZIP CRC/content checks, two offline publisher tests, and the 900×640 Help/Share
+UI smoke (About/menu navigation, bundle creation, page copy and stale-credit
+handling). Fixtures use synthetic artwork. Commands:
+
+```text
+ctest --test-dir BUILD -C Release -R "^studio_share$" --output-on-failure
+python tests/test_publish_stage_to_wiki.py
+bddview --studio-smoke NEW_OUTPUT --demo --help-share
+```
+
+The overview is bounded to 2048×1024, the source artwork to 16 million pixels,
+and each preview to 128 million compositing operations. The camera image stays
+400×254. Structural reference/pixel errors must be resolved before sharing;
+runtime/LOAD2 findings remain visible in the page rather than being described
+as passed. Checks and screenshots are authoring evidence, not game verification.

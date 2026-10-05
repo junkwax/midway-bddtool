@@ -31,7 +31,7 @@ IMAGE_SUFFIXES = {".png", ".gif", ".mp4", ".webm", ".jpg"}
 # The stage itself. A page that shows a stage off but withholds the two files
 # it is made of is only half an entry, so these get published beside the
 # renders and linked for download like any other asset.
-STAGE_SUFFIXES = {".bdd", ".bdb"}
+STAGE_SUFFIXES = {".bdd", ".bdb", ".bddstudio", ".meta"}
 ASSET_SUFFIXES = IMAGE_SUFFIXES | STAGE_SUFFIXES
 
 
@@ -78,14 +78,15 @@ def read_stat(page: str, label: str) -> str:
 # check. Pin both so the outcome does not depend on the publisher's git config.
 GITATTRIBUTES = (
     "# Stage files are binary -- never let autocrlf rewrite them.\n"
-    "*.BDB -text\n*.BDD -text\n*.bdb -text\n*.bdd -text\n"
+    "*.BDB -text\n*.BDD -text\n*.bdb -text\n*.bdd -text\n*.bddstudio -text\n*.meta -text\n"
 )
 
 
 def ensure_binary_attrs(wiki: Path) -> None:
     path = wiki / ".gitattributes"
     text = path.read_text(encoding="utf-8") if path.exists() else ""
-    if "*.BDB -text" in text:
+    required = [line for line in GITATTRIBUTES.splitlines() if line and not line.startswith("#")]
+    if all(line in text.splitlines() for line in required):
         return
     path.write_text((text.rstrip() + "\n\n" if text.strip() else "") + GITATTRIBUTES,
                     encoding="utf-8")
