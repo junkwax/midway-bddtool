@@ -2,6 +2,9 @@
 #include "Core/studio_rom_receipt.h"
 #include "Core/studio_cave_export.h"
 #include <algorithm>
+#include <array>
+#include <ctime>
+#include <cstring>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -578,6 +581,72 @@ bool prepare_game_export(const Document &document, const std::string &game_root,
         error = e.what();
         return false;
     }
+}
+
+bool game_export_context_matches(const GameExport &package, uint64_t revision,
+                                 const std::string &root, const std::string &requested_label) {
+    std::error_code ec;
+    if (root.empty() || package.revision != revision || package.requested_label != upper(requested_label)) return false;
+    auto path = fs::weakly_canonical(fs::u8path(root), ec);
+    return !ec && path.u8string() == package.root;
+}
+ExportFreshness inspect_game_export(const GameExport &package) {
+    ExportFreshness result;
+    result.root = package.root; result.folder = package.folder;
+    result.revision = package.revision; result.applied = package.applied;
+    auto now = std::time(nullptr); std::tm stamp{};
+#ifdef _WIN32
+    gmtime_s(&stamp, &now);
+#else
+    gmtime_r(&now, &stamp);
+#endif
+    char timestamp[40] = {}; std::strftime(timestamp, sizeof timestamp, "%Y-%m-%d %H:%M:%S UTC", &stamp);
+    result.checked_at = timestamp;
+    auto finding = [&](const std::string &message) {
+        Issue issue; issue.error = true; issue.group = IssueGroup::Export; issue.message = message;
+        issue.next_step = "Review the changed file and prepare a fresh export. This check does not restore or overwrite anything.";
+        result.issues.push_back(std::move(issue));
+    };
+    try {
+        check(!package.files.empty(), "No reviewed export files are available.");
+        auto root = fs::canonical(fs::u8path(package.root));
+        auto folder = package.applied ? fs::u8path(package.folder) : fs::canonical(fs::u8path(package.folder));
+        auto compare = [&](const fs::path &base, const GameExportFile &file, const std::string &expected,
+                           bool expected_exists, const char *scope) {
+            ++result.files_checked;
+            std::string label = std::string(scope) + ": " + file.relative;
+            try {
+                auto relative = fs::u8path(file.relative);
+                check(!relative.empty() && !relative.has_root_path(), "Invalid relative path");
+                for (const auto &part : relative) check(part != "..", "Parent traversal is not an export path");
+                auto path = target(base, file.relative);
+                bool exists = fs::exists(path);
+                if (exists != expected_exists) { finding(label + (exists ? " appeared since review" : " is missing")); return; }
+                if (!expected_exists) return;
+                check(fs::is_regular_file(path), "Not a regular file");
+                if (fs::file_size(path) != expected.size()) { finding(label + " changed since review"); return; }
+                std::ifstream in(path, std::ios::binary); check(bool(in), "Cannot read file");
+                std::array<char, 65536> buffer;
+                for (size_t offset = 0; offset < expected.size();) {
+                    size_t length = std::min(buffer.size(), expected.size() - offset);
+                    in.read(buffer.data(), (std::streamsize)length);
+                    check(in.gcount() == (std::streamsize)length && !in.bad(), "Read failed or file changed during check");
+                    if (std::memcmp(buffer.data(), expected.data() + offset, length)) { finding(label + " changed since review"); return; }
+                    offset += length;
+                }
+                if (in.peek() != std::char_traits<char>::eof() || in.bad()) finding(label + " changed during check or could not be read");
+            } catch (const std::exception &e) { finding(label + ": " + e.what()); }
+        };
+        if (fs::exists(root / ".bddstudio-applying") || fs::exists(folder / "APPLYING.txt"))
+            finding("An export apply transaction is active or unfinished. Review its recovery files before continuing.");
+        for (const auto &file : package.dependencies) compare(root, file, file.before, file.existed, "Dependency");
+        for (const auto &file : package.files) {
+            compare(root, file, package.applied ? file.after : file.before, package.applied || file.existed, "Game source");
+            if (!package.applied) compare(folder, file, file.after, true, "Staged output");
+        }
+        result.complete = true;
+    } catch (const std::exception &e) { finding(e.what()); }
+    return result;
 }
 
 bool apply_game_export(GameExport &package, std::string &error) {

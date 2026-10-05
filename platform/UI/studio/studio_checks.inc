@@ -5,6 +5,7 @@
         case IssueGroup::Load2: return "LOAD2";
         case IssueGroup::Layers: return "Layers";
         case IssueGroup::Camera: return "Camera / resources";
+        case IssueGroup::Export: return "Export / sources";
         }
         return "Authoring";
     }
@@ -24,6 +25,54 @@
             t.selected.clear(); t.plane = issue.plane; t.fit = true;
         }
         page = 0;
+    }
+    bool export_check_current(const Tab &t) const {
+        if (!t.game_export || !t.export_check) return false;
+        const auto &p = *t.game_export; const auto &c = *t.export_check;
+        return c.root == p.root && c.folder == p.folder && c.revision == p.revision && c.applied == p.applied &&
+            game_export_context_matches(p, t.document.state().revision, t.game_root, t.game_label);
+    }
+    void start_export_check(Tab &t) {
+        if (!t.game_export) return;
+        ++t.export_check_version;
+        t.export_check_pending = t.export_check_job.valid();
+        if (t.export_check_pending) return;
+        t.export_job_version = t.export_check_version;
+        auto package = *t.game_export;
+        t.export_check_job = std::async(std::launch::async, [package] { return inspect_game_export(package); });
+    }
+    bool start_checked_game_build(Tab &t) {
+        if (!t.game_export || !t.game_export->applied || game_build_running() || t.receipt_job.valid() ||
+            !game_export_context_matches(*t.game_export, t.document.state().revision, t.game_root, t.game_label)) {
+            error = "Apply a current reviewed export and wait for active work before building.";
+            return false;
+        }
+        auto &package = *t.game_export;
+        // A displayed observation can age; re-read at the actual build action.
+        ++t.export_check_version; t.export_check_pending = false;
+        t.export_check = std::make_unique<ExportFreshness>(inspect_game_export(package));
+        if (!t.export_check->matches()) {
+            error = "Export/source check failed: " + t.export_check->issues.front().message;
+            return false;
+        }
+        if (!t.game_build.start(package.root, (fs::u8path(package.folder) / "build.log").u8string(), error, package.build_script)) return false;
+        t.reviewed_build = false; t.receipt_after.reset();
+        toast("Game build started. The log is shown below.");
+        return true;
+    }
+    void export_check_controls(Tab &t) {
+        if (!t.game_export) return;
+        bool busy = t.export_check_job.valid() || game_build_running();
+        ImGui::BeginDisabled(busy);
+        if (ImGui::SmallButton("Recheck export files")) start_export_check(t);
+        export_check_point = item_center();
+        ImGui::EndDisabled(); ImGui::SameLine();
+        if (t.export_check_job.valid()) ImGui::TextDisabled("Reading reviewed sources and dependencies...");
+        else if (!export_check_current(t)) ImGui::TextDisabled("No matching disk check for this export/context.");
+        else ImGui::TextDisabled("Last check: %zu file checks, %zu findings", t.export_check->files_checked, t.export_check->issues.size());
+        if (ImGui::IsItemHovered() && export_check_current(t))
+            ImGui::SetTooltip("Checked %s. Results describe that observation; Recheck reads the files again.", t.export_check->checked_at.c_str());
+        ImGui::TextDisabled("Files rechecked before Apply/Build. ROM source freshness remains unverified.");
     }
     void start_camera_check(Tab &t) {
         if (t.camera_check_job.valid()) return;
@@ -75,6 +124,7 @@
         refresh_checks(t);
         ImGui::SeparatorText("Authoring checks");
         camera_check_controls(t);
+        export_check_controls(t);
         ImGui::Text("%d errors  /  %d warnings", t.info_errors, t.info_warnings);
         ImGui::SameLine();
         if (ImGui::SmallButton("Copy report")) {
@@ -83,6 +133,11 @@
             if (t.camera_check && camera_check_current(*t.camera_check, t.document.state(), t.camera_check_options))
                 report += camera_check_report(*t.camera_check);
             else report += "Camera/resource scan not current (not run, incomplete or stale).\n";
+            if (export_check_current(t)) {
+                report += "Export/source disk check: " + t.export_check->checked_at + "\n";
+                report += t.export_check->matches() ? "Reviewed file bytes matched at check time.\n" : "Reviewed file check has findings.\n";
+            } else report += "Export/source disk check: no matching observation.\n";
+            report += "Generated tables, program/video ROM source freshness and emulator appearance are not established by source checks.\n";
             for (const auto &issue : t.check_issues) {
                 report += std::string(issue.error ? "ERROR" : "WARNING") + " [" + issue_group_name(issue.group) + "] " + issue.message;
                 if (issue.object) report += " [placement " + std::to_string(issue.object) + "]";
@@ -93,11 +148,12 @@
             ImGui::SetClipboardText(report.c_str()); toast("All authoring findings copied");
         }
         check_report_point = item_center();
-        ImGui::TextWrapped("Checks include hidden artwork and unplaced assets. Save maintains counts, companions and backups, then verifies file readback. Game export prepares X-order on its own copy.");
+        ImGui::SameLine(); ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Read-only findings include hidden artwork and unplaced assets.\nSave maintains counts, companions and backups, then verifies file readback.\nGame export prepares X-order on its own copy.");
         ImGui::SetNextItemWidth(130);
         ImGui::Combo("##check-severity", &t.check_severity, "All severities\0Errors\0Warnings\0");
         ImGui::SameLine(); ImGui::SetNextItemWidth(170);
-        ImGui::Combo("##check-group", &t.check_group, "All categories\0References\0Artwork / palettes\0LOAD2\0Layers\0Camera / resources\0");
+        ImGui::Combo("##check-group", &t.check_group, "All categories\0References\0Artwork / palettes\0LOAD2\0Layers\0Camera / resources\0Export / sources\0");
         t.check_filter.Draw("Search findings", std::min(260.0f, ImGui::GetContentRegionAvail().x - 130));
         // Keep export controls reachable even when a file has hundreds of bad references.
         float height = std::clamp(ImGui::GetContentRegionAvail().y * .55f, 150.0f, 360.0f);
@@ -115,6 +171,10 @@
                                "%s / %s", issue.error ? "ERROR" : "REVIEW", issue_group_name(issue.group));
             ImGui::TextWrapped("%s", issue.message.c_str());
             ImGui::TextWrapped("%s", issue.next_step.c_str());
+            if (issue.group == IssueGroup::Export) {
+                if (ImGui::SmallButton("Review game export")) t.jump_to_export = true;
+                if (shown == 1) export_review_point = item_center();
+            }
             if (issue.has_camera) {
                 ImGui::TextDisabled("Sample camera: %.0f, %.0f", issue.camera.x, issue.camera.y);
                 if (ImGui::SmallButton("View camera")) {

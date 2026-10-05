@@ -169,6 +169,14 @@ int main(int argc, char **argv) {
                                     error),
                 error);
         require(read(game / "src" / "BGND.ASM") == assembly(1), "Preparing modified game sources");
+        auto fresh = inspect_game_export(package);
+        require(fresh.matches() && fresh.files_checked == package.files.size() * 2 + package.dependencies.size() &&
+                    !fresh.checked_at.empty(), "Fresh export not recognized by byte checks");
+        require(game_export_context_matches(package, single.state().revision, game.u8string(), "") &&
+                    !game_export_context_matches(package, single.state().revision + 1, game.u8string(), "") &&
+                    !game_export_context_matches(package, single.state().revision, root.u8string(), "") &&
+                    !game_export_context_matches(package, single.state().revision, game.u8string(), "wrong_label"),
+                "Export context accepted changed document or destination");
         require(package.report.find("STAGE.IRW: fixed slot 4096 bytes") != std::string::npos,
                 "Current slot capacity missing from export review");
         require(package.report.find("Runtime Z/Y order:") != std::string::npos &&
@@ -176,6 +184,9 @@ int main(int argc, char **argv) {
                 "Export review omitted runtime roundtrip verification");
         write(game / "makevrom.py",
               "CUSTOM_VIDEO_SLOTS = {'STAGE.IRW': (0x800000, 0x800800, 'shrunk')}\n");
+        fresh = inspect_game_export(package);
+        require(!fresh.matches() && fresh.issues.front().message.find("makevrom.py") != std::string::npos,
+                "Freshness check missed packing changes");
         require(!apply_game_export(package, error) &&
                     error.find("makevrom.py") != std::string::npos,
                 "Packing changes since review were ignored");
@@ -193,6 +204,9 @@ int main(int argc, char **argv) {
         auto staged = root / "package2" / "src" / "BGND.ASM";
         auto staged_bytes = read(staged);
         write(staged, staged_bytes + "tamper");
+        fresh = inspect_game_export(package);
+        require(!fresh.matches() && fresh.issues.front().message.find("Staged output") != std::string::npos,
+                "Freshness check missed staged output tampering");
         require(!apply_game_export(package, error), "Modified staged package accepted");
         write(staged, staged_bytes);
         fs::create_directory(game / ".bddstudio-applying");
@@ -204,6 +218,25 @@ int main(int argc, char **argv) {
                 "Locked checkout was modified");
         fs::remove(game / ".bddstudio-applying");
         require(apply_game_export(package, error), error);
+        fresh = inspect_game_export(package);
+        require(fresh.matches() && fresh.files_checked == package.files.size() + package.dependencies.size(),
+                "Applied export checked against original bytes or staged files");
+        auto lod = read(game / "data" / "STAGE.LOD");
+        auto lod_time = fs::last_write_time(game / "data" / "STAGE.LOD");
+        auto changed_lod = lod; changed_lod[0] = 'X';
+        write(game / "data" / "STAGE.LOD", changed_lod);
+        fs::last_write_time(game / "data" / "STAGE.LOD", lod_time);
+        require(!inspect_game_export(package).matches(), "Same-size, same-timestamp dependency change passed the build preflight");
+        write(game / "data" / "STAGE.LOD", lod);
+        require(inspect_game_export(package).matches(), "Restored source bytes stayed stale");
+        auto invalid_path = package;
+        invalid_path.dependencies.push_back({"../escape.txt", "", "", false});
+        require(!inspect_game_export(invalid_path).matches(), "Freshness reader accepted parent traversal");
+        auto absent = package;
+        absent.dependencies.push_back({"optional.txt", "", "", false});
+        require(inspect_game_export(absent).matches(), "Expected missing dependency was treated as stale");
+        write(game / "optional.txt", "new");
+        require(!inspect_game_export(absent).matches(), "Newly appeared dependency went unnoticed");
         require(fs::exists(root / "package2" / "APPLIED.txt"), "No apply receipt");
         require(!fs::exists(game / ".bddstudio-applying"), "Successful apply left checkout locked");
         require(read(root / "package2" / "backups" / "src" / "BGND.ASM") ==

@@ -103,6 +103,10 @@ struct Tab {
     char game_root[1024] = {}, game_label[96] = {};
     ImGuiTextFilter rom_slot_filter;
     std::unique_ptr<GameExport> game_export;
+    std::future<ExportFreshness> export_check_job;
+    std::unique_ptr<ExportFreshness> export_check;
+    bool jump_to_export = false, export_check_pending = false;
+    uint64_t export_check_version = 0, export_job_version = 0;
     GameBuild game_build;
     char reviewed_job[2048] = {};
     bool reviewed_build = false;
@@ -266,6 +270,8 @@ class App {
     bool about_requested = false;
     Point help_menu_point, about_open_point, share_open_point, share_close_point, share_build_point, share_copy_point, about_close_point;
     bool share_submission_enabled = false;
+    Point export_check_point, export_review_point;
+    float export_section_y = 0;
     Point check_locate_point, check_artwork_point, check_report_point, camera_scan_point, camera_jump_point;
     int check_visible_count = 0;
     Tab *tab() { return active >= 0 && active < (int)tabs.size() ? tabs[active].get() : nullptr; }
@@ -534,6 +540,13 @@ class App {
         ImGui::Spacing();
     }
     void refresh_checks(Tab &t) {
+        if (t.export_check_job.valid() && t.export_check_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            try {
+                auto observation = t.export_check_job.get();
+                if (t.export_job_version == t.export_check_version) t.export_check = std::make_unique<ExportFreshness>(std::move(observation));
+            } catch (const std::exception &e) { error = e.what(); }
+        }
+        if (t.export_check_pending && !t.export_check_job.valid()) start_export_check(t);
         const auto &s = t.document.state();
         if (t.camera_check_job.valid() && t.camera_check_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             try { t.camera_check = std::make_unique<CameraCheck>(t.camera_check_job.get()); }
@@ -546,6 +559,19 @@ class App {
         t.check_issues = t.authoring_issues;
         if (t.camera_check && camera_check_current(*t.camera_check, s, t.camera_check_options))
             t.check_issues.insert(t.check_issues.end(), t.camera_check->issues.begin(), t.camera_check->issues.end());
+        if (t.game_export) {
+            if (!game_export_context_matches(*t.game_export, s.revision, t.game_root, t.game_label)) {
+                Issue issue; issue.group = IssueGroup::Export;
+                issue.message = "Reviewed export no longer matches the document, checkout or stage label";
+                issue.next_step = "Review the destination and prepare a new export for the current edits.";
+                t.check_issues.push_back(std::move(issue));
+            } else if (export_check_current(t)) {
+                t.check_issues.insert(t.check_issues.end(), t.export_check->issues.begin(), t.export_check->issues.end());
+            }
+        }
+        std::stable_sort(t.check_issues.begin(), t.check_issues.end(), [](const Issue &a, const Issue &b) {
+            return a.error != b.error ? a.error > b.error : a.group < b.group;
+        });
         t.info_errors = t.info_warnings = 0;
         for (const auto &issue : t.check_issues)
             issue.error ? ++t.info_errors : ++t.info_warnings;
@@ -1508,6 +1534,7 @@ class App {
         if (prepare_game_export(t.document, t.game_root, folder.u8string(), *package, error,
                                 t.game_label)) {
             t.game_export = std::move(package);
+            start_export_check(t);
             if ((!t.receipt_before || !t.receipt_before->valid) && !t.receipt_job.valid())
                 start_receipt(t, t.game_export->root, false, true);
             toast("Export prepared. Review the changes below before applying.");
@@ -1515,6 +1542,8 @@ class App {
     }
     void game_integration(Tab &t) {
         ImGui::TextUnformatted("GAME INTEGRATION");
+        export_section_y = ImGui::GetItemRectMin().y;
+        if (t.jump_to_export) { ImGui::SetScrollHereY(0); t.jump_to_export = false; }
         ImGui::TextWrapped(
             "Prepare the live layout, review it, then apply it to an existing game stage. The full "
             "game build regenerates LOAD2 tables and assembles the result.");
@@ -1540,15 +1569,7 @@ class App {
                                t.receipt_before->error.c_str());
         if (t.game_export) {
             auto &package = *t.game_export;
-            std::error_code path_error;
-            auto selected_root = fs::weakly_canonical(fs::u8path(t.game_root), path_error);
-            std::string selected_label = t.game_label;
-            for (char &c : selected_label)
-                if (c >= 'a' && c <= 'z')
-                    c -= 32;
-            bool current = !path_error && package.revision == t.document.state().revision &&
-                           package.root == selected_root.u8string() &&
-                           package.requested_label == selected_label;
+            bool current = game_export_context_matches(package, t.document.state().revision, t.game_root, t.game_label);
             if (!current)
                 ImGui::TextColored(accent,
                                    "Layout or destination changed. Prepare a fresh export.");
@@ -1562,35 +1583,18 @@ class App {
             ImGui::SameLine();
             ImGui::BeginDisabled(busy || t.receipt_job.valid() || !current || package.applied);
             if (ImGui::Button("Apply reviewed export")) {
-                if (apply_game_export(package, error))
+                if (apply_game_export(package, error)) {
+                    start_export_check(t);
                     toast(package.build_script == "build.py"
                               ? "Game sources updated; backups saved. Run Build game next."
                               : "Game sources updated; backups saved. Run Build & verify ROMs next.");
+                }
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::BeginDisabled(busy || t.receipt_job.valid() || !current || !package.applied);
             if (ImGui::Button(package.build_script == "build.py" ? "Build game" : "Build & verify ROMs")) {
-                bool unchanged = true;
-                for (const auto &file : package.files) {
-                    std::ifstream in(fs::u8path(package.root) / fs::u8path(file.relative),
-                                     std::ios::binary);
-                    std::string bytes((std::istreambuf_iterator<char>(in)), {});
-                    if (!in || bytes != file.after) {
-                        error = "Game source changed after apply: " + file.relative +
-                                ". Prepare again.";
-                        unchanged = false;
-                        break;
-                    }
-                }
-                if (unchanged &&
-                    t.game_build.start(
-                        package.root, (fs::u8path(package.folder) / "build.log").u8string(), error,
-                        package.build_script)) {
-                    t.reviewed_build = false;
-                    t.receipt_after.reset();
-                    toast("Game build started. The log is shown below.");
-                }
+                start_checked_game_build(t);
             }
             ImGui::EndDisabled();
             if (package.applied)
@@ -3388,9 +3392,7 @@ class App {
         heading("Build & Check", "Review your layout, apply it to the game, and follow the build.");
         if (!t.document.notice().empty())
             ImGui::TextWrapped("%s", t.document.notice().c_str());
-        ImGui::TextWrapped("Authoring preview shows current BDB artwork with local layer "
-                           "transforms. Runtime actors, game-specific floor effects and compiled "
-                           "ROM output are not verified in this workspace.");
+        ImGui::TextWrapped("Static authoring checks. In-game appearance and generated ROMs require separate validation.");
         ImGui::Spacing();
         authoring_checks(t);
         ImGui::Spacing();
@@ -3893,6 +3895,7 @@ class App {
 #include "studio_checks_smoke.inc"
 #include "studio_camera_checks_smoke.inc"
 #include "studio_help_share_smoke.inc"
+#include "studio_export_checks_smoke.inc"
 
 struct InteractionSmoke {
     ObjectId id = 0;
@@ -4225,6 +4228,8 @@ int run(int argc, char **argv) {
     AssetToolsSmoke asset_smoke;
     BatchImportSmoke batch_smoke;
     ChecksSmoke checks_smoke;
+    ExportChecksSmoke export_checks_smoke;
+    bool test_export_checks = smoke && argc >= 5 && std::string(argv[4]) == "--export-checks";
     HelpShareSmoke help_share_smoke;
     bool test_help_share = smoke && argc >= 5 && std::string(argv[4]) == "--help-share";
     CameraChecksSmoke camera_checks_smoke;
@@ -4364,6 +4369,7 @@ int run(int argc, char **argv) {
             if (frames == 9 || frames == 10 || frames == 15 || frames == 16)
                 io.AddMouseButtonEvent(0, frames == 9 || frames == 15);
         }
+        if (test_export_checks) export_checks_smoke.input(app, frames);
         if (test_help_share) help_share_smoke.input(app, frames);
         if (test_camera_checks) camera_checks_smoke.input(app, frames);
         if (test_checks) checks_smoke.input(app, frames);
@@ -4381,6 +4387,7 @@ int run(int argc, char **argv) {
             app.tab()->optimize_mode = 3;
         }
         app.frame();
+        if (test_export_checks && !export_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_help_share && !help_share_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_camera_checks && !camera_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_checks && !checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
@@ -4534,14 +4541,14 @@ int run(int argc, char **argv) {
                     } else t.receipt_before = std::make_unique<RomReceipt>(*t.receipt_after);
                 }
             }
-            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks && !test_help_share) {
+            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks) {
                 SDL_SetWindowSize(app.window, 1000, 720);
                 if (app.tab() && !test_navigation)
                     app.tab()->fit = true;
             }
-            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share)
+            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks)
                 app.page = 1;
-            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share) {
+            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks) {
                 app.page = 2;
                 if (argc >= 5 && std::string(argv[4]) == "--prepare" && app.tab())
                     app.prepare_game(*app.tab());

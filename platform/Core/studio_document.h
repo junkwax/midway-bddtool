@@ -74,7 +74,7 @@ struct SceneItem {
     Rect rect;
     bool hflip = false, vflip = false, locked = false;
 };
-enum class IssueGroup { References, Artwork, Load2, Layers, Camera };
+enum class IssueGroup { References, Artwork, Load2, Layers, Camera, Export };
 struct Issue {
     std::string message;
     ObjectId object = 0;
