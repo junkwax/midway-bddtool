@@ -35,7 +35,8 @@ struct AnimationLibrary {
     std::vector<AnimationLibraryImage> images;
 };
 // Directory inspection does not decode pixels. Selected frames are reread and validated
-// when loaded; they never enter the stage document or its runtime animation overlay.
+// when loaded. Analysis does not modify the document or runtime overlay;
+// Document::import_img explicitly copies selected artwork into the authoring bank.
 AnimationLibrary inspect_animation_library(const std::string &path);
 AnimationPreview load_animation_selection(const std::string &path,
                                           const std::vector<std::string> &labels,

@@ -1,5 +1,10 @@
 # BDD/BDB editor redesign assessment
 
+**October 4 implementation follow-up:** the [workflow decisions](ASSET_TOOL_MIGRATION.md)
+classify old tools as core editing, consolidated workflows, automatic Save/export
+behavior, or retired/deferred specialist interfaces. Legacy feature parity is
+not the target. The assessment below remains the original redesign evidence.
+
 **Recommendation: retain the format and asset-processing code, and rebuild the editing application around a unified stage document.** Replace the current workspace, canvas interaction, document state, and command handling. Extract the runtime interpretation into a testable service. A complete rewrite would discard useful, tested knowledge; a cosmetic UI pass would leave the main placement problems intact.
 
 The first delivery should make one task dependable: open a stage, arrange artwork in its game composition, preview camera movement, undo changes, save, and reopen with the same result. Asset optimization, assembly repair, and ROM integration should support that task without occupying the everyday editing surface.

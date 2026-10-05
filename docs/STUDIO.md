@@ -27,7 +27,8 @@ own selection, camera, undo history, and save point.
 - Select a **layer row in the tree**, then drag its artwork to move the layer
   as a unit. Select an individual child to move one piece.
 - Drag a thumbnail from the asset tray into the selected layer. Import accepts
-  PNG, TGA, and BMP, using transparency below alpha 128 and exact RGB555 colors.
+  PNG, TGA, BMP and selected IMG artwork. Raster imports use transparency below
+  alpha 128 and exact RGB555 colors. IMG imports preserve indexed palettes.
 - Use arrow keys for one-pixel nudges, Shift+arrows for ten pixels. Hold Shift
   during a drag to constrain movement to one axis. Ctrl+D duplicates selected
   artwork; Delete removes it.
@@ -44,6 +45,32 @@ own selection, camera, undo history, and save point.
 
 The canvas renders and picks the same live document. It does not draw an
 external BLKS table while editing a different set of placements.
+
+## Import and edit artwork
+
+Use **Assets → Import PNG / IMG**, the Assets toolbar, or drop a file onto the
+application. IMG opens a filtered selection dialog; selected images enter the
+asset library as one undoable batch. Drag them into a stage layer to place them.
+
+For multiple raster files, choose **Import → PNG / TGA / BMP folder**. Review
+the selection and palette counts before importing the whole batch. Identical
+palette reuse can be disabled. The folder workflow uses the reviewed decoded
+data and never partially imports a failed selection.
+
+Double-click artwork for **Edit block**, or use the thumbnail context menu or
+placement inspector. Paint, erase, pick colors with right-click, flip X/Y and
+undo individual strokes in the draft. **Apply block** creates one document
+history entry; **Cancel** discards it. Scrollbars navigate enlarged blocks.
+
+**Palette** edits the selected shared palette with RGB555 precision. Copy the
+palette for that artwork first when other images should retain their colors.
+Palette shrinking and painting reject missing color references. **Export PNG**
+saves one image using its active/default palette. See the
+[migration checklist](ASSET_TOOL_MIGRATION.md) for limits and remaining tools.
+That guide also records which old panels are being consolidated or retired.
+Safe bookkeeping belongs to Save: counts, companions, metadata and backups are
+automatic, and the temporary BDB/BDD are now read back and checked before file
+replacement. Art-changing cleanup remains a deliberate editing/Optimize action.
 
 ## Camera and runtime interpretation
 
@@ -245,9 +272,10 @@ Existing image-width concerns appear in the review report for LOAD2 checking.
 - `studio_game_build`: asynchronous, shell-free launcher for the selected
   checkout's build script, with captured output and exit status.
 
-History retains up to 64 edits. Image imports currently require at most 255
-opaque RGB555 colors; palette reduction, pixel editing, IMG/LOD workflows,
-full LOAD2 diagnostics and ROM deployment remain in the specialist editor.
+History retains up to 64 edits. Raster imports require at most 255 opaque
+RGB555 colors. Pixel/palette editing and selected IMG import are in Assets;
+advanced palette reduction/grouping, IMG-folder/LOD import and specialist exports
+still use the original editor. See the asset migration checklist above.
 **Build & Check** currently checks missing references, layer assignment,
 runtime binding availability, and MK2 width constraints. MK3CAVE additionally
 supports the verified packing workflow above; other stages use the game's

@@ -89,6 +89,35 @@ int main(int argc, char **argv) {
         write(root / "src" / "BGND.ASM", source);
         write(root / "data" / "MKBGANI.IMG", img);
         auto doc = Document::demo();
+        {
+            auto imported = Document::empty();
+            auto untouched = imported.state().assets;
+            std::string error;
+            std::vector<int> ids;
+            auto path = (root / "data" / "MKBGANI.IMG").u8string();
+            require(imported.import_img(path, {"TREEANI1", "TREEANI2"}, error, ids), error);
+            require(ids.size() == 2 && imported.state().assets->data.palettes.size() == 1 &&
+                    imported.state().objects.empty(), "IMG import did not preserve shared palette or placed images unexpectedly");
+            require(imported.state().assets->metadata[0].anix == -2 &&
+                    imported.state().assets->metadata[1].aniy == -5,
+                    "IMG source anchors lost");
+            require(imported.image(ids[1])->pix == std::vector<uint8_t>({0,1,1,0,0,1,1,0}),
+                    "Compressed IMG import changed pixels");
+            require(imported.undo() && imported.state().assets == untouched && imported.redo(),
+                    "IMG batch import was not one undo command");
+            auto before = imported.state().assets;
+            require(!imported.import_img(path, {"TREEANI1", "ABSENT"}, error, ids) &&
+                    ids.empty() && imported.state().assets == before, "Failed IMG import changed document");
+            require(imported.import_img(path, {"TREEANI1"}, error, ids) && ids[0] == 2 &&
+                    imported.state().assets->data.palettes.size() == 1, "Reimport IDs/palette reuse failed");
+            auto saved = (root / "imported.BDB").u8string();
+            require(imported.save(saved, error), error);
+            Document reopened;
+            require(reopened.load(saved, error) && reopened.state().assets->metadata[1].aniy == -5 &&
+                    reopened.state().assets->data.images[1].pix == before->data.images[1].pix,
+                    "IMG artwork/metadata did not survive save and reopen");
+            require(read(root / "data" / "MKBGANI.IMG") == img, "IMG import rewrote its source");
+        }
         auto bank = doc.state().assets;
         auto preview = load_animation_preview(doc, root.u8string());
         require(preview.ready(), preview.notice);

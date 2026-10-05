@@ -671,69 +671,11 @@ bool Document::set_start(int x, int y, int ground) {
 
 bool Document::import_rgba(const std::string &name, int w, int h, const uint8_t *rgba,
                            std::string &error, int &id) {
-    if (!rgba || w <= 0 || h <= 0 || w > 4096 || h > 4096) {
-        error = "Image dimensions must be between 1 and 4096 pixels.";
-        return false;
-    }
-    if (state_.assets->data.images.size() >= BDD_CORE_MAX_IMAGES ||
-        state_.assets->data.palettes.size() >= BDD_CORE_MAX_PALS) {
-        error = "Image or palette limit reached.";
-        return false;
-    }
-    std::map<uint16_t, size_t> histogram;
-    for (size_t i = 0; i < (size_t)w * h; i++)
-        if (rgba[i * 4 + 3] >= 128) {
-            uint32_t c =
-                0xff000000u | (rgba[i * 4] << 16) | (rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2];
-            histogram[bdd_core_argb_to_rgb555(c)]++;
-        }
-    // Exact RGB555 import. Color-reducing tools remain explicit in the specialist editor.
-    if (histogram.size() > 255) {
-        error = "This image uses more than 255 RGB555 colors. Reduce its palette in the specialist "
-                "editor before importing.";
-        return false;
-    }
-    auto bank = std::make_shared<AssetBank>(*state_.assets);
-    BddCoreImage im;
-    im.idx = 0;
-    im.w = w;
-    im.h = h;
-    im.flags = 0;
-    im.pix.resize((size_t)w * h);
-    for (const auto &existing : bank->data.images)
-        im.idx = std::max(im.idx, existing.idx + 1);
-    if (im.idx > 65535) {
-        error = "No free image ID.";
-        return false;
-    }
-    BddCorePalette pal = {};
-    std::snprintf(pal.name, sizeof pal.name, "%s", safe_name(name).c_str());
-    pal.count = 1;
-    std::map<uint16_t, int> indices;
-    for (auto kv : histogram) {
-        int n = pal.count++;
-        indices[kv.first] = n;
-        pal.rgb555[n] = kv.first;
-        pal.argb[n] = bdd_core_rgb555_to_argb(kv.first);
-    }
-    for (size_t i = 0; i < im.pix.size(); i++)
-        if (rgba[i * 4 + 3] >= 128) {
-            uint32_t c =
-                0xff000000u | (rgba[i * 4] << 16) | (rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2];
-            im.pix[i] = (uint8_t)indices[bdd_core_argb_to_rgb555(c)];
-        }
-    id = im.idx;
-    BddImageMetadata meta = {};
-    meta.idx = id;
-    std::snprintf(meta.label, sizeof meta.label, "%s", name.c_str());
-    bank->data.images.push_back(std::move(im));
-    bank->data.palettes.push_back(pal);
-    bank->metadata.push_back(meta);
-    bank->default_palettes.push_back((int)bank->data.palettes.size() - 1);
-    begin("Import image");
-    state_.assets = bank;
-    touch();
-    commit();
+    AssetBank input;
+    if (!make_raster_asset(name, w, h, rgba, input, error)) return false;
+    std::vector<int> ids;
+    if (!import_assets(input, false, error, ids)) return false;
+    id = ids.front();
     return true;
 }
 
@@ -900,11 +842,22 @@ bool Document::save_game_sources(const std::string &path, std::string &report,
 }
 
 bool Document::save(const std::string &path, std::string &error, bool recovery) {
+    error.clear();
     if (active_) {
         error = "Finish or cancel the current edit before saving.";
         return false;
     }
     try {
+        // Saving maintains file integrity; it does not rewrite IDs, palette order or artwork.
+        std::set<int> image_ids;
+        for (const auto &im : state_.assets->data.images) {
+            if (im.idx < 0 || im.idx > 65535 || !image_ids.insert(im.idx).second ||
+                im.w < 1 || im.h < 1 || im.w > 4096 || im.h > 4096 ||
+                im.pix.size() != size_t(im.w) * im.h) {
+                error = "Cannot save invalid image dimensions, pixel storage or duplicate image IDs.";
+                return false;
+            }
+        }
         fs::path base = fs::absolute(fs::u8path(path));
         fs::path bdb = companion(base, ".BDB"), bdd = companion(base, ".BDD");
         fs::path layout = base;
@@ -1047,6 +1000,55 @@ bool Document::save(const std::string &path, std::string &error, bool recovery) 
             if (!out) {
                 error = "Could not write image metadata.";
                 return false;
+            }
+        }
+        // Always read back the serialized pair before backups or replacement. This catches
+        // format loss/truncation without adding another repair button to the UI.
+        BddCoreBdd checked;
+        if (!bdd_core_load_bdd(temp_bdd.u8string().c_str(), &checked)) {
+            error = "Save verification failed: " + checked.error; return false;
+        }
+        if (checked.images.size() != output.bdd.images.size() || checked.palettes.size() != output.bdd.palettes.size()) {
+            error = "Save verification failed: artwork or palette count changed."; return false;
+        }
+        for (size_t i = 0; i < checked.images.size(); ++i) {
+            const auto &a = checked.images[i], &b = output.bdd.images[i];
+            if (std::tie(a.idx, a.w, a.h, a.flags, a.pix) != std::tie(b.idx, b.w, b.h, b.flags, b.pix)) {
+                error = "Save verification failed: image data changed."; return false;
+            }
+        }
+        for (size_t i = 0; i < checked.palettes.size(); ++i) {
+            const auto &a = checked.palettes[i], &b = output.bdd.palettes[i];
+            if (a.count != b.count || std::string(a.name) != b.name) {
+                error = "Save verification failed: palette name or size changed."; return false;
+            }
+            for (int c = 0; c < b.count; ++c) {
+                uint32_t decoded = c ? bdd_core_rgb555_to_argb(b.rgb555[c]) : 0;
+                uint16_t expected = decoded == b.argb[c] ? b.rgb555[c] : bdd_core_argb_to_rgb555(b.argb[c]);
+                if (a.rgb555[c] != expected) { error = "Save verification failed: palette color changed."; return false; }
+            }
+        }
+        if (output.has_bdb) {
+            BddCoreBdb checked_layout;
+            if (!bdd_core_load_bdb(files[0].temp.u8string().c_str(), &checked_layout)) {
+                error = "Save verification failed: " + checked_layout.error; return false;
+            }
+            const auto &expected = output.bdb;
+            if (checked_layout.objects.size() != expected.objects.size() ||
+                checked_layout.modules.size() != expected.modules.size() || checked_layout.header != expected.header) {
+                error = "Save verification failed: layout header or counts changed."; return false;
+            }
+            for (size_t i = 0; i < expected.objects.size(); ++i) {
+                const auto &a = checked_layout.objects[i], &b = expected.objects[i];
+                if (std::tie(a.wx, a.depth, a.sy, a.ii, a.fl) != std::tie(b.wx, b.depth, b.sy, b.ii, b.fl)) {
+                    error = "Save verification failed: placement data changed."; return false;
+                }
+            }
+            for (size_t i = 0; i < expected.modules.size(); ++i) {
+                const auto &a = checked_layout.modules[i], &b = expected.modules[i];
+                if (std::string(a.name) != b.name || std::tie(a.x1, a.x2, a.y1, a.y2) != std::tie(b.x1, b.x2, b.y1, b.y2)) {
+                    error = "Save verification failed: module bounds changed."; return false;
+                }
             }
         }
         // Prepare every file and every backup before replacing the first target.

@@ -49,6 +49,13 @@ bool has(const std::vector<ObjectId> &ids, ObjectId id) {
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 struct Tab {
+    struct ImportFile { std::string path, problem; int width = 0, height = 0; bool selected = false; };
+    std::vector<ImportFile> batch_files;
+    std::string batch_folder, batch_error;
+    bool batch_requested = false, batch_reuse = true;
+    AssetBank batch_input;
+    std::shared_ptr<const AssetBank> batch_before, batch_preview;
+    uint64_t batch_revision = 0;
     uint64_t id = 0;
     Document document;
     std::shared_ptr<const AssetBank> info_assets;
@@ -59,6 +66,17 @@ struct Tab {
     Viewport view;
     std::vector<ObjectId> selected;
     int plane = 0, solo = -1, asset = 0;
+    std::unique_ptr<AnimationLibrary> import_library;
+    std::vector<uint8_t> import_selected;
+    ImGuiTextFilter import_filter;
+    bool import_requested = false, palette_requested = false, block_requested = false;
+    int edit_palette = 0, edit_color = 1, edit_image = -1, block_zoom = 8;
+    bool block_grid = true, block_painting = false, block_dirty = false;
+    int block_last_x = 0, block_last_y = 0;
+    BddCorePalette palette_draft{};
+    std::shared_ptr<const AssetBank> edit_original;
+    State block_draft;
+    std::vector<std::vector<uint8_t>> block_undo, block_redo;
     bool fit = true, source = false, camera_preview = false, move_layer = false, hand_tool = false;
     Point camera;
     double next_recovery = 0;
@@ -197,6 +215,7 @@ class App {
     SDL_Window *window = nullptr;
     SDL_Renderer *renderer = nullptr;
     TextureCache textures;
+    TextureCache block_textures;
     TextureCache animation_textures;
     TextureCache animation_analysis_before, animation_analysis_after;
     TextureCache optimize_before_textures, optimize_after_textures;
@@ -222,6 +241,8 @@ class App {
     std::vector<ObjectId> drag_selection;
     Rect canvas_rect;
     Point animation_pause_point, animation_next_point, animation_library_edit_point, animation_library_close_point;
+    Point block_paint_point, block_apply_point, palette_apply_point, import_apply_point;
+    Point batch_review_point, batch_import_point, batch_cancel_point;
     Tab *tab() { return active >= 0 && active < (int)tabs.size() ? tabs[active].get() : nullptr; }
     void toast(const std::string &text) {
         message = text;
@@ -326,8 +347,20 @@ class App {
         return true;
     }
     void import_image(const std::string &path) {
+        error.clear();
         if (!tab())
             add(Document::empty());
+        cancel_gesture();
+        auto ext = fs::u8path(path).extension().u8string();
+        for (auto &c : ext) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+        if (ext == ".img") {
+            auto library = inspect_animation_library(path);
+            if (!library.error.empty()) { error = library.error; return; }
+            tab()->import_selected.assign(library.images.size(), 0);
+            tab()->import_library = std::make_unique<AnimationLibrary>(std::move(library));
+            tab()->import_filter.Clear(); tab()->import_requested = true;
+            return;
+        }
         int w = 0, h = 0, n = 0;
         if (!stbi_info(path.c_str(), &w, &h, &n) || w > 4096 || h > 4096) {
             error = "Cannot import this image; maximum dimensions are 4096 x 4096.";
@@ -344,13 +377,14 @@ class App {
         stbi_image_free(rgba);
         if (ok) {
             tab()->asset = (int)tab()->document.state().assets->data.images.size() - 1;
+            page = 1; search[0] = 0;
             tray = true;
             toast("Image imported. Drag it from Assets into a layer.");
         }
     }
     void import_dialog() {
         char path[1024] = {};
-        if (file_dialog_open("Import artwork", "Images\0*.png;*.tga;*.bmp\0All files\0*.*\0", path,
+        if (file_dialog_open("Import PNG or IMG artwork", "Artwork (PNG, IMG, TGA, BMP)\0*.png;*.PNG;*.img;*.IMG;*.tga;*.bmp\0All files\0*.*\0", path,
                              sizeof path))
             import_image(path);
     }
@@ -589,8 +623,9 @@ class App {
                     add(Document::empty());
                 if (ImGui::MenuItem("Open...", "Ctrl+O"))
                     open_dialog();
-                if (ImGui::MenuItem("Import artwork...", nullptr, false, tab() != nullptr))
+                if (ImGui::MenuItem("Import PNG / IMG artwork..."))
                     import_dialog();
+                if (ImGui::MenuItem("Import artwork folder...")) import_folder_dialog();
                 if (ImGui::MenuItem("Save", "Ctrl+S", false, tab() != nullptr))
                     save(*tab());
                 if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S", false, tab() != nullptr))
@@ -630,6 +665,16 @@ class App {
                     tab()->fit = true;
                 ImGui::EndMenu();
             }
+            if (ImGui::BeginMenu("Assets")) {
+                if (ImGui::MenuItem("Import PNG / IMG...")) import_dialog();
+                if (ImGui::MenuItem("Import artwork folder...")) import_folder_dialog();
+                auto *t = tab();
+                bool available = t && !t->document.state().assets->data.images.empty();
+                if (ImGui::MenuItem("Edit block pixels...", nullptr, false, available)) open_block_editor(*t);
+                if (ImGui::MenuItem("Edit palette...", nullptr, false, available)) open_palette_editor(*t);
+                if (ImGui::MenuItem("Export selected artwork as PNG...", nullptr, false, available)) export_asset_png(*t);
+                ImGui::EndMenu();
+            }
             if (ImGui::BeginMenu("Help")) {
                 ImGui::TextUnformatted(
                     "Drag to move. Shift-click to select more. Ctrl+D duplicates.");
@@ -639,8 +684,9 @@ class App {
                 ImGui::TextUnformatted("Arrow keys nudge 1 pixel; Shift nudges 10 pixels.");
                 ImGui::Separator();
                 ImGui::TextWrapped(
-                    "Specialist pixel, palette, IMG/LOD, and game-build tools remain in the "
-                    "original editor. Launch bddview --legacy-ui [file.BDB] to use them.");
+                    "Use Assets for PNG/IMG import, block painting and palette editing. "
+                    "Additional legacy tools (LOD import, palette grouping and tone matching) "
+                    "remain available through bddview --legacy-ui [file.BDB].");
                 ImGui::EndMenu();
             }
             if (auto *t = tab())
@@ -833,6 +879,14 @@ class App {
                       ImVec2(pos.x + im->w * scale, pos.y + im->h * scale), (p.object.wx & 16) != 0,
                       (p.object.wx & 32) != 0);
                 ImGui::TextDisabled("%d x %d pixels", im->w, im->h);
+                if (ImGui::Button("Edit block...")) { t.asset = (int)slot; open_block_editor(t); }
+                ImGui::SameLine();
+                if (ImGui::Button("Palette...")) {
+                    t.asset = (int)slot; open_palette_editor(t);
+                    t.edit_palette = p.object.fl;
+                    if (p.object.fl >= 0 && p.object.fl < (int)s.assets->data.palettes.size())
+                        t.palette_draft = s.assets->data.palettes[p.object.fl];
+                }
             }
             const Plane *plane = p.plane >= 0 ? &s.planes[p.plane] : nullptr;
             bool locked = p.locked || (plane && plane->locked);
@@ -1289,10 +1343,25 @@ class App {
         ImGui::SetNextItemWidth(180);
         ImGui::InputTextWithHint("##search", "Search artwork", search, sizeof search);
         ImGui::SameLine();
-        if (ImGui::Button("Import..."))
-            import_dialog();
+        if (ImGui::Button("Import...")) ImGui::OpenPopup("asset-import-menu");
+        if (ImGui::BeginPopup("asset-import-menu")) {
+            if (ImGui::MenuItem("PNG / IMG file...")) import_dialog();
+            if (ImGui::MenuItem("PNG / TGA / BMP folder...")) import_folder_dialog();
+            ImGui::EndPopup();
+        }
         ImGui::SameLine();
         ImGui::TextDisabled("Drag to place");
+        if (full) {
+            bool available = !t.document.state().assets->data.images.empty();
+            ImGui::BeginDisabled(!available);
+            if (ImGui::Button("Edit block...")) open_block_editor(t);
+            ImGui::SameLine();
+            if (ImGui::Button("Palette...")) open_palette_editor(t);
+            ImGui::SameLine();
+            if (ImGui::Button("Export PNG...")) export_asset_png(t);
+            ImGui::EndDisabled();
+            ImGui::SameLine(); ImGui::TextDisabled("Double-click artwork to edit its pixels");
+        }
         const auto bank = t.document.state().assets;
         int cols = std::max(1, (int)(ImGui::GetContentRegionAvail().x / 124));
         if (ImGui::BeginTable("assetgrid", cols, ImGuiTableFlags_SizingStretchSame)) {
@@ -1315,6 +1384,16 @@ class App {
                     ImGui::Selectable("##asset", t.asset == (int)i, 0, ImVec2(width, height));
                 if (click)
                     t.asset = (int)i;
+                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    t.asset = (int)i; open_block_editor(t);
+                }
+                if (ImGui::BeginPopupContextItem("asset-tools")) {
+                    t.asset = (int)i;
+                    if (ImGui::MenuItem("Edit block pixels...")) open_block_editor(t);
+                    if (ImGui::MenuItem("Edit palette...")) open_palette_editor(t);
+                    if (ImGui::MenuItem("Export PNG...")) export_asset_png(t);
+                    ImGui::EndPopup();
+                }
                 if (ImGui::BeginDragDropSource()) {
                     AssetPayload asset{t.id, (int)i};
                     ImGui::SetDragDropPayload("STUDIO_ASSET", &asset, sizeof asset);
@@ -1338,6 +1417,8 @@ class App {
             ImGui::EndTable();
         }
     }
+    #include "studio_asset_tools.inc"
+    #include "studio_batch_import.inc"
     bool game_build_running() const {
         for (const auto &t : tabs)
             if (t->game_build.running())
@@ -3285,8 +3366,9 @@ class App {
         ImGui::Separator();
         ImGui::TextUnformatted("Specialist tools");
         ImGui::TextWrapped(
-            "The existing editor remains available for pixel editing, palette reduction, IMG/LOD "
-            "import, LOAD2 diagnostics, and external game assembly workflows.");
+            "PNG/IMG import, pixel painting and palette editing are available in Assets. "
+            "The existing editor still provides palette grouping/reduction, tone matching, LOD "
+            "import and specialized assembly tools.");
         if (ImGui::Button("Copy specialist launch command")) {
             std::string command = "bddview --legacy-ui";
             if (!t.document.path().empty())
@@ -3752,12 +3834,16 @@ class App {
         } else
             ImGui::TextDisabled("Local files  /  Indexed artwork  /  Stage composition");
         ImGui::End();
+        if (auto *t = tab()) asset_dialogs(*t);
         prompts();
         recover();
     }
 };
 
 // Deterministic input through ImGui's normal event path, used only by --studio-smoke.
+#include "studio_asset_smoke.inc"
+#include "studio_batch_smoke.inc"
+
 struct InteractionSmoke {
     ObjectId id = 0;
     int initial_x = 0;
@@ -4051,6 +4137,7 @@ int run(int argc, char **argv) {
         return 1;
     }
     app.textures.renderer = app.renderer;
+    app.block_textures.renderer = app.renderer;
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     auto &io = ImGui::GetIO();
@@ -4085,6 +4172,11 @@ int run(int argc, char **argv) {
         app.open(argv[1]);
     int frames = 0, rc = 0;
     InteractionSmoke interactions;
+    AssetToolsSmoke asset_smoke;
+    BatchImportSmoke batch_smoke;
+    bool test_batch_import = smoke && argc >= 5 && std::string(argv[4]) == "--batch-import";
+    bool test_asset_tools = smoke && argc >= 5 && std::string(argv[4]) == "--asset-tools";
+    if (test_asset_tools && argc >= 6) asset_smoke.img_path = argv[5];
     NavigationSmoke navigation_smoke;
     bool test_navigation = smoke && argc >= 5 && std::string(argv[4]) == "--navigation";
     AnimationSmoke animation_smoke;
@@ -4216,6 +4308,8 @@ int run(int argc, char **argv) {
             if (frames == 9 || frames == 10 || frames == 15 || frames == 16)
                 io.AddMouseButtonEvent(0, frames == 9 || frames == 15);
         }
+        if (test_asset_tools) asset_smoke.input(app, frames);
+        if (test_batch_import) batch_smoke.input(app, frames);
         if (test_navigation) navigation_smoke.input(app, frames);
         if (smoke && argc < 4)
             interactions.input(app, frames);
@@ -4228,6 +4322,8 @@ int run(int argc, char **argv) {
             app.tab()->optimize_mode = 3;
         }
         app.frame();
+        if (test_batch_import && !batch_smoke.check(app, frames)) { rc = 1; app.running = false; }
+        if (test_asset_tools && !asset_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_navigation && !navigation_smoke.check(app, frames)) {
             rc = 1; app.running = false;
         }
@@ -4251,11 +4347,12 @@ int run(int argc, char **argv) {
         SDL_RenderClear(app.renderer);
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), app.renderer);
         if (smoke && (frames == 3 || frames == 7 || frames == 11 || frames == 31 ||
-                      ((test_animation || test_review) && frames == 23))) {
+                      ((test_animation || test_review) && frames == 23) ||
+                      ((test_asset_tools || test_batch_import) && (frames == 13 || frames == 19 || frames == 23)))) {
             int w, h;
             SDL_GetRendererOutputSize(app.renderer, &w, &h);
             std::vector<uint8_t> rgba((size_t)w * h * 4);
-            std::string name = test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
+            std::string name = test_batch_import ? ("batch-" + std::to_string(frames) + ".png") : test_asset_tools ? ("asset-tools-" + std::to_string(frames) + ".png") : test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
                                : frames == 3     ? "stage.png"
                                : frames == 7   ? "compact.png"
                                : frames == 11  ? "assets.png"
@@ -4375,7 +4472,7 @@ int run(int argc, char **argv) {
                     } else t.receipt_before = std::make_unique<RomReceipt>(*t.receipt_after);
                 }
             }
-            if (frames == 4) {
+            if (frames == 4 && !test_asset_tools && !test_batch_import) {
                 SDL_SetWindowSize(app.window, 1000, 720);
                 if (app.tab() && !test_navigation)
                     app.tab()->fit = true;
@@ -4391,6 +4488,7 @@ int run(int argc, char **argv) {
                 app.running = false;
         }
     }
+    app.block_textures.clear();
     app.textures.clear();
     app.animation_textures.clear();
     app.animation_analysis_before.clear();

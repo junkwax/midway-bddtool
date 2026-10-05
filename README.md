@@ -16,8 +16,11 @@ Layer transforms are saved in a `.bddstudio` file alongside the BDB/BDD pair.
 **Build & Check** can prepare a reviewed export for an existing game stage,
 apply its source files with backups, and run the checkout's full `build.py`
 with a live log. ROM packaging and emulator verification still use the game's
-workflow. Pixel, palette and IMG/LOD tools remain available through
-`bddview --legacy-ui [file.BDB]`.
+workflow. **Assets** now includes PNG/IMG import, reviewed raster-folder import, block painting, palette editing
+and individual PNG export. Advanced palette, IMG-folder/LOD and specialist tools
+remain available through `bddview --legacy-ui [file.BDB]`. See the
+[asset migration checklist](docs/ASSET_TOOL_MIGRATION.md) for current coverage.
+Save handles bookkeeping and verifies the written BDB/BDD before replacing files.
 See [the bddtool guide](docs/STUDIO.md) for controls, saving, and current limits.
 
 **Optimize** searches lossless palette-aware cuts, cropping, repeated tiles and

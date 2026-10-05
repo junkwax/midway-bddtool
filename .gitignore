@@ -165,6 +165,7 @@ tools/*
 !docs/SPIRAL_SAVINGS_VALIDATION.md
 !docs/STAGE_SAVINGS_VALIDATION.md
 !docs/REVIEWED_STAGE_BUILDS.md
+!docs/ASSET_TOOL_MIGRATION.md
 
 # Removed MK2 tool sources kept locally for revisiting (not shipped)
 /platform/_local/

@@ -6,10 +6,13 @@ an image already shared with other stages was subdivided. Protecting shared
 images yields a 174-byte packed saving, but three runtime transition captures
 differ. TOMB remains on hold. [MOUNTAIN testing](MOUNTAIN_SAVINGS_VALIDATION.md)
 confirms 610 packed bytes saved, but ladder and Yoteigai Tor captures differ and
-combat DMA losses increase. It also remains on hold. [SPIRAL validation](SPIRAL_SAVINGS_VALIDATION.md)
-measures 5,348 packed bytes saved with zero added placements and unchanged
-unedited art, but three runtime captures differ and Outer Haven DMA losses
-increase. It remains on hold; a single-image palette experiment is next. Estimates below are
+combat DMA losses increase. It also remains on hold. [SPIRAL's October 4 follow-up](SPIRAL_SAVINGS_VALIDATION.md)
+finds a **3,286-byte shared-palette saving** with unchanged placement/palette
+counts and linked program size. Its separate preservation diagnostic passes
+**1,204/1,204 combat/navigation captures** and 533 unedited static images. The
+raw build requires an explicit one-bit preservation step; the earlier 5,348-byte
+version remains on hold. Next is a reproducible reviewed job and independent
+rebuild of the passing version. Nothing is integrated or installed. Estimates below are
 not additive packed savings.
 
 **October 2: work has moved to other stages.** The

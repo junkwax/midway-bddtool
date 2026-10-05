@@ -1,10 +1,12 @@
 # SPIRAL savings validation — October 3, 2026
 
-**Status: hold after full-build/runtime validation.** The palette candidate saves
-**5,348 packed video bytes with zero added placements**. Both full builds,
-compiled consumer checks and unedited-art checks pass. Three combat/fatality
-captures differ and Outer Haven DMA losses increase. No integration or ROM
-installation was performed. See [the full-build results](#full-build-and-runtime-results).
+**October 4 status: a smaller shared-palette diagnostic passes validation.**
+It saves **3,286 packed video bytes**, adds no placements or palettes, and keeps
+the linked program size unchanged. All **1,204 combat/navigation captures**
+match. It requires a separate one-bit baseline-pixel preservation artifact;
+the raw build is not accepted. Nothing is integrated or installed. See
+[the follow-up](#october-4-isolate-palette-growth-and-reuse-the-existing-palette).
+The earlier 5,348-byte candidate remains on hold after runtime failures.
 
 The initial source audit below is under `tmp/spiral-audit-20261003/`; it did not
 build the game. The subsequent builds use a fresh frozen snapshot under
@@ -263,3 +265,50 @@ all twelve chip lanes and occupied ZIP-byte checks. Strict sprite comparison
 finds 10,269 records, one identical-pixel relocation and zero changed, added,
 removed or stale-unreferenced records. The same 233 inherited undecodable
 records remain unverified. Packaging uses `--no-install`.
+
+### Runtime results and decision
+
+| Shared-palette diagnostic | Matching captures | Lost DMA entries, baseline → candidate | Result |
+| --- | ---: | ---: | --- |
+| Portal projectile | 240 / 240 | 0 → 0 | Pass |
+| Portal decapitation | 43 / 43 | 126 → 126 | Pass |
+| Portal Kang/Jax natural play | 129 / 129 | 97 → 97 | Pass |
+| Portal Baraka/Scorpion natural play | 129 / 129 | 105 → 105 | Pass |
+| Outer Haven projectile | 240 / 240 | 0 → 0 | Pass |
+| Outer Haven decapitation | 43 / 43 | 124 → 124 | Pass |
+| Outer Haven Kang/Jax natural play | 129 / 129 | 115 → 115 | Pass |
+| Outer Haven Baraka/Scorpion natural play | 129 / 129 | 122 → 122 | Pass |
+| Portal camera pan | 35 / 35 | No increase | Pass |
+| Outer Haven camera pan | 35 / 35 | No increase | Pass |
+| Outer Haven complete staircase-view sweep | 52 / 52 | No increase | Pass |
+
+All eight combat cases have identical sampled metrics, including object minima,
+queue peaks, late frames and lost entries. Palette failures/transfers dropped
+and miscellaneous drops remain zero. Capture timing, gameplay-state traces and
+navigation camera traces match; no screen regions are exempted. The eight new
+baseline runs also match the October 3 baselines: **1,082/1,082 captures**, with
+identical metrics. The navigation sweep uses five-frame sampling as before.
+
+This is a passing isolated diagnostic under bounded emulator coverage, not an
+exhaustive gameplay or hardware guarantee. Keep both added-palette candidates
+on hold. The shared-palette result is the candidate to reproduce next; the
+explicit preservation step remains required and is not a LOAD2 repair.
+
+Evidence is under `tmp/spiral-validation-20261003/image51-20261004/`:
+`runtime/` holds the single-image failure, `palette-control/` the unchanged-video
+control, and `shared-palette/` the passing candidate. Each retains source-change
+hashes, full-build logs, compiled checks, packaging receipts and runtime reports.
+The shared candidate also retains raw/preserved bank comparisons and a receipt
+showing only the IRW differed before packaging. `SUMMARY.json` pins the final
+artifacts and scratch drivers. All 212 prior artifact hashes, 5,603 frozen source
+files and 654 frozen reference files recheck unchanged. Independent live-checkout
+drift is recorded in `source-final-recheck.json`; this work did not edit it.
+
+## Next work
+
+Turn the exact shared-palette permutation and preservation artifact into a
+reproducible reviewed build job, then independently rebuild and repeat validation
+from pinned inputs before integration. Preserve both stage palettes and every
+user of their indices; do not expose a generic palette-reordering action until
+dynamic consumers and cycling have equivalent reference checks. The library
+audit UI and verified IMG animation export remain separate product tasks.

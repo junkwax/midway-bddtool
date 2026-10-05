@@ -6,11 +6,13 @@ cross-stage sharing. A revised proposal preserves those aliases and saves 174
 packed bytes, but three round-redraw captures differ; integration remains on
 hold. [MOUNTAIN testing](MOUNTAIN_SAVINGS_VALIDATION.md) subsequently confirmed
 610 packed bytes saved, but found ladder/Peak rendering differences and higher
-combat DMA losses; it also remains on hold. [SPIRAL validation](SPIRAL_SAVINGS_VALIDATION.md)
-now measures 5,348 packed bytes saved with no added placements or unedited-art
-changes. Three runtime captures differ and Outer Haven DMA losses increase;
-integration remains on hold. Next, isolate one palette-compacted image and repeat
-the failing probes. The table below remains
+combat DMA losses; it also remains on hold. [SPIRAL's October 4 follow-up](SPIRAL_SAVINGS_VALIDATION.md)
+finds a smaller shared-palette version saving **3,286 packed bytes** without
+adding placements, palettes or linked program size. Its separate preservation
+diagnostic passes **1,204/1,204 captures** and 533 unedited static images; the raw
+build requires an explicit one-bit preservation step. The earlier 5,348-byte
+version remains on hold. Next is a reproducible reviewed job and independent
+rebuild of the passing version; nothing is integrated or installed. The table below remains
 the October 2 per-file model, not bank savings.
 
 **Build follow-up:** the fresh MK3CAVE experiment reproduced 3,096 packed bytes
@@ -75,7 +77,7 @@ change image bounds, packing and overlap behavior.
    effects need capture coverage even though their animation assets are outside
    this BDD scan. Start with the 566-byte/four-placement proposal before the
    1,200-byte/12-placement alternative.
-3. **SPIRAL: full candidate built and tested; integration on hold.** Portal and Outer Haven share
+3. **SPIRAL: smaller shared-palette diagnostic passes; reproduce before integration.** Portal and Outer Haven share
    `alHDRS`. Outer Haven uses `ohPALS` and a separate `ohspiral2BLKS` placement
    table with moved, mirrored huts. Source-BDB pixel proof does not cover those
    alternate palettes or hand-authored references. Preserve the hut offsets,
@@ -83,8 +85,12 @@ change image bounds, packing and overlap behavior.
    alternative offers **5,342 modeled bytes with no added placements**, but
    increases palettes from 7 to 16 and palette storage by 286 bytes. This is a
    candidate with paired Outer Haven palettes and a hut remap. The full-build
-   result saves 5,348 bytes, but runtime checks fail; next is a single-image
-   palette experiment, beginning with image 51. The original 504-byte split
+   result saves 5,348 bytes, but runtime checks fail. Image 51 alone still fails;
+   a palette-only control reproduces Portal differences with identical video data.
+   Reordering the existing palette and all nine image users saves **3,286 bytes**
+   without adding palettes, placements or program size. Its explicit preservation
+   diagnostic passes the full bounded suite; package and independently rebuild
+   this version next. The original 504-byte split
    changes image 45, already shared with TOMB/NUPOOL. Protecting images 45/48
    yields alternatives of 268 bytes at four added placements and 2,352 at 24.
 4. **MOUNTAIN: smaller shared-base lead tested; integration on hold.** Both subdivision

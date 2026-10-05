@@ -10,11 +10,14 @@ reproduced its saving but found combat/transition differences. The
 cross-stage sharing, but still differs in three round-redraw captures. The
 [MOUNTAIN follow-up](MOUNTAIN_SAVINGS_VALIDATION.md) confirms 610 packed bytes
 saved but finds ladder/Peak rendering differences and higher combat DMA losses.
-It is also on hold. The [SPIRAL validation](SPIRAL_SAVINGS_VALIDATION.md)
-measures 5,348 packed bytes saved with no added placements and all unedited art
-matching. Three runtime captures differ and Outer Haven DMA losses increase;
-it remains on hold. Next is a single-image palette experiment to isolate those
-failures. This changes the
+It is also on hold. The [October 4 SPIRAL follow-up](SPIRAL_SAVINGS_VALIDATION.md)
+finds a **3,286-byte shared-palette saving** with no added placements, palettes
+or linked program size. Its isolated preservation diagnostic passes
+**1,204/1,204 combat/navigation captures** and all 533 unedited static images.
+The raw build needs an explicit one-bit baseline-pixel preservation step.
+The earlier 5,348-byte candidate and smaller added-palette version remain on
+hold. Next is a reproducible reviewed job and independent rebuild of the passing
+shared-palette version. Nothing is integrated or installed. This changes the
 work order, not the validation status of the experiments below.
 
 **October 2 status: the combined candidate remains on hold after broader testing.**
@@ -356,9 +359,10 @@ Rejecting the experiment still requires no live-file rollback.
 
 ## Remaining work
 
-**Active next step:** follow the [next-stage work order](NEXT_STAGE_SAVINGS.md),
-isolating SPIRAL's runtime differences with one palette-compacted image (start
-with image 51), then repeating the failing Portal/Outer Haven probes. The BATTLE/NUPOOL transition investigation
+**Active next step:** package SPIRAL's passing 3,286-byte shared-palette
+diagnostic as a reproducible reviewed transformation/build job, including its
+explicit preservation artifact, and independently rebuild it from pinned inputs.
+See [SPIRAL's results](SPIRAL_SAVINGS_VALIDATION.md). The BATTLE/NUPOOL transition investigation
 below is retained for a future return, not the next task.
 
 1. **Build workflow follow-up.** Prepared MK7 preservation jobs now run from the

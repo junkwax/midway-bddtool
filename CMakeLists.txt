@@ -26,6 +26,7 @@ add_library(bdd_core STATIC platform/Core/utils/bdd_core.cpp platform/Core/utils
 target_include_directories(bdd_core PUBLIC platform)
 add_library(bdd_studio_document STATIC platform/Core/studio_document.cpp platform/Core/studio_game_export.cpp platform/Core/studio_game_build.cpp platform/Core/studio_cave_export.cpp platform/Core/studio_animation.cpp platform/Core/studio_animation_optimizer.cpp platform/Core/studio_optimizer.cpp platform/Core/studio_rom_receipt.cpp platform/Core/studio_packed_art.cpp platform/Core/studio_runtime_order.cpp platform/Core/studio_art_audit.cpp platform/Core/studio_visibility.cpp)
 target_link_libraries(bdd_studio_document PUBLIC bdd_core)
+target_sources(bdd_studio_document PRIVATE platform/Core/studio_asset_edit.cpp)
 if(MSVC)
     target_compile_definitions(bdd_core PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_compile_definitions(bdd_studio_document PRIVATE _CRT_SECURE_NO_WARNINGS)

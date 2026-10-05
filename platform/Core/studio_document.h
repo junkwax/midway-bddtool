@@ -62,6 +62,11 @@ struct State {
     std::string runtime_profile;
     uint64_t revision = 0;
 };
+// Read-only preparation used by folder import and its review UI.
+bool make_raster_asset(const std::string &name, int width, int height, const uint8_t *rgba,
+                       AssetBank &output, std::string &error);
+std::shared_ptr<const AssetBank> prepare_asset_import(const State &state, const AssetBank &input,
+                                                     bool reuse_palettes, std::string &error);
 struct SceneItem {
     ObjectId id = 0;
     size_t object_index = 0, image_slot = 0;
@@ -121,6 +126,13 @@ class Document {
     bool set_start(int x, int y, int ground);
     bool import_rgba(const std::string &name, int width, int height, const uint8_t *rgba,
                      std::string &error, int &image_id);
+    bool import_img(const std::string &path, const std::vector<std::string> &labels,
+                    std::string &error, std::vector<int> &image_ids);
+    bool import_assets(const AssetBank &input, bool reuse_palettes, std::string &error,
+                       std::vector<int> &image_ids);
+    bool set_palette(int palette, const BddCorePalette &colors, std::string &error);
+    bool copy_palette_for_image(int image_id, int palette, std::string &error, int &new_palette);
+    bool set_image_pixels(int image_id, const std::vector<uint8_t> &pixels, std::string &error);
     bool apply_optimization(const OptimizationPlan &plan, std::string &error);
     bool apply_pattern(const PatternPlan &plan, std::string &error);
     bool apply_visibility(const VisibilityPlan &plan, bool gameplay_contract_confirmed, std::string &error);

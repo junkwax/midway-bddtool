@@ -165,6 +165,7 @@ void read_art(const fs::path &path, const std::vector<std::string> &names, Anima
             require(p.numc > 0 && p.numc <= 256 && (uint64_t)p.oset + p.numc * 2 <= (uint64_t)size,
                     "Invalid animation palette.");
             BddCorePalette colors{};
+            img_raw_name_to_upper(p.name, sizeof p.name, "IMG_PALETTE", colors.name, sizeof colors.name);
             colors.count = p.numc;
             require(fseek(raw, p.oset, SEEK_SET) == 0, "Cannot seek animation palette.");
             for (int i = 0; i < colors.count; i++) {
@@ -195,6 +196,16 @@ void read_art(const fs::path &path, const std::vector<std::string> &names, Anima
                     "Animation frame references an absent palette color.");
         int slot = (int)out.frames.size();
         out.frames.push_back({image.idx, pi, img_s16(record.anix), img_s16(record.aniy), name});
+        BddImageMetadata meta{};
+        meta.idx = image.idx;
+        meta.anix = img_s16(record.anix); meta.aniy = img_s16(record.aniy);
+        meta.anix2 = img_s16(record.anix2); meta.aniy2 = img_s16(record.aniy2);
+        meta.aniz2 = img_s16(record.aniz2); meta.frm = record.frm;
+        meta.pttblnum = record.pttblnum; meta.opals = record.opals;
+        std::snprintf(meta.label, sizeof meta.label, "%s", name.c_str());
+        std::snprintf(meta.source, sizeof meta.source, "%s", path.filename().u8string().c_str());
+        bank->metadata.push_back(meta);
+        bank->default_palettes.push_back(pi);
         bank->data.images.push_back(std::move(image));
         frame_slots[name] = slot;
         out.sequence.push_back(slot);
