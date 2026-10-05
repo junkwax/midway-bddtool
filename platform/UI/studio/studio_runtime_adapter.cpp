@@ -3,6 +3,7 @@
 #include "bg_editor_globals.h"
 #include "Core/viewer_stage_io.h"
 #include "Core/studio_cave_export.h"
+#include "Core/studio_mk3_layout.h"
 #include <filesystem>
 #include <cstdio>
 #include <cstring>
@@ -13,7 +14,11 @@ namespace studio {
 // Migration boundary: reuse the existing assembly interpretation once on open.
 // The studio's live state and renderer never use the legacy object arrays or BLKS tables.
 void read_runtime_defaults(Document &document) {
-    if (document.state().name == "mk3cave" || document.state().name == "MK3CAVE") {
+    namespace fs = std::filesystem;
+    const fs::path input = fs::u8path(document.path());
+    fs::path root = input.parent_path().parent_path();
+    if ((document.state().name == "mk3cave" || document.state().name == "MK3CAVE") &&
+        fs::is_regular_file(root / "tools" / "make_mk3cave.py")) {
         std::string error;
         auto root = std::filesystem::u8path(document.path()).parent_path().parent_path();
         if (!seed_cave_runtime(document, root.u8string(), error))
@@ -23,10 +28,15 @@ void read_runtime_defaults(Document &document) {
     if (document.has_layout() || !document.notice().empty() || !document.state().has_bdb ||
         document.path().empty())
         return;
-    namespace fs = std::filesystem;
-    const fs::path input = fs::u8path(document.path());
+    // Original MK3 trees keep stage definitions in MKBT.ASM, often beside the art.
+    for (const auto &candidate : {input.parent_path() / "MKBT.ASM", root / "src" / "MKBT.ASM"}) {
+        if (!fs::is_regular_file(candidate)) continue;
+        auto layout = read_mk3_layout(document, candidate.u8string());
+        if (layout.valid()) document.seed_runtime(layout.planes, layout.start_x, layout.start_y, layout.ground);
+        else std::fprintf(stderr, "MK3 runtime layout: %s\n", layout.error.c_str());
+        return;
+    }
     fs::path draft = input.parent_path() / (document.state().name + ".BGND.ASM");
-    fs::path root = input.parent_path().parent_path();
     // No machine-specific fallback to an unrelated checkout. A stage must carry a draft
     // or live under a tree with its own runtime source.
     if (!fs::exists(draft) && !fs::exists(root / "src" / "BGND.ASM") &&

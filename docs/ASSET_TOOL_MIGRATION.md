@@ -91,9 +91,42 @@ cancelled results are not used. Opening a camera only changes the editor view;
 hidden artwork remains hidden. A scan never saves, modifies pixels, prepares an
 export, runs a game build, or changes a checkout.
 
-Remaining consolidation work includes generated-output freshness and deeper
-pixel coverage in this list. Existing Optimize/export tools still own their
-analyses; their checks have not all been migrated.
+### Export/source checks — October 5, 2026
+
+Prepared exports now add **Export / sources** findings to Build & Check.
+Checks run automatically after Prepare and Apply; **Recheck export files**
+reads the files again. **Review game export** takes a finding to the existing
+export controls. The last-check status has a UTC timestamp in its tooltip,
+also included in Copy report. These are read-only observations, not repairs.
+
+Before Apply, the check compares original game sources, staged output and
+reviewed dependencies with their expected bytes and existence. After Apply,
+it compares installed output and those dependencies. This includes the LOD
+and packing inputs captured by the export profile, not every game input.
+Missing or newly appeared files, changed bytes, unreadable files, invalid
+paths and unfinished apply markers produce findings. Matching timestamps or
+file sizes alone cannot make a changed file pass.
+
+Changing the document, checkout or stage label marks the export review stale.
+Undo can restore a matching observation, but it does not reread disk files.
+Build game therefore performs a fresh source/dependency check immediately
+before launching and refuses to launch on a mismatch. Apply retains its own
+checks immediately before replacement. Neither a displayed match nor a
+preflight check locks files against subsequent external edits.
+
+Source matches do **not** establish that generated tables or program/video ROMs
+were built from those sources. Generated-output provenance and deeper pixel
+coverage remain consolidation work. Existing Optimize/export tools still own
+their analyses; their checks have not all been migrated.
+
+Verification: Windows Release build; document, game-export and synthetic
+runtime-export suites (3/3); checks, camera-checks and export-checks UI smokes
+at 900×640. Core cases include same-size changes with restored timestamps,
+staged-output tampering, missing/appearing dependencies and path traversal.
+The export UI smoke exercises rechecking, finding navigation, edit/undo and
+label invalidation, and refusal to build after an LOD change. The report-copy
+smoke resets its clipboard fixture so a previous report cannot mask a missed
+click. No full game build, live checkout edit or ROM installation was performed.
 
 ### Why a generic cleanup-on-save is not appropriate
 
@@ -165,6 +198,45 @@ The modal editors keep their drafts local. Save/autorecovery serialize only
 applied edits; document undo restores the full bank and palette assignments.
 Import never writes to its source PNG/IMG or to external game assembly.
 
+## Floors — October 5, 2026
+
+**Stage → Floor...** consolidates separate game-floor references and adding
+new floor artwork. Supported external floors load from the selected checkout's
+literal BGND descriptor, palette and 1200-pixel raw 6bpp BIN. They are visible
+by default and can be toggled/reloaded. They remain outside the document and
+its saves, sharing, authoring counts and optimization budgets. This is a static
+reference with 1x camera scrolling, not simulated perspective skew, skipped
+rows or palette effects. Missing/ambiguous/unsupported sources produce a notice.
+
+New floors accept raster files, a selected asset (including imported IMG art),
+or a supported game-floor texture. Left X, top Y and total width determine
+placement and cropping/repetition without scaling. The operation creates a
+Floor layer with reusable blocks up to 248 pixels wide, padding to multiples
+of four with transparency. It is one undoable edit and saves with BDB/BDD.
+Raw floor color zero is preserved as opaque through index remapping. Partial
+tiles and repeats retain their exact visible pixels. Limits include 16,384
+pixels of total width, 16 million output pixels and 128 unique blocks.
+
+Adding the layer hides the external reference for the current tab. It does
+not replace the external game's floor or infer a runtime binding for the new
+layer. Custom stage profiles such as MK3CAVE retain their separate floor
+workflow; adding arbitrary layers there remains unsupported.
+
+Verification: Release build; floor, document, animation, game-export and
+synthetic runtime-export tests (5/5). The floor tests cover raw-bit decoding,
+opaque zero, source matching, truncation/ambiguity, crop/repeat seams, padding,
+failure isolation, atomic undo/redo and save/reopen. The 900×640 floor UI smoke
+exercises dialog selection, adding repeated artwork, undo/redo, a PNG draft
+and cancellation. Checks/navigation smokes pass. Forest's local FL_FORST
+reference was decoded and its stage screenshot inspected; the existing
+Forest animation smoke passes with the floor shown. No game build or emulator
+verification was performed, and no live game files were changed.
+
+```text
+ctest --test-dir BUILD -C Release -R "^studio_(floor|document|animation|game_export|runtime_export)$" --output-on-failure
+bddview --studio-smoke NEW_OUTPUT --demo --floors
+```
+
 ## Remaining candidates, subject to the decisions above
 
 | Legacy capability | Current route / next work |
@@ -201,6 +273,7 @@ bddview --studio-smoke NEW_OUTPUT --demo --asset-tools [FIXTURE.IMG]
 bddview --studio-smoke NEW_OUTPUT --demo --batch-import
 bddview --studio-smoke NEW_OUTPUT --demo --checks
 bddview --studio-smoke NEW_OUTPUT --demo --camera-checks
+bddview --studio-smoke NEW_OUTPUT --demo --export-checks
 ```
 
 The UI smoke paints a continuous stroke through ImGui events, applies it,

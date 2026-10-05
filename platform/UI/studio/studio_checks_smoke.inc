@@ -23,7 +23,11 @@ struct ChecksSmoke {
         if (frame == 14) {
             std::snprintf(t.check_filter.InputBuf, sizeof t.check_filter.InputBuf, "no-matching-issue"); t.check_filter.Build();
         }
-        if (frame == 17) { t.check_filter.Clear(); t.check_severity = 0; }
+        if (frame == 17) {
+            t.check_filter.Clear(); t.check_severity = 0;
+            // An earlier smoke run's report must not make a missed click pass.
+            ImGui::SetClipboardText("bddtool checks smoke: awaiting report");
+        }
         if (frame == 19 || frame == 20) move(app.check_report_point);
         if (frame == 20 || frame == 21) io.AddMouseButtonEvent(0, frame == 20);
         if (frame == 23) t.document.erase({target});

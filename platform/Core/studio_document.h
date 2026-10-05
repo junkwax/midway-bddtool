@@ -12,6 +12,7 @@ struct OptimizationPlan;
 struct PatternOptions;
 struct PatternPlan;
 struct VisibilityPlan;
+struct Mk3Layout;
 
 using ObjectId = uint64_t;
 struct Point {
@@ -130,12 +131,16 @@ class Document {
     bool reorder_plane(int index, int direction);
     int add_plane();
     bool set_start(int x, int y, int ground);
+    bool apply_mk3_layout(const Mk3Layout &layout, std::string &error);
     bool import_rgba(const std::string &name, int width, int height, const uint8_t *rgba,
                      std::string &error, int &image_id);
     bool import_img(const std::string &path, const std::vector<std::string> &labels,
                     std::string &error, std::vector<int> &image_ids);
     bool import_assets(const AssetBank &input, bool reuse_palettes, std::string &error,
                        std::vector<int> &image_ids);
+    // One atomic edit: split/repeat one image into LOAD2-width pieces on a new floor layer.
+    bool add_floor(const AssetBank &artwork, int x, int y, int width,
+                   std::string &error, int &plane);
     bool set_palette(int palette, const BddCorePalette &colors, std::string &error);
     bool copy_palette_for_image(int image_id, int palette, std::string &error, int &new_palette);
     bool set_image_pixels(int image_id, const std::vector<uint8_t> &pixels, std::string &error);

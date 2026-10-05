@@ -5,6 +5,8 @@
 #include "Core/studio_game_export.h"
 #include "Core/studio_game_build.h"
 #include "Core/studio_animation.h"
+#include "Core/studio_floor.h"
+#include "Core/studio_mk3_layout.h"
 #include "Core/studio_animation_optimizer.h"
 #include "Core/studio_optimizer.h"
 #include "Core/studio_rom_receipt.h"
@@ -112,6 +114,14 @@ struct Tab {
     bool reviewed_build = false;
     std::string reviewed_output;
     AnimationPreview animation;
+    FloorPreview floor;
+    Mk3Layout mk3_layout;
+    bool layout_requested = false, layout_remember = true;
+    char layout_source[1024] = {};
+    std::string floor_root, floor_error;
+    bool show_floor = true, floor_requested = false;
+    State floor_draft;
+    int floor_x = 0, floor_y = 230, floor_width = 800;
     std::string animation_root;
     std::future<AnimationAnalysis> animation_analysis_job;
     std::shared_ptr<OptimizeProgress> animation_analysis_progress;
@@ -241,6 +251,7 @@ class App {
     TextureCache textures;
     TextureCache block_textures;
     TextureCache animation_textures;
+    TextureCache floor_textures, floor_draft_textures;
     TextureCache animation_analysis_before, animation_analysis_after;
     TextureCache optimize_before_textures, optimize_after_textures;
     TextureCache compare_before_textures, compare_after_textures;
@@ -273,6 +284,9 @@ class App {
     Point export_check_point, export_review_point;
     float export_section_y = 0;
     Point check_locate_point, check_artwork_point, check_report_point, camera_scan_point, camera_jump_point;
+    Point floor_open_point, floor_asset_point, floor_add_point, floor_close_point;
+    Point layout_open_point, layout_apply_point;
+    std::map<std::string, std::string> layout_sources;
     int check_visible_count = 0;
     Tab *tab() { return active >= 0 && active < (int)tabs.size() ? tabs[active].get() : nullptr; }
     void toast(const std::string &text) {
@@ -284,6 +298,15 @@ class App {
         auto t = std::make_unique<Tab>();
         t->id = next_tab++;
         t->document = std::move(d);
+        auto folder = fs::u8path(t->document.path()).parent_path().u8string();
+        auto remembered = layout_sources.find(folder);
+        if (!folder.empty() && remembered != layout_sources.end()) {
+            std::snprintf(t->layout_source, sizeof t->layout_source, "%s", remembered->second.c_str());
+            if (!t->document.has_layout() && t->document.notice().empty() && !t->document.dirty()) {
+                t->mk3_layout = read_mk3_layout(t->document, remembered->second);
+                if (t->mk3_layout.valid()) t->document.seed_runtime(t->mk3_layout.planes, t->mk3_layout.start_x, t->mk3_layout.start_y, t->mk3_layout.ground);
+            }
+        }
         if (t->document.state().runtime_profile == "mk3cave") {
             t->optimize_options.compact_palettes = false;
             t->optimize_options.max_added_objects = 24;
@@ -310,6 +333,8 @@ class App {
             t->plane = -1;
         t->animation = load_animation_preview(t->document, t->game_root);
         t->animation_root = t->game_root;
+        t->floor = load_floor_preview(t->document, t->game_root);
+        t->floor_root = t->game_root;
         bool assets = !t->document.state().has_bdb;
         tabs.push_back(std::move(t));
         active = (int)tabs.size() - 1;
@@ -1331,7 +1356,18 @@ class App {
             }
         }
         auto items = t.document.scene(cam, t.source, t.solo);
-        bool animation_drawn = false;
+        bool animation_drawn = false, floor_drawn = false;
+        auto draw_floor = [&]() {
+            floor_drawn = true;
+            if (t.source || t.solo >= 0 || !t.show_floor || !t.floor.ready() || t.floor_root != t.game_root) return;
+            floor_textures.renderer = renderer;
+            auto tex = floor_textures.get(t.floor.layout.artwork, 0, 0);
+            if (!tex) return;
+            auto r = t.floor.rect(t.document.state(), cam);
+            draw->AddImage((ImTextureID)(intptr_t)tex,
+                vec(t.view.to_screen({r.x, r.y}, point(origin))),
+                vec(t.view.to_screen({r.x + r.w, r.y + r.h}, point(origin))));
+        };
         auto draw_animation = [&]() {
             animation_drawn = true;
             if (t.source || t.solo >= 0 || !t.show_animation || !t.animation.ready() ||
@@ -1351,9 +1387,12 @@ class App {
             }
         };
         auto animation_rank = t.animation.draw_rank(t.document);
+        auto floor_rank = t.floor.layout.draw_rank(t.document);
         for (const auto &p : items) {
+            if (!floor_drawn && p.rank > floor_rank && floor_rank <= animation_rank) draw_floor();
             if (!animation_drawn && p.rank > animation_rank)
                 draw_animation();
+            if (!floor_drawn && p.rank > floor_rank) draw_floor();
             ImVec2 a = vec(t.view.to_screen({p.rect.x, p.rect.y}, point(origin))),
                    b = vec(
                        t.view.to_screen({p.rect.x + p.rect.w, p.rect.y + p.rect.h}, point(origin)));
@@ -1364,8 +1403,10 @@ class App {
             if (has(t.selected, p.id))
                 draw->AddRect(a, b, selection_color, 0, 0, 1.5f);
         }
+        if (!floor_drawn && floor_rank <= animation_rank) draw_floor();
         if (!animation_drawn)
             draw_animation();
+        if (!floor_drawn) draw_floor();
         if (t.selected.empty() && t.plane >= 0) {
             bool first = true;
             Rect bounds;
@@ -1407,7 +1448,8 @@ class App {
             }
             draw->AddRect(a, b, IM_COL32(211, 185, 125, 180), 0, 0, 1.0f);
             draw->AddText(ImVec2(a.x + 7, a.y + 6), IM_COL32(229, 208, 159, 220),
-                          "GAME FRAME  400 x 254");
+                          std::any_of(t.document.state().planes.begin(), t.document.state().planes.end(),
+                              [](const Plane &p) { return p.bound; }) ? "GAME FRAME  400 x 254" : "FRAME GUIDE  400 x 254  (layout not loaded)");
             double ground = t.document.state().ground - (t.camera_preview ? t.camera.y : 0);
             float gy = vec(t.view.to_screen({0, ground}, point(origin))).y;
             draw->AddLine(ImVec2(a.x, gy), ImVec2(b.x, gy), IM_COL32(211, 185, 125, 100));
@@ -1508,6 +1550,8 @@ class App {
         }
     }
     #include "studio_asset_tools.inc"
+    #include "studio_floor.inc"
+    #include "studio_mk3_layout.inc"
     #include "studio_batch_import.inc"
     bool game_build_running() const {
         for (const auto &t : tabs)
@@ -3457,6 +3501,18 @@ class App {
             t.fit = true;
         }
         ImGui::EndDisabled();
+        if (ImGui::Button("Floor...")) open_floor(t);
+        floor_open_point = item_center();
+        ImGui::SameLine();
+        if (ImGui::Button("Game layout...")) { cancel_gesture(); t.layout_requested = true; }
+        layout_open_point = item_center();
+        if (std::none_of(t.document.state().planes.begin(), t.document.state().planes.end(), [](const Plane &p) { return p.bound; })) {
+            ImGui::SameLine(); ImGui::TextDisabled("Source-sheet positions; load a game layout to align the frame.");
+        }
+        if (t.floor.ready() && t.floor_root == t.game_root) {
+            ImGui::SameLine(); ImGui::Checkbox("Game floor reference", &t.show_floor);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nPreview only; excluded from Save and ROM budgets.", t.floor.notice.c_str());
+        }
         if (t.animation.ready() && !t.source && t.animation_root == t.game_root) {
             ImGui::Checkbox("Animations", &t.show_animation);
             ImGui::SameLine();
@@ -3883,7 +3939,7 @@ class App {
             ImGui::TextDisabled("Local files  /  Indexed artwork  /  Stage composition");
         ImGui::End();
         help_share_dialogs();
-        if (auto *t = tab()) asset_dialogs(*t);
+        if (auto *t = tab()) { asset_dialogs(*t); floor_dialog(*t); mk3_layout_dialog(*t); }
         prompts();
         recover();
     }
@@ -3893,6 +3949,7 @@ class App {
 #include "studio_asset_smoke.inc"
 #include "studio_batch_smoke.inc"
 #include "studio_checks_smoke.inc"
+#include "studio_floor_smoke.inc"
 #include "studio_camera_checks_smoke.inc"
 #include "studio_help_share_smoke.inc"
 #include "studio_export_checks_smoke.inc"
@@ -4228,6 +4285,8 @@ int run(int argc, char **argv) {
     AssetToolsSmoke asset_smoke;
     BatchImportSmoke batch_smoke;
     ChecksSmoke checks_smoke;
+    FloorSmoke floor_smoke;
+    bool test_floors = smoke && argc >= 5 && std::string(argv[4]) == "--floors";
     ExportChecksSmoke export_checks_smoke;
     bool test_export_checks = smoke && argc >= 5 && std::string(argv[4]) == "--export-checks";
     HelpShareSmoke help_share_smoke;
@@ -4370,6 +4429,7 @@ int run(int argc, char **argv) {
                 io.AddMouseButtonEvent(0, frames == 9 || frames == 15);
         }
         if (test_export_checks) export_checks_smoke.input(app, frames);
+        if (test_floors) floor_smoke.input(app, frames);
         if (test_help_share) help_share_smoke.input(app, frames);
         if (test_camera_checks) camera_checks_smoke.input(app, frames);
         if (test_checks) checks_smoke.input(app, frames);
@@ -4388,6 +4448,7 @@ int run(int argc, char **argv) {
         }
         app.frame();
         if (test_export_checks && !export_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
+        if (test_floors && !floor_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_help_share && !help_share_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_camera_checks && !camera_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_checks && !checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
@@ -4541,14 +4602,14 @@ int run(int argc, char **argv) {
                     } else t.receipt_before = std::make_unique<RomReceipt>(*t.receipt_after);
                 }
             }
-            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks) {
+            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors) {
                 SDL_SetWindowSize(app.window, 1000, 720);
                 if (app.tab() && !test_navigation)
                     app.tab()->fit = true;
             }
-            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks)
+            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors)
                 app.page = 1;
-            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks) {
+            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors) {
                 app.page = 2;
                 if (argc >= 5 && std::string(argv[4]) == "--prepare" && app.tab())
                     app.prepare_game(*app.tab());
@@ -4560,6 +4621,8 @@ int run(int argc, char **argv) {
     app.block_textures.clear();
     app.textures.clear();
     app.animation_textures.clear();
+    app.floor_textures.clear();
+    app.floor_draft_textures.clear();
     app.animation_analysis_before.clear();
     app.animation_analysis_after.clear();
     app.optimize_before_textures.clear();

@@ -72,6 +72,34 @@ Safe bookkeeping belongs to Save: counts, companions, metadata and backups are
 automatic, and the temporary BDB/BDD are now read back and checked before file
 replacement. Art-changing cleanup remains a deliberate editing/Optimize action.
 
+## Floors
+
+Use **Stage → Floor...** for floors missing from the map. It offers two paths:
+
+- **Existing game floor:** supported external floors load automatically from
+  the chosen game checkout. Toggle **Game floor reference** on Stage, or use
+  **Load / reload game floor** after changing the checkout or floor sources.
+  The reference is excluded from saving, picking, optimization, sharing and
+  ROM budgets. Source layout and layer solo hide it.
+- **Add editable floor artwork:** choose a PNG/TGA/BMP or **Use selected asset**.
+  For IMG artwork, import/select it in Assets first. Set left X, top Y and
+  width; narrower widths crop, wider widths repeat without scaling. **Add floor
+  to map** creates a Floor layer and its artwork as one undoable edit. Save
+  includes these pieces. Adjust position and layer order normally on Stage.
+
+You can also use a supported game-floor texture as the source for new static
+artwork. Adding artwork hides the reference to avoid displaying both copies.
+It does not replace the game's external floor or its runtime code. The new
+layer needs explicit runtime integration before it can appear in the game.
+Custom stage profiles such as MK3CAVE still manage their floors separately.
+
+The reference loader matches source module names to a stage in `BGND.ASM`,
+reads its literal floor descriptor/palette and `data/FL_*.BIN` texture, and
+uses its display-list order. This first version supports 1200-pixel raw 6bpp
+rows. Unsupported, missing or ambiguous data is reported in the Floor dialog.
+The floor is a static start-position reference with 1x camera scrolling;
+perspective skew, skipped rows and palette effects are not simulated.
+
 ## Camera and runtime interpretation
 
 On opening an unmodified stage, bddtool reads runtime plane offsets, camera
@@ -192,7 +220,7 @@ Open **Build & Check** and use the game integration controls:
 
 The export report includes declared ROM slot capacities for the LODs referencing
 the stage. Their packed sizes remain unknown until LOAD2 runs. Referenced LOD
-files and `makevrom.py` are read dependencies: Apply rechecks them, including a
+files and `makevrom.py` are read dependencies: Apply and Build recheck them, including a
 previously absent `makevrom.py`, and asks for a fresh export if they changed.
 They are never installed as package output. Capture a ROM receipt after the
 full packing build to check actual slot bases and sizes.
@@ -294,6 +322,15 @@ the editor does not unhide them. These are bounds-based estimates, not pixel
 coverage or gameplay verification. Document/range changes mark the scan stale;
 rerun it to refresh findings. Scanning never saves or builds anything.
 
+After preparing an export, **Recheck export files** compares source, staged
+output and reviewed dependency bytes. After Apply, it checks installed output
+and dependencies. Findings appear under **Export / sources**, with a link to
+the export controls. Checks also run after Prepare/Apply; hover the last-check
+status for its timestamp. Document, checkout or stage-label changes require
+a matching review. Build game rechecks files immediately before launching.
+These observations cover the reviewed inputs only; they do not establish
+generated-table or ROM freshness. See the [export/source check details](ASSET_TOOL_MIGRATION.md#exportsource-checks--october-5-2026).
+
 MK3CAVE additionally supports the verified packing workflow above; other stages
 use the game's normal packaging tools.
 
@@ -319,6 +356,8 @@ ctest --test-dir build -C Release --output-on-failure
 bddview --studio-smoke tmp/studio-ui
 bddview --studio-smoke tmp/checks-ui --demo --checks
 bddview --studio-smoke tmp/camera-checks-ui --demo --camera-checks
+bddview --studio-smoke tmp/export-checks-ui --demo --export-checks
+bddview --studio-smoke tmp/floors-ui --demo --floors
 bddview --studio-smoke tmp/help-share-ui --demo --help-share
 studio_document_tests tmp/fixture-test path/to/fixture.BDB
 studio_game_export_tests tmp/export-test [path/to/fixture.BDB path/to/BGND.ASM]

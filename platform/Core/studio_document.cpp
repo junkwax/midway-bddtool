@@ -2,6 +2,7 @@
 #include "Core/studio_optimizer.h"
 #include "Core/studio_visibility.h"
 #include "Core/studio_runtime_order.h"
+#include "Core/studio_mk3_layout.h"
 
 #include <algorithm>
 #include <cmath>
@@ -667,6 +668,25 @@ bool Document::set_start(int x, int y, int ground) {
     touch();
     commit();
     return true;
+}
+
+bool Document::apply_mk3_layout(const Mk3Layout &layout, std::string &error) {
+    if (!layout.valid() || active_ || !state_.runtime_profile.empty() ||
+        layout.revision != state_.revision || layout.assets != state_.assets) {
+        error = "The layout review is unavailable or stale. Load the definition again."; return false;
+    }
+    auto after = state_;
+    for (const auto &runtime : layout.planes) {
+        auto found = std::find_if(after.planes.begin(), after.planes.end(), [&](const Plane &p) { return lower(p.source.name) == lower(runtime.source.name); });
+        if (found == after.planes.end() || !std::isfinite(runtime.scroll) || std::abs(runtime.scroll) > 16 ||
+            std::abs((int64_t)runtime.x) > 100000 || std::abs((int64_t)runtime.y) > 100000) {
+            error = "Invalid runtime layer in layout review."; return false;
+        }
+        found->x = runtime.x; found->y = runtime.y; found->scroll = runtime.scroll;
+        found->rank = runtime.rank; found->bound = true;
+    }
+    after.start_x = layout.start_x; after.start_y = layout.start_y; after.ground = layout.ground;
+    begin("Load MK3 game layout"); state_ = std::move(after); touch(); commit(); error.clear(); return true;
 }
 
 bool Document::import_rgba(const std::string &name, int w, int h, const uint8_t *rgba,
