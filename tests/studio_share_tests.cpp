@@ -18,6 +18,7 @@ int main(int argc, char **argv) {
         auto source = fs::file_size(root / "source.BDB"); auto time = fs::last_write_time(root / "source.BDB");
         auto id = d.state().objects.front().id;
         d.move({id}, 7, 3);
+        require(d.set_backdrop(0x7c1f), "Cannot set share backdrop");
         auto revision = d.state().revision; auto path = d.path(); auto assets = d.state().assets;
         ShareCredits credits{"Test | Author", "<script> & description", "Own art", "Test license", "Not tested", "TEST_STAGE"};
         auto bundle = build_stage_share(d, credits, (root / "bundle").u8string());
@@ -26,13 +27,20 @@ int main(int argc, char **argv) {
         require(fs::file_size(root / "source.BDB") == source && fs::last_write_time(root / "source.BDB") == time, "Share overwrote original");
         require(fs::exists(bundle.zip) && fs::exists(root / "bundle/TEST_STAGE.bddstudio") && fs::exists(root / "bundle/TEST_STAGE.BDD.meta"), "Missing companions/archive");
         Document reopened; require(reopened.load((root / "bundle/TEST_STAGE.BDB").u8string(), error), error);
+        require(reopened.state().backdrop == 0x7c1f, "Share lost backdrop");
         auto expected = d.scene(), actual = reopened.scene(); require(expected.size() == actual.size(), "Placement count changed");
         for (size_t i = 0; i < expected.size(); ++i)
             require(expected[i].rect.x == actual[i].rect.x && expected[i].rect.y == actual[i].rect.y && expected[i].palette == actual[i].palette,
                     "Bundle lost current unsaved layout");
         int w, h, channels;
         auto *png = stbi_load((root / "bundle/arena_game.png").u8string().c_str(), &w, &h, &channels, 4);
-        require(png && w == 400 && h == 254, "Invalid camera PNG"); stbi_image_free(png);
+        require(png && w == 400 && h == 254, "Invalid camera PNG");
+        int backdrop_pixels = 0;
+        for (int i = 0; i < w * h; ++i) {
+            require(png[i * 4 + 3] == 255, "Saved backdrop left transparent preview pixels");
+            if (png[i * 4] == 255 && png[i * 4 + 1] == 0 && png[i * 4 + 2] == 255) ++backdrop_pixels;
+        }
+        require(backdrop_pixels > 0, "Backdrop RGB missing from preview"); stbi_image_free(png);
         require(bundle.markdown.find("&lt;script&gt;") != std::string::npos && bundle.markdown.find("Test \\| Author") != std::string::npos,
                 "Markup not escaped");
         require(bundle.submission_url.find("issues/new?") != std::string::npos && bundle.submission_url.find("stage-submission") != std::string::npos, "Submission draft URL absent");

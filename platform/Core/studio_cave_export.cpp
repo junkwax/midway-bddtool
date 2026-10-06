@@ -226,7 +226,7 @@ bool prepare_cave_export(const Document &doc, const std::string &root_path,
         need(original.load((root / "data/MK3CAVE.BDB").u8string(), error), error);
         need(seed_cave_runtime(original, root.u8string(), error), error);
         const auto &s = doc.state(), &base = original.state();
-        need(s.backdrop == base.backdrop, "This custom stage generator does not support backdrop color changes.");
+        need(s.backdrop == -1, "This custom stage generator does not support backdrop color changes. Uncheck Set stage color before exporting.");
         need(s.planes.size() == 4 && base.planes.size() == 4 &&
                  s.assets->data.palettes.size() == 7 && base.assets->data.palettes.size() == 7,
              "Keep MK3CAVE's four modules and seven palettes. Disable palette compaction for this "

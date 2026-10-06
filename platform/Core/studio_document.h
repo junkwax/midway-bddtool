@@ -9,6 +9,7 @@
 
 namespace studio {
 struct OptimizationPlan;
+struct PaletteConsolidation;
 struct PatternOptions;
 struct PatternPlan;
 struct VisibilityPlan;
@@ -147,6 +148,8 @@ class Document {
     bool copy_palette_for_image(int image_id, int palette, std::string &error, int &new_palette);
     bool set_image_pixels(int image_id, const std::vector<uint8_t> &pixels, std::string &error);
     bool apply_optimization(const OptimizationPlan &plan, std::string &error);
+    bool apply_palette_consolidation(const PaletteConsolidation &plan,
+                                     bool runtime_slots_reviewed, std::string &error);
     bool apply_pattern(const PatternPlan &plan, std::string &error);
     bool apply_visibility(const VisibilityPlan &plan, bool gameplay_contract_confirmed, std::string &error);
     // Read-only legacy runtime adapter seeds defaults once, before any editing.

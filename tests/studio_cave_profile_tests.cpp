@@ -124,6 +124,11 @@ int main(int argc, char **argv) {
                     read(root / "tools/make_mk3cave.py").find("BDDTOOL CAVE PROFILE BEGIN") !=
                         std::string::npos,
                 "Apply did not complete");
+        require(d.set_backdrop(0x1234) && d.save((root / "data/MK3CAVE.BDB").u8string(), error), error);
+        Document colored; require(colored.load((root / "data/MK3CAVE.BDB").u8string(), error), error);
+        require(!prepare_game_export(colored, root.u8string(), (work / "bad-backdrop").u8string(), rejected, error) &&
+                    error.find("backdrop") != std::string::npos && !fs::exists(work / "bad-backdrop"),
+                "Saved unsupported backdrop silently exported through custom generator");
         std::cout << "Custom cave profile: source moves, locks, fractional scroll, save/reopen, "
                      "water rejection, stale slots and apply passed.\n";
         return 0;

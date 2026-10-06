@@ -74,6 +74,34 @@ int main(int argc, char **argv) {
         fs::path root = argv[1];
         fs::create_directories(root);
         validation_tests();
+        {
+            auto bg = Document::demo(); std::string error;
+            auto assets = bg.state().assets;
+            require(bg.state().backdrop == -1 && bg.set_backdrop(0x1234), "Cannot set backdrop");
+            auto revision = bg.state().revision;
+            require(bg.set_backdrop(0x1234) && bg.state().revision == revision, "Backdrop no-op created history");
+            require(!bg.set_backdrop(-2) && !bg.set_backdrop(32768) && bg.state().revision == revision, "Invalid backdrop accepted");
+            bg.begin("Pending edit");
+            require(!bg.set_backdrop(0), "Backdrop interrupted active edit"); bg.cancel();
+            require(bg.undo() && bg.state().backdrop == -1 && bg.redo() && bg.state().backdrop == 0x1234,
+                    "Backdrop undo/redo failed");
+            auto file = root / "backdrop.BDB";
+            require(bg.save(file.u8string(), error), error);
+            Document reopened; require(reopened.load(file.u8string(), error) && reopened.state().backdrop == 0x1234, "Backdrop did not reopen");
+            require(bg.state().assets == assets, "Backdrop changed artwork");
+            require(bg.set_backdrop(-1) && bg.save(file.u8string(), error), error);
+            require(reopened.load(file.u8string(), error) && reopened.state().backdrop == -1, "Unset backdrop did not reopen");
+            require(bg.set_backdrop(0) && bg.save(file.u8string(), error), error);
+            auto layout = root / "backdrop.bddstudio";
+            std::ifstream input(layout); std::string text{std::istreambuf_iterator<char>(input), {}}; input.close();
+            auto at = text.find("backdrop 0"); require(at != std::string::npos, "Missing backdrop record");
+            text.replace(at, 10, "backdrop 32768"); std::ofstream(layout) << text;
+            auto before = reopened.state().revision;
+            require(!reopened.load(file.u8string(), error) && reopened.state().revision == before && reopened.state().backdrop == -1,
+                    "Damaged backdrop mutated open document");
+            const_cast<State &>(bg.state()).backdrop = 32768;
+            require(!bg.save((root / "invalid-backdrop.BDB").u8string(), error), "Invalid backdrop saved");
+        }
         Viewport v;
         v.pan = {-40, 123};
         Point origin{12, 55}, mouse{314, 225};

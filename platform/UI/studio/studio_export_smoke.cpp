@@ -88,6 +88,7 @@ int game_export_smoke(const std::string &output, const std::string &input,
         auto p = doc.state().planes[changed_plane];
         doc.set_plane(changed_plane, p.name, p.x + 17, p.y - 9, .75);
         doc.reorder_plane(changed_plane, 1);
+        check(doc.set_backdrop(0x1234), "Could not edit backdrop.");
         for (const auto &obj : doc.state().objects)
             if (obj.plane == changed_plane) {
                 auto id = obj.id;
@@ -139,6 +140,8 @@ int game_export_smoke(const std::string &output, const std::string &input,
         Document imported;
         check(imported.load((runtime / "data" / (name + ".BDB")).u8string(), error), error);
         read_runtime_defaults(imported);
+        check(imported.state().backdrop == doc.state().backdrop,
+              "Exported backdrop differs from independent runtime import.");
         for (int camera : {0, 123, 333}) {
             auto expected = doc.scene({(double)camera, 7}),
                  actual = imported.scene({(double)camera, 7});

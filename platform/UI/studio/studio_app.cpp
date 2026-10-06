@@ -15,6 +15,11 @@
 #include "Core/studio_visibility.h"
 #include "Core/studio_camera_checks.h"
 #include "Core/studio_share.h"
+#include "Core/studio_composite.h"
+#include "Core/studio_palette_adjust.h"
+#include "Core/studio_sprite_sheet.h"
+#include "Core/studio_tga_export.h"
+#include "Core/studio_palette_file.h"
 #include "Core/app_version.h"
 #include <future>
 #include <fstream>
@@ -26,6 +31,7 @@
 #include <SDL.h>
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -68,6 +74,10 @@ struct Tab {
     float backdrop_rgb[3] = {};
     char share_name[64] = {}, share_author[96] = {}, share_description[512] = {}, share_sources[512] = {}, share_license[128] = {}, share_tested[256] = {};
     bool share_requested = false, share_show_result = false;
+    bool composite_requested = false, composite_metadata = true, composite_backdrop = false;
+    int composite_scope = 2;
+    bool sheet_requested = false, sheet_placed_only = false, sheet_metadata = true;
+    int sheet_columns = 8, sheet_padding = 2;
     std::future<ShareBundle> share_job;
     std::unique_ptr<ShareBundle> share_bundle;
     std::shared_ptr<const AssetBank> info_assets;
@@ -98,6 +108,10 @@ struct Tab {
     bool block_grid = true, block_painting = false, block_dirty = false;
     int block_last_x = 0, block_last_y = 0;
     BddCorePalette palette_draft{};
+    BddCorePalette palette_adjust_base{};
+    PaletteAdjustment palette_adjustment;
+    int palette_blend_target = -1;
+    float palette_blend_amount = 0.0f;
     std::shared_ptr<const AssetBank> edit_original;
     State block_draft;
     std::vector<std::vector<uint8_t>> block_undo, block_redo;
@@ -155,8 +169,9 @@ struct Tab {
     std::shared_ptr<OptimizeProgress> optimize_progress;
     std::future<OptimizationPlan> optimize_job;
     std::unique_ptr<OptimizationPlan> optimize_plan;
+    std::unique_ptr<PaletteConsolidation> palette_plan;
     int optimize_choice = 0, optimize_palette = 0;
-    bool optimize_static_palettes = false, optimize_cuts = true;
+    bool optimize_static_palettes = false, palette_slots_reviewed = false, optimize_cuts = true;
     bool compare_open = false, compare_pattern = false, compare_after = true, compare_wipe = true;
     float compare_split = .5f;
     Point compare_camera;
@@ -216,7 +231,6 @@ struct AssetPayload {
 };
 struct TextureCache {
     SDL_Renderer *renderer = nullptr;
-    float canvas_rgb[3] = {20.f / 255, 25.f / 255, 31.f / 255};
     bool palette_alpha = false; // Overlay masks only; authored indexed art stays opaque above zero.
     std::shared_ptr<const AssetBank> bank;
     std::map<std::pair<int, int>, SDL_Texture *> values;
@@ -262,6 +276,7 @@ class App {
   public:
     SDL_Window *window = nullptr;
     SDL_Renderer *renderer = nullptr;
+    float canvas_rgb[3] = {20.f / 255, 25.f / 255, 31.f / 255};
     TextureCache textures;
     TextureCache block_textures;
     TextureCache animation_textures;
@@ -754,6 +769,9 @@ class App {
                     save(*tab());
                 if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S", false, tab() != nullptr))
                     save(*tab(), true);
+                if (ImGui::MenuItem("Export composite PNG...", nullptr, false,
+                                    tab() && tab()->document.state().has_bdb))
+                    request_composite(*tab());
                 if (ImGui::MenuItem("Share stage...", nullptr, false, tab() && tab()->document.state().has_bdb)) tab()->share_requested = true;
                 if (ImGui::MenuItem("Recovery copies..."))
                     show_recovery = true;
@@ -798,6 +816,8 @@ class App {
                 if (ImGui::MenuItem("Edit block pixels...", nullptr, false, available)) open_block_editor(*t);
                 if (ImGui::MenuItem("Edit palette...", nullptr, false, available)) open_palette_editor(*t);
                 if (ImGui::MenuItem("Export selected artwork as PNG...", nullptr, false, available)) export_asset_png(*t);
+                if (ImGui::MenuItem("Export selected artwork as indexed TGA...", nullptr, false, available)) export_asset_tga(*t);
+                if (ImGui::MenuItem("Export artwork sheet...", nullptr, false, available)) t->sheet_requested = true;
                 ImGui::EndMenu();
             }
             bool help_menu = ImGui::BeginMenu("Help");
@@ -1018,6 +1038,8 @@ class App {
                     if (p.object.fl >= 0 && p.object.fl < (int)s.assets->data.palettes.size())
                         t.palette_draft = s.assets->data.palettes[p.object.fl];
                 }
+                if (ImGui::Button("Find subframes...", ImVec2(-1, 0)))
+                    open_subframe_workshop(t, im->idx);
             }
             const Plane *plane = p.plane >= 0 ? &s.planes[p.plane] : nullptr;
             bool locked = p.locked || (plane && plane->locked);
@@ -1529,6 +1551,10 @@ class App {
             if (ImGui::Button("Palette...")) open_palette_editor(t);
             ImGui::SameLine();
             if (ImGui::Button("Export PNG...")) export_asset_png(t);
+            ImGui::SameLine(); if (ImGui::Button("Export TGA...")) export_asset_tga(t);
+            ImGui::SameLine();
+            if (ImGui::Button("Find subframes..."))
+                open_subframe_workshop(t, t.document.state().assets->data.images[t.asset].idx);
             ImGui::EndDisabled();
             ImGui::SameLine(); ImGui::TextDisabled("Double-click artwork to edit its pixels");
         }
@@ -1565,6 +1591,9 @@ class App {
                     if (ImGui::MenuItem("Edit block pixels...")) open_block_editor(t);
                     if (ImGui::MenuItem("Edit palette...")) open_palette_editor(t);
                     if (ImGui::MenuItem("Export PNG...")) export_asset_png(t);
+                    if (ImGui::MenuItem("Export indexed TGA...")) export_asset_tga(t);
+                    if (ImGui::MenuItem("Find lossless subframes..."))
+                        open_subframe_workshop(t, bank->data.images[i].idx);
                     ImGui::EndPopup();
                 }
                 if (ImGui::BeginDragDropSource()) {
@@ -1591,6 +1620,7 @@ class App {
         }
     }
     #include "studio_asset_tools.inc"
+    #include "studio_composite.inc"
     #include "studio_floor.inc"
     #include "studio_background.inc"
     #include "studio_mk3_layout.inc"
@@ -1802,8 +1832,22 @@ class App {
                               : find_lossless_savings(doc, options, progress.get());
             });
     }
+    void open_subframe_workshop(Tab &t, int image) {
+        cancel_gesture();
+        if (image < 0 || !t.document.image(image)) return;
+        t.optimize_options.source_image = image;
+        // Structural edits preserve palette indices unless the user explicitly reviews reuse.
+        t.optimize_options.compact_palettes = false;
+        t.optimize_options.palette_reuse_only = false;
+        t.optimize_choice = 0;
+        t.optimize_palette = 0;
+        t.optimize_plan.reset();
+        page = 3;
+        t.optimize_mode = 0;
+        start_optimization(t);
+    }
     void optimize(Tab &t) {
-        if (ImGui::RadioButton("Lossless savings", t.optimize_mode == 0))
+        if (ImGui::RadioButton("Subframes", t.optimize_mode == 0))
             t.optimize_mode = 0;
         ImGui::SameLine();
         if (ImGui::RadioButton("Repeat & Mirror", t.optimize_mode == 1))
@@ -1822,8 +1866,13 @@ class App {
             t.optimize_mode = 5;
         if (ImGui::RadioButton("Animated art", t.optimize_mode == 6))
             t.optimize_mode = 6;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Palettes", t.optimize_mode == 7))
+            t.optimize_mode = 7;
         ImGui::Separator();
-        if (t.optimize_mode == 6)
+        if (t.optimize_mode == 7)
+            palette_consolidation(t);
+        else if (t.optimize_mode == 6)
             animated_art(t);
         else if (t.optimize_mode == 1)
             pattern_workshop(t);
@@ -1839,6 +1888,96 @@ class App {
             lossless_optimizer(t);
         stage_comparison(t);
     }
+    void palette_consolidation(Tab &t) {
+        heading("Exact palette consolidation",
+                "Merge byte-identical RGB555 palettes with a reviewed slot remap.");
+        ImGui::TextWrapped("This pass never approximates colors or changes image pixels. Palette slot identity can still matter to assembly, cycling and swaps, so source evidence and confirmation remain separate from the pixel proof.");
+        if (ImGui::Button("Analyze exact duplicates")) {
+            t.palette_plan = std::make_unique<PaletteConsolidation>(find_exact_palette_consolidation(t.document));
+            t.palette_slots_reviewed = false;
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(t.audit_job.valid());
+        if (ImGui::Button("Scan game references")) start_art_audit(t);
+        ImGui::EndDisabled();
+        if (t.audit_job.valid()) {
+            ImGui::SameLine();
+            int done = t.audit_progress->done, total = t.audit_progress->total;
+            ImGui::ProgressBar(total ? float(done) / total : 0, {180, 0});
+        }
+        if (!t.palette_plan) {
+            ImGui::TextDisabled("Analysis is read-only. No palette is removed automatically on Save.");
+            return;
+        }
+        auto &plan = *t.palette_plan;
+        bool current = plan.before.assets == t.document.state().assets &&
+                       plan.before.revision == t.document.state().revision;
+        if (!plan.error.empty()) {
+            ImGui::TextWrapped("%s", plan.error.c_str());
+            return;
+        }
+        ImGui::TextColored(accent, "Palettes %d -> %d  |  %llu bytes saved",
+                           plan.baseline.palettes, plan.proposed.palettes,
+                           (unsigned long long)(plan.baseline.palette_bytes - plan.proposed.palette_bytes));
+        ImGui::TextDisabled("%s", plan.verified ? "Exact RGB555 placement/default remap passed" : "Verification failed");
+        if (!current) ImGui::TextColored(accent, "Document changed. Analyze again before applying.");
+        if (plan.merges.empty()) {
+            ImGui::TextWrapped("No byte-identical palettes were found. Near-color or union grouping is intentionally excluded from this exact pass.");
+            return;
+        }
+        bool audit_current = t.art_audit && t.art_audit->before.assets == t.document.state().assets &&
+                             t.art_audit->before.revision == t.document.state().revision &&
+                             t.art_audit->error.empty();
+        if (audit_current)
+            ImGui::TextDisabled("Reference evidence: %d source files scanned%s", t.art_audit->source_files,
+                                t.art_audit->root.empty() ? " (document only)" : "");
+        else
+            ImGui::TextDisabled("Reference evidence has not been scanned for this document revision.");
+        if (ImGui::BeginTable("palette-merges", 5,
+                              ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+                                  ImGuiTableFlags_ScrollY,
+                              {0, std::min(260.f, ImGui::GetContentRegionAvail().y - 105)})) {
+            ImGui::TableSetupColumn("Remove"); ImGui::TableSetupColumn("Keep");
+            ImGui::TableSetupColumn("Placed"); ImGui::TableSetupColumn("Defaults");
+            ImGui::TableSetupColumn("Reference evidence"); ImGui::TableHeadersRow();
+            for (const auto &m : plan.merges) {
+                ImGui::TableNextRow(); ImGui::TableNextColumn();
+                ImGui::Text("%d: %s", m.source, m.source_name.c_str());
+                ImGui::TableNextColumn(); ImGui::Text("%d: %s", m.target, m.target_name.c_str());
+                ImGui::TableNextColumn(); ImGui::Text("%d", m.placements);
+                ImGui::TableNextColumn(); ImGui::Text("%d", m.defaults);
+                ImGui::TableNextColumn();
+                const ArtAuditEntry *entry = nullptr;
+                if (audit_current)
+                    for (const auto &e : t.art_audit->entries)
+                        if (e.palette && e.id == m.source) { entry = &e; break; }
+                if (!entry) ImGui::TextDisabled("Not scanned");
+                else {
+                    ImGui::TextWrapped("%s | %zu note(s)", entry->status.c_str(), entry->evidence.size());
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        for (const auto &line : entry->evidence) ImGui::TextWrapped("%s", line.c_str());
+                        ImGui::EndTooltip();
+                    }
+                }
+            }
+            ImGui::EndTable();
+        }
+        ImGui::Checkbox("I reviewed palette slot, cycling and swap references", &t.palette_slots_reviewed);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Exact colors do not prove external code treats two palette slots as interchangeable.");
+        ImGui::BeginDisabled(!current || !plan.verified || !t.palette_slots_reviewed);
+        if (ImGui::Button("Apply exact palette merges")) {
+            if (t.document.apply_palette_consolidation(plan, t.palette_slots_reviewed, error)) {
+                t.palette_plan.reset();
+                t.palette_slots_reviewed = false;
+                toast("Exact palettes consolidated. Undo restores every original slot.");
+            }
+        }
+        ImGui::EndDisabled(); ImGui::SameLine();
+        if (ImGui::Button("Copy palette report"))
+            ImGui::SetClipboardText(palette_consolidation_report(plan).c_str());
+    }
     void compare_button(Tab &t, bool pattern) {
         if (ImGui::Button("Compare full stage")) {
             t.compare_visibility = false;
@@ -1848,12 +1987,28 @@ class App {
         }
     }
     void lossless_optimizer(Tab &t) {
-        heading("Find lossless savings",
-                "Explore smaller representations of exactly the same artwork.");
+        heading("Subframes & lossless savings",
+                "Trim blank space and split artwork into an exact, smaller reconstruction.");
         bool busy = t.optimize_job.valid();
+        int source = t.optimize_options.source_image;
+        if (source >= 0) {
+            auto *im = t.document.image(source);
+            if (!im) t.optimize_options.source_image = source = -1;
+            else {
+                ImGui::TextColored(accent, "Selected artwork: Image %d  |  %d x %d", source, im->w, im->h);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Scan whole stage")) {
+                    t.optimize_options.source_image = -1;
+                    t.optimize_plan.reset();
+                }
+                ImGui::TextDisabled("Every placement and palette variant is rebuilt together; palette indices are preserved by default.");
+            }
+        } else {
+            ImGui::TextDisabled("Scope: whole stage. Use Find subframes on artwork for a focused review.");
+        }
         ImGui::BeginDisabled(busy || t.pattern_job.valid() || t.pattern_search_job.valid() ||
                              t.document.transaction_active() || !t.document.state().has_bdb);
-        if (ImGui::Button("Find savings"))
+        if (ImGui::Button(source >= 0 ? "Find subframes" : "Find savings"))
             start_optimization(t);
         ImGui::SameLine();
         if (ImGui::Button("Find shared bases"))
@@ -3983,7 +4138,7 @@ class App {
             ImGui::TextDisabled("Local files  /  Indexed artwork  /  Stage composition");
         ImGui::End();
         help_share_dialogs();
-        if (auto *t = tab()) { asset_dialogs(*t); floor_dialog(*t); mk3_layout_dialog(*t); floor_library_window(*t); }
+        if (auto *t = tab()) { asset_dialogs(*t); composite_dialog(*t); sprite_sheet_dialog(*t); floor_dialog(*t); mk3_layout_dialog(*t); floor_library_window(*t); }
         prompts();
         recover();
     }
@@ -3994,6 +4149,7 @@ class App {
 #include "studio_batch_smoke.inc"
 #include "studio_checks_smoke.inc"
 #include "studio_floor_smoke.inc"
+#include "studio_background_smoke.inc"
 #include "studio_mk3_layout_smoke.inc"
 #include "studio_camera_checks_smoke.inc"
 #include "studio_help_share_smoke.inc"
@@ -4330,6 +4486,8 @@ int run(int argc, char **argv) {
     AssetToolsSmoke asset_smoke;
     BatchImportSmoke batch_smoke;
     ChecksSmoke checks_smoke;
+    BackgroundSmoke background_smoke;
+    bool test_background = smoke && argc >= 5 && std::string(argv[4]) == "--background";
     FloorSmoke floor_smoke;
     FloorLibrarySmoke floor_library_smoke;
     Mk3LayoutSmoke layout_smoke;
@@ -4377,13 +4535,15 @@ int run(int argc, char **argv) {
     }
     bool test_shared = smoke && argc >= 5 && std::string(argv[4]) == "--shared";
     bool test_palette_reuse = smoke && argc >= 5 && std::string(argv[4]) == "--palette-reuse";
+    bool test_subframes = smoke && argc >= 5 && std::string(argv[4]) == "--subframes";
+    bool test_palettes = smoke && argc >= 5 && std::string(argv[4]) == "--palettes";
     bool test_art_audit = smoke && argc >= 5 && std::string(argv[4]) == "--art-audit";
     bool test_animation_library = smoke && argc >= 5 && std::string(argv[4]) == "--animation-library";
     bool test_animation_analysis = test_animation_library ||
         (smoke && argc >= 5 && std::string(argv[4]) == "--animation-analysis");
     bool test_visibility = smoke && argc >= 5 && std::string(argv[4]) == "--visibility";
-    bool test_optimize =
-        test_review || test_shared || test_palette_reuse || (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
+    bool test_optimize = test_review || test_shared || test_palette_reuse || test_subframes ||
+                         (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
     bool test_pattern_suggest = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-suggest";
     bool test_pattern_discover = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-discover";
     bool test_pattern = test_pattern_discover || test_pattern_suggest ||
@@ -4410,8 +4570,24 @@ int run(int argc, char **argv) {
     if (test_optimize && app.tab()) {
         auto &t = *app.tab();
         t.optimize_options.deep = true;
-        app.start_optimization(t, test_palette_reuse ? 2 : test_shared ? 1 : 0);
-        app.page = 3;
+        if (test_subframes) {
+            int image = t.document.state().assets->data.images.front().idx;
+            app.open_subframe_workshop(t, image);
+        } else {
+            app.start_optimization(t, test_palette_reuse ? 2 : test_shared ? 1 : 0);
+            app.page = 3;
+        }
+    }
+    if (test_palettes && app.tab()) {
+        auto &t = *app.tab();
+        int image = t.document.state().assets->data.images.front().idx, next = -1;
+        if (!t.document.copy_palette_for_image(image, 0, app.error, next)) {
+            rc = 1; app.running = false;
+        } else {
+            t.palette_plan = std::make_unique<PaletteConsolidation>(find_exact_palette_consolidation(t.document));
+            t.optimize_mode = 7;
+            app.page = 3;
+        }
     }
     if (test_art_audit && app.tab()) {
         app.start_art_audit(*app.tab());
@@ -4481,6 +4657,7 @@ int run(int argc, char **argv) {
                 io.AddMouseButtonEvent(0, frames == 9 || frames == 15);
         }
         if (test_export_checks) export_checks_smoke.input(app, frames);
+        if (test_background) background_smoke.input(app, frames);
         if (test_floor_library) floor_library_smoke.input(app, frames);
         else if (test_floors) floor_smoke.input(app, frames);
         if (test_layout) layout_smoke.input(app, frames);
@@ -4502,6 +4679,7 @@ int run(int argc, char **argv) {
         }
         app.frame();
         if (test_export_checks && !export_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
+        if (test_background && !background_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_floor_library && !floor_library_smoke.check(app, frames)) { rc = 1; app.running = false; }
         else if (test_floors && !test_floor_library && !floor_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_layout && !layout_smoke.check(app, frames)) { rc = 1; app.running = false; }
@@ -4548,6 +4726,7 @@ int run(int argc, char **argv) {
                                : test_animation_analysis ? "animation-analysis.png"
                                : test_visibility ? "visibility.png"
                                : test_art_audit ? "art-audit.png"
+                               : test_palettes ? "palettes.png"
                                : test_optimize ? "optimize.png"
                                : test_pattern  ? "pattern.png"
                                                : "game-export.png";
@@ -4642,6 +4821,20 @@ int run(int argc, char **argv) {
                 rc = 1;
                 app.running = false;
             }
+            if (test_subframes && app.tab() && app.tab()->optimize_plan &&
+                app.tab()->optimize_plan->options.source_image !=
+                    app.tab()->document.state().assets->data.images.front().idx) {
+                std::fprintf(stderr, "Subframe UI lost the selected artwork scope.\n");
+                rc = 1;
+                app.running = false;
+            }
+            if (test_palettes &&
+                (!app.tab() || !app.tab()->palette_plan || !app.tab()->palette_plan->verified ||
+                 app.tab()->palette_plan->merges.size() != 1)) {
+                std::fprintf(stderr, "Palette consolidation UI did not retain its verified review.\n");
+                rc = 1;
+                app.running = false;
+            }
             frames++;
             if (test_review && app.tab()) {
                 auto &t = *app.tab();
@@ -4660,14 +4853,14 @@ int run(int argc, char **argv) {
                     } else t.receipt_before = std::make_unique<RomReceipt>(*t.receipt_after);
                 }
             }
-            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout) {
+            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout && !test_background && !test_palettes) {
                 SDL_SetWindowSize(app.window, 1000, 720);
                 if (app.tab() && !test_navigation)
                     app.tab()->fit = true;
             }
-            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout)
+            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout && !test_background && !test_palettes)
                 app.page = 1;
-            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout) {
+            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout && !test_background && !test_palettes) {
                 app.page = 2;
                 if (argc >= 5 && std::string(argv[4]) == "--prepare" && app.tab())
                     app.prepare_game(*app.tab());

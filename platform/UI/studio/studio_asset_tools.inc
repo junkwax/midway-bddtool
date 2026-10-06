@@ -8,6 +8,9 @@ void open_palette_editor(Tab &t, int palette = -1) {
     t.edit_image = t.document.state().assets->data.images[t.asset].idx;
     t.edit_original = t.document.state().assets;
     t.palette_draft = t.edit_original->data.palettes[t.edit_palette];
+    t.palette_adjust_base = t.palette_draft;
+    t.palette_adjustment = {};
+    t.palette_blend_target = -1; t.palette_blend_amount = 0;
     t.edit_color = std::min(1, t.palette_draft.count - 1);
     t.palette_requested = true;
 }
@@ -41,6 +44,22 @@ void export_asset_png(Tab &t) {
     if (!bdd_core_indexed_to_rgba(im.pix.data(), im.w, im.h, pal.argb, pal.count, rgba.data(), rgba.size()) ||
         !stbi_write_png(path, im.w, im.h, 4, rgba.data(), im.w * 4)) error = "Could not export artwork.";
     else toast("Exported artwork as PNG");
+}
+void export_asset_tga(Tab &t) {
+    const auto bank = t.document.state().assets;
+    if (t.asset < 0 || t.asset >= (int)bank->data.images.size()) return;
+    int pi = asset_palette(t, t.asset);
+    if (pi < 0 || pi >= (int)bank->data.palettes.size()) return;
+    const auto &im = bank->data.images[t.asset];
+    auto result = encode_indexed_tga(im, bank->data.palettes[pi]);
+    if (!result.ready) { error = result.error; return; }
+    char path[1024] = {};
+    std::snprintf(path, sizeof path, "artwork_%d.tga", im.idx);
+    if (!file_dialog_save_ext("Export indexed artwork as TGA", "Indexed TGA image\0*.tga\0", "tga", path, sizeof path)) return;
+    std::ofstream output(fs::u8path(path), std::ios::binary | std::ios::trunc);
+    output.write((const char *)result.bytes.data(), (std::streamsize)result.bytes.size()); output.close();
+    if (!output) error = "Could not export indexed TGA artwork.";
+    else toast("Exported lossless indexed TGA");
 }
 void palette_swatches(const BddCorePalette &pal, int &selected) {
     int cols = std::max(1, std::min(16, (int)(ImGui::GetContentRegionAvail().x / 28)));
@@ -133,6 +152,8 @@ void asset_dialogs(Tab &t) {
                 auto name = std::to_string(i) + ": " + bank->data.palettes[i].name;
                 if (ImGui::Selectable(name.c_str(), i == t.edit_palette)) {
                     t.edit_palette = i; t.palette_draft = bank->data.palettes[i]; t.edit_original = bank;
+                    t.palette_adjust_base = t.palette_draft; t.palette_adjustment = {};
+                    t.palette_blend_target = -1; t.palette_blend_amount = 0;
                     t.edit_color = std::min(1, t.palette_draft.count - 1);
                 }
             }
@@ -147,12 +168,89 @@ void asset_dialogs(Tab &t) {
             if (t.document.copy_palette_for_image(t.edit_image, t.edit_palette, error, next)) {
                 t.edit_palette = next; t.edit_original = t.document.state().assets;
                 t.palette_draft = t.edit_original->data.palettes[next];
+                t.palette_adjust_base = t.palette_draft; t.palette_adjustment = {};
+                t.palette_blend_target = -1; t.palette_blend_amount = 0;
                 toast("Palette copied and assigned. Undo restores the original assignments.");
             }
         }
         ImGui::TextDisabled("Copies the saved palette; keeps other palette variants on placements.");
+        if (ImGui::Button("Import RGB555 palette...")) {
+            char path[1024] = {};
+            if (file_dialog_open("Import RGB555 palette", "bddtool RGB555 palette\0*.rgb555\0All files\0*.*\0", path, sizeof path)) {
+                std::ifstream input(fs::u8path(path), std::ios::binary);
+                std::string text;
+                if (input) {
+                    input.seekg(0, std::ios::end); auto size = input.tellg(); input.seekg(0);
+                    if (size >= 0 && size <= 16384) text.assign(std::istreambuf_iterator<char>(input), {});
+                }
+                BddCorePalette imported{};
+                if (text.empty()) error = "Could not read the palette file, or it exceeds 16 KiB.";
+                else if (decode_palette_file(text, imported, error)) {
+                    t.palette_draft = imported; t.palette_adjust_base = imported; t.palette_adjustment = {};
+                    t.palette_blend_target = -1; t.palette_blend_amount = 0;
+                    t.edit_color = std::min(1, imported.count - 1);
+                    toast("Palette loaded into the review draft");
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Export RGB555 palette...")) {
+            char path[1024] = {}; std::snprintf(path, sizeof path, "%s.rgb555", t.palette_draft.name);
+            if (file_dialog_save_ext("Export RGB555 palette", "bddtool RGB555 palette\0*.rgb555\0", "rgb555", path, sizeof path)) {
+                std::ofstream output(fs::u8path(path), std::ios::binary | std::ios::trunc);
+                auto text = encode_palette_file(t.palette_draft);
+                output.write(text.data(), (std::streamsize)text.size()); output.close();
+                if (!output) error = "Could not export the palette file."; else toast("Exported RGB555 palette");
+            }
+        }
+        ImGui::TextDisabled("Import changes only this review draft; Apply palette commits it with undo.");
         ImGui::InputText("Name", t.palette_draft.name, sizeof t.palette_draft.name);
         ImGui::SliderInt("Color count", &t.palette_draft.count, 1, 256);
+        if (ImGui::CollapsingHeader("Color adjustments", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::TextWrapped("Preview the whole palette at the game's RGB555 precision. Index 0 remains transparent.");
+            bool changed = false;
+            const char *blend_name = t.palette_blend_target >= 0 && t.palette_blend_target < (int)bank->data.palettes.size()
+                ? bank->data.palettes[t.palette_blend_target].name : "None";
+            if (ImGui::BeginCombo("Blend toward", blend_name)) {
+                if (ImGui::Selectable("None", t.palette_blend_target < 0)) {
+                    t.palette_blend_target = -1; t.palette_blend_amount = 0; changed = true;
+                }
+                for (int i = 0; i < (int)bank->data.palettes.size(); ++i) if (i != t.edit_palette) {
+                    std::string label = std::to_string(i) + ": " + bank->data.palettes[i].name;
+                    if (ImGui::Selectable(label.c_str(), t.palette_blend_target == i)) {
+                        t.palette_blend_target = i; changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::BeginDisabled(t.palette_blend_target < 0);
+            changed |= ImGui::SliderFloat("Blend amount", &t.palette_blend_amount, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_None);
+            ImGui::EndDisabled();
+            changed |= ImGui::SliderFloat("Brightness", &t.palette_adjustment.brightness, -1.0f, 1.0f, "%+.2f");
+            changed |= ImGui::SliderFloat("Contrast", &t.palette_adjustment.contrast, 0.0f, 2.0f, "%.2fx");
+            changed |= ImGui::SliderFloat("Saturation", &t.palette_adjustment.saturation, 0.0f, 2.0f, "%.2fx");
+            if (changed) {
+                char name[sizeof t.palette_draft.name]; std::memcpy(name, t.palette_draft.name, sizeof name);
+                int count = t.palette_draft.count;
+                BddCorePalette colors = t.palette_adjust_base;
+                if (t.palette_blend_target >= 0 && t.palette_blend_target < (int)bank->data.palettes.size())
+                    colors = blend_palette(colors, bank->data.palettes[t.palette_blend_target], t.palette_blend_amount);
+                t.palette_draft = adjust_palette(colors, t.palette_adjustment);
+                std::memcpy(t.palette_draft.name, name, sizeof name); t.palette_draft.count = count;
+            }
+            if (ImGui::Button("Reset adjustments")) {
+                char name[sizeof t.palette_draft.name]; std::memcpy(name, t.palette_draft.name, sizeof name);
+                int count = t.palette_draft.count;
+                t.palette_adjustment = {}; t.palette_blend_target = -1; t.palette_blend_amount = 0;
+                t.palette_draft = t.palette_adjust_base;
+                std::memcpy(t.palette_draft.name, name, sizeof name); t.palette_draft.count = count;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Use current colors as baseline")) {
+                t.palette_adjust_base = t.palette_draft; t.palette_adjustment = {};
+                t.palette_blend_target = -1; t.palette_blend_amount = 0;
+            }
+        }
         t.edit_color = std::clamp(t.edit_color, 0, t.palette_draft.count - 1);
         ImGui::BeginChild("swatches", {0, std::max(90.f, ImGui::GetContentRegionAvail().y - 155)}, true);
         palette_swatches(t.palette_draft, t.edit_color);

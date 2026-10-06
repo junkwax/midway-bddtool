@@ -685,7 +685,7 @@ bool Document::apply_mk3_layout(const Mk3Layout &layout, std::string &error) {
     if (!layout.valid() || active_ || !state_.runtime_profile.empty() ||
         layout.revision != state_.revision || layout.assets != state_.assets ||
         std::abs((int64_t)layout.start_x) > 100000 || std::abs((int64_t)layout.start_y) > 100000 ||
-        std::abs((int64_t)layout.ground) > 100000) {
+        std::abs((int64_t)layout.ground) > 100000 || layout.backdrop < -1 || layout.backdrop > 32767) {
         error = "The layout review is unavailable or stale. Load the definition again."; return false;
     }
     auto after = state_;
@@ -729,6 +729,28 @@ bool Document::apply_optimization(const OptimizationPlan &plan, std::string &err
         next_id_ = std::max(next_id_, object.id + 1);
     touch();
     commit();
+    return true;
+}
+
+bool Document::apply_palette_consolidation(const PaletteConsolidation &plan,
+                                           bool runtime_slots_reviewed, std::string &error) {
+    if (active_ || plan.before.revision != state_.revision || plan.before.assets != state_.assets) {
+        error = "The document changed. Review palettes again before applying.";
+        return false;
+    }
+    if (!runtime_slots_reviewed) {
+        error = "Confirm palette slot and runtime cycling references were reviewed.";
+        return false;
+    }
+    if (!plan.verified || plan.merges.empty() || !verify_palette_consolidation(plan, error)) {
+        if (error.empty()) error = "No verified exact palette merges are available.";
+        return false;
+    }
+    begin("Consolidate exact palettes");
+    state_ = plan.after;
+    touch();
+    commit();
+    error.clear();
     return true;
 }
 
@@ -877,6 +899,10 @@ bool Document::save_game_sources(const std::string &path, std::string &report,
 
 bool Document::save(const std::string &path, std::string &error, bool recovery) {
     error.clear();
+    if (state_.backdrop < -1 || state_.backdrop > 32767) {
+        error = "Cannot save invalid stage backdrop color.";
+        return false;
+    }
     if (active_) {
         error = "Finish or cancel the current edit before saving.";
         return false;

@@ -403,16 +403,84 @@ covering thumbnail loading and clicking, cache bounds/library invalidation,
 runtime restore, pixel comparison, failed-open isolation, editable copy and
 undo/redo. The Subway browser was visually inspected with multiple thumbnails.
 
+## Background colors — October 6, 2026
+
+**Stage → Background...** now provides a session canvas color with Dark/Black/White
+presets and a separate saved stage backdrop. The stage picker previews RGB555
+inside the game frame. Apply is one undoable edit; Cancel discards the draft.
+Saving stores the backdrop in version 3 of `.bddstudio`; versions 1 and 2 remain
+readable. An unset backdrop preserves the runtime source color during export.
+
+Runtime defaults import available MK2/MK3 clear colors when initially binding
+an unsaved layout. Existing saved layouts keep their own settings. MK2 export
+includes an explicitly set backdrop in its review, and independent runtime
+re-import checks the exported value. The reserved MK2 no-clear value cannot be
+applied as a color from the picker. MK3 game export and custom generator backdrop
+edits remain unsupported; the cave exporter rejects a set backdrop even after
+the edited map has been saved. Share previews include the saved color, while
+prop PNGs retain transparency. Canvas colors do not enter exports or undo history.
+
+Verification: Release build; document, game-export, runtime-export, MK3 layout,
+share, floor, animation, runtime-order and custom cave profile tests. The compact
+900×640 Background UI smoke covers open, live preview, canvas isolation, Cancel,
+Apply and undo/redo with demo and local Forest artwork. Floor placement, floor
+library, MK3 layout and Forest animation UI regressions pass. Screenshots were
+inspected; game builds/ROMs were not changed and emulator testing was not run.
+
+## Focused Subframe Workshop — October 6, 2026
+
+The modern Assets toolbar, artwork context menu and placement inspector now
+open a selected image directly in **Optimize → Subframes**. The selected-artwork
+scope runs the existing verified lossless splitter only for that image while
+still rebuilding every placement, flip and palette variant together. The review
+shows transparent trimming, cut boundaries, per-piece BPP, exact reconstruction,
+modeled video bytes, palette data and placement-table cost. Users can broaden the
+same workspace to a whole-stage scan without navigating to another tool.
+Focused structural scans preserve palette indices by default. Palette-aware
+reuse remains an explicit action because static BDB/BDD pixels cannot establish
+that game code never cycles or swaps palette entries.
+
+This replaces the useful part of the legacy split-object dialog without carrying
+over its separate global state, automatic palette deletion switches, or direct
+mutation of legacy arrays. Metadata-bearing animation/LOD images, locked and
+unassigned placements, malformed palette references and LOAD2-incompatible source
+geometry remain protected. Apply uses the document's single undo history and its
+existing pixel/runtime-order verifier.
+
+Verification: focused optimizer scope regression, optimizer roundtrip suite, and
+the 900×640 `--subframes` UI smoke. The smoke enters through a selected asset and
+confirms the completed plan retains that image scope.
+
+## Exact palette consolidation — October 6, 2026
+
+**Optimize → Palettes** replaces the safe, understandable portion of the old
+palette cleanup/grouping panels. It finds only palettes with the same count and
+identical RGB555 words, keeps the first slot deterministically, and previews each
+removed-to-kept mapping with placement and image-default counts. The proposal
+does not alter image pixels, palette colors, placements, order, or metadata.
+
+The panel can run the existing source/reference audit without leaving the review.
+Evidence remains advisory: exact current colors cannot prove that assembly,
+palette cycling, or runtime swaps treat two slot identities as interchangeable.
+Apply therefore requires explicit slot/cycling review, rechecks the document
+revision and proposal, and records one undoable edit. Save does not consolidate
+palettes automatically. Near-color merges, palette unions and deletion based only
+on being unplaced remain excluded.
+
+Verification covers deterministic duplicate detection, placement/default remap,
+pixel equivalence, damaged-plan rejection, required runtime confirmation,
+undo/redo, optimizer/export regressions, and the 900×640 `--palettes` UI smoke.
+
 ## Remaining candidates, subject to the decisions above
 
 | Legacy capability | Current route / next work |
 | --- | --- |
 | IMG folders and LOD-driven imports | Defer; extend the existing import flow only when source selection and dependencies are clear |
-| Palette merging, delete-unused, rebuild/reduction and smart grouping | Combine useful algorithms in Optimize after reference checks; retire overlapping assistants |
-| Palette brightness/contrast, tone matching and blending | Candidates for controls inside the palette editor with live preview, not additional tool windows |
-| Palette export/import and palette-animation tooling | Separate palette exchange from runtime animation; add only concrete needed workflows |
-| Specialist block/subframe operations | Keep useful crop/split/merge actions in the block editor with placement/metadata preservation |
-| Sprite-sheet/composite/TGA export | Consolidate under Export; avoid a menu/tool for each format |
+| Palette unions, near-color grouping and delete-unused | Exact duplicate consolidation is now in Optimize; keep broader transformations deferred until consumer/reference checks can prove their scope |
+| Palette brightness/contrast, tone matching and blending | Brightness, contrast, saturation and index-preserving blend are now in the palette editor; automatic semantic tone matching remains deferred |
+| Palette export/import and palette-animation tooling | RGB555 palette exchange is migrated; runtime palette animation remains a separate workflow |
+| Manual crop/split/merge controls | Add only when the verified focused Subframes search cannot express a real stage edit; preserve placement/metadata and reuse the same review/apply path |
+| Sprite-sheet/composite/TGA export | Migrated: resolved composites, metadata-backed artwork sheets, and lossless selected-image RGB555 indexed TGA |
 
 Folder import scans one directory, up to 2,048 raster filenames, and reviews up
 to 128 selected images / 16 million decoded pixels at a time. Review retains
@@ -531,3 +599,39 @@ and each preview to 128 million compositing operations. The camera image stays
 400×254. Structural reference/pixel errors must be resolved before sharing;
 runtime/LOAD2 findings remain visible in the page rather than being described
 as passed. Checks and screenshots are authoring evidence, not game verification.
+# Resolved composite export
+
+The modern editor now exports a selection, layer, or full visible stage directly from its resolved scene. This replaces the legacy global-array composite path and keeps the result aligned with the canvas, including palettes, flips, layer offsets, ordering, transparency, and optional stage backdrop. Companion placement JSON is enabled by default.
+
+## Artwork sheet export
+
+**Assets → Export artwork sheet** replaces the legacy fixed 16-column sprite
+sheet. It exports all BDD images or the images used by current visible
+placements, with configurable columns and padding. It keeps indexed transparency,
+uses a resolved placement palette when available and otherwise uses the image's
+default palette. Optional JSON records IDs, labels, palettes, cells and exact
+pixel rectangles. The renderer rejects invalid pixels/palettes and sheets over
+8192 pixels on an axis or 32 million pixels total.
+
+## Indexed TGA round trip
+
+Selected artwork can be exported as an uncompressed, top-origin, 8-bit
+color-mapped TGA. Unlike the legacy 24-bit palette writer, the modern path writes
+the BDD's RGB555 words directly and preserves palette indices byte for byte. The
+existing TGA importer accepts this 16-bit color map, making the format suitable
+for external indexed editing. Export validates dimensions, pixel storage and
+every palette reference before opening the destination file.
+
+## RGB555 palette adjustments
+
+The modern palette editor includes brightness, contrast and saturation controls with a live swatch preview. **Blend toward** interpolates matching indices toward another document palette while retaining the source count, unmatched colors, transparent index and flag bits. Every preview is calculated from a stable baseline and quantized immediately to the RGB555 values the game stores, so the user does not approve a smoother desktop-color result that the BDD cannot reproduce. Transparent index zero and the palette word's high bit are preserved. Reset restores the baseline; **Use current colors as baseline** allows adjustments to be stacked deliberately. The final change still uses the existing Apply Palette action and document undo history.
+
+## Palette exchange
+
+The palette editor imports and exports a bounded `.rgb555` text format containing
+the palette name, count and exact 16-bit words. Imported data enters the existing
+review draft, so swatches and RGB555 precision are visible before Apply and the
+final document edit remains undoable. The parser rejects foreign headers,
+invalid counts or hex words, missing and trailing data, oversized files and
+overlong names. Palette animation remains separate because a static color list
+cannot describe timing, slot ownership or runtime cycling behavior.

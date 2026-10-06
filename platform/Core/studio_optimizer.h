@@ -43,6 +43,19 @@ struct OptimizationPlan {
     std::string error;
     bool verified = false, cancelled = false;
 };
+struct PaletteMerge {
+    int source = -1, target = -1;
+    std::string source_name, target_name;
+    int placements = 0, defaults = 0;
+};
+struct PaletteConsolidation {
+    State before, after;
+    OptimizeBudget baseline, proposed;
+    std::vector<int> remap;
+    std::vector<PaletteMerge> merges;
+    std::string error;
+    bool verified = false;
+};
 OptimizeBudget optimization_budget(const State &state);
 uint64_t optimization_image_bits(const BddCoreImage &image);
 OptimizationPlan find_lossless_savings(const Document &document, const OptimizeOptions &options,
@@ -58,6 +71,9 @@ struct OptimizeRegion {
     int before_bpp = 0, after_bpp = 0;
 };
 std::vector<OptimizeRegion> optimization_regions(const OptimizationPlan &plan);
+PaletteConsolidation find_exact_palette_consolidation(const Document &document);
+bool verify_palette_consolidation(const PaletteConsolidation &plan, std::string &error);
+std::string palette_consolidation_report(const PaletteConsolidation &plan);
 
 enum class PatternMode { RepeatX, RepeatY, MirrorX, MirrorY };
 struct PatternOptions {

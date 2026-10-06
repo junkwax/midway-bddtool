@@ -24,6 +24,9 @@ int main(int argc, char **argv) {
         fs::create_directories(scratch); auto source = scratch / "MKBT.ASM"; write(source, fixture());
         auto doc = Document::demo(); auto before = doc.state(); std::string error;
         auto layout = read_mk3_layout(doc, source.u8string()); require(layout.valid(), layout.error);
+        require(layout.backdrop == 0, "Black MK3 backdrop not imported");
+        auto invalid = layout; invalid.backdrop = 32768;
+        require(!doc.apply_mk3_layout(invalid, error) && doc.state().revision == before.revision, "Invalid backdrop review applied");
         require(layout.start_x == 400 && layout.start_y == 7 && layout.ground == 247, "MK3 camera and ground fields swapped");
         require(doc.state().revision == before.revision && doc.state().assets == before.assets, "Review mutated the document");
         int minx[3] = {100000,100000,100000}, miny[3] = {100000,100000,100000}, maxx[3] = {};
@@ -32,6 +35,7 @@ int main(int argc, char **argv) {
             maxx[p.plane] = std::max(maxx[p.plane], p.object.depth + doc.image(p.object.ii)->w);
         }
         require(doc.apply_mk3_layout(layout, error), error);
+        require(doc.state().backdrop == 0, "Layout omitted backdrop");
         auto scene = doc.scene({400,7}), moved = doc.scene({480,10});
         const int ox[] = {-16,10,0}, oy[] = {25,-8,5}; const double rate[] = {.5,1,.25};
         for (size_t i = 0; i < scene.size(); ++i) {
@@ -44,8 +48,10 @@ int main(int argc, char **argv) {
         require(doc.state().assets == before.assets && scene.front().rank == 0 && scene.back().rank == 3, "Pixels or display order changed");
         require(doc.undo() && doc.state().revision == before.revision && doc.state().planes[0].x == before.planes[0].x, "Layout undo failed");
         require(doc.redo(), "Layout redo failed");
+        require(doc.state().backdrop == 0, "Redo lost backdrop");
         require(doc.save((scratch / "map.BDB").u8string(), error), error);
         Document reopened; require(reopened.load((scratch / "map.BDB").u8string(), error), error);
+        require(reopened.state().backdrop == 0, "MK3 backdrop did not reopen");
         require(reopened.has_layout() && reopened.state().start_y == 7 && reopened.state().ground == 247 && reopened.state().planes[0].scroll == .5, "Saved layout did not reopen");
         auto stale = read_mk3_layout(doc, source.u8string()); doc.move({doc.state().objects[0].id}, 1, 0);
         auto revision = doc.state().revision;

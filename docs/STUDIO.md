@@ -62,15 +62,72 @@ placement inspector. Paint, erase, pick colors with right-click, flip X/Y and
 undo individual strokes in the draft. **Apply block** creates one document
 history entry; **Cancel** discards it. Scrollbars navigate enlarged blocks.
 
+Choose **Find subframes...** from selected artwork, its inspector, or the asset
+context menu to open a focused Optimize review. It searches transparent margins,
+blank internal corridors, repeated regions and X/Y mirrored regions for that
+image. Every placement and palette variant is rebuilt together. The review shows
+the original beside an exact reconstruction, cut boundaries, BPP, modeled video
+bytes and added placement-table cost. Apply is one undoable edit; unchanged or
+unverified proposals cannot be applied. **Scan whole stage** returns to the
+broader lossless search. Focused structural scans preserve palette indices by
+default; palette-aware reuse remains a separate reviewed action because runtime
+code can cycle or swap those indices.
+
 **Palette** edits the selected shared palette with RGB555 precision. Copy the
 palette for that artwork first when other images should retain their colors.
-Palette shrinking and painting reject missing color references. **Export PNG**
+The Color adjustments section previews brightness, contrast and saturation for
+the whole palette using the exact RGB555 result. **Blend toward** interpolates
+matching color indices toward another document palette without changing any
+artwork indices. Reset returns to the stable
+baseline; use the current colors as a new baseline before deliberately stacking
+adjustments. Index zero remains transparent. Palette shrinking and painting
+reject missing color references. **Export PNG**
 saves one image using its active/default palette. See the
 [migration checklist](ASSET_TOOL_MIGRATION.md) for limits and remaining tools.
 That guide also records which old panels are being consolidated or retired.
 Safe bookkeeping belongs to Save: counts, companions, metadata and backups are
 automatic, and the temporary BDB/BDD are now read back and checked before file
 replacement. Art-changing cleanup remains a deliberate editing/Optimize action.
+
+The palette editor can import and export `.rgb555` palette files. The text format
+stores the palette name, color count and exact four-digit RGB555 words. Import
+loads a review draft and updates the swatches, but does not modify the document
+until **Apply palette**. Unsupported formats, malformed words, extra data and
+files over 16 KiB are rejected.
+
+**Assets → Export artwork sheet** creates a transparent PNG containing either
+the full BDD artwork library or only images used by visible placements. Choose
+the column count and cell padding; images are centered without resampling. A
+companion JSON file records each image ID, label, palette, cell and exact pixel
+rectangle. When an image is visibly placed, its first resolved placement palette
+is used; otherwise its saved default palette is used.
+
+**Export TGA** on the selected asset writes an 8-bit indexed, color-mapped TGA.
+It preserves every pixel index and the palette's RGB555 words, including the
+high flag bit, so external indexed-pixel edits can round-trip without flattening
+the image into RGBA. The exporter refuses incomplete pixels and indices outside
+the selected palette.
+
+## Background color
+
+Open **Stage → Background...** to choose colors with the picker or enter a hex value.
+
+- **Editor canvas** changes the workspace background for this session. Dark,
+  Black and White presets help inspect artwork; this setting does not edit the map.
+- **Set stage color** previews a backdrop inside the 400×254 game frame in
+  Stage composition and Camera preview. **Apply stage color** makes one undoable
+  edit; **Cancel stage change** discards the stage draft. Colors use the game's
+  RGB555 precision. Save keeps the color in the map's `.bddstudio` companion.
+
+Supported MK2 exports include the backdrop in the reviewed assembly changes.
+Uncheck **Set stage color** and Apply to preserve the game's existing color on
+export. MK3 layouts can import, preview and save their backdrop, but MK3 game
+export and custom stage generators do not yet support backdrop edits. The cave
+exporter refuses a set backdrop instead of discarding it. Shared overview and
+camera PNGs include the saved backdrop; individual prop PNGs keep transparency.
+
+Old layout companions remain readable. A map with a set backdrop uses companion
+version 3, so keep that file beside BDB/BDD and open it with an updated bddtool.
 
 ## Floors
 
@@ -247,6 +304,13 @@ including repeated groups across a whole layer and mirrored pillar sides.
 Apply combines the art edit and tile reuse in one undo step.
 Shared-base scans preserve unique details, the savings map links regions to
 their proposals, and full-stage comparison follows the document camera.
+**Optimize → Palettes** finds byte-identical RGB555 palettes and previews their
+slot remap, placement/default references and exact palette-data savings. It can
+run the existing game-reference audit in the same workspace. Applying requires
+confirmation that palette-slot, cycling and swap references were reviewed,
+because identical current colors do not prove external code treats two slots as
+interchangeable. Apply is one undoable edit. Near-color merging, unused-palette
+deletion and palette unions are excluded from this exact pass.
 ROM receipts capture and compare verified packed output from existing builds;
 successful builds launched here start a capture automatically.
 See [Stage optimization and pattern editing](OPTIMIZE.md) for scope, controls and the
@@ -447,6 +511,9 @@ bddview --studio-smoke tmp/floors-ui --demo --floors
 bddview --studio-smoke tmp/mk3-layout-ui --demo --mk3-layout
 bddview --studio-smoke tmp/mk3-layout-real path/to/MAP.BDB --mk3-layout path/to/MKBT.ASM
 bddview --studio-smoke tmp/help-share-ui --demo --help-share
+bddview --studio-smoke tmp/background-ui --demo --background
+bddview --studio-smoke tmp/subframe-ui --demo --subframes
+bddview --studio-smoke tmp/palette-ui --demo --palettes
 studio_document_tests tmp/fixture-test path/to/fixture.BDB
 studio_game_export_tests tmp/export-test [path/to/fixture.BDB path/to/BGND.ASM]
 bddview --studio-export-smoke tmp/runtime-test
@@ -499,3 +566,6 @@ locally. Emulator comparison and the broader specialist-tool migration remain
 future work. Game-export tests, build-launcher tests and the runtime re-import
 smoke passed against local NUPOOL on September 20, 2026. The live checkout was
 only read during verification; full game compilation and MAME were not run.
+# Composite PNG export
+
+**File > Export composite PNG** exports the current resolved composition as one tightly cropped PNG. It supports the current selection, current layer, or full visible stage and honors placement palettes, X/Y flips, layer transforms, canvas ordering, and hidden state. Transparent index zero stays transparent; full-stage exports can optionally include the saved background color. The optional companion JSON records the crop origin and every placement's stage and image-relative coordinates so the artwork can be reviewed or reassembled without guessing offsets.

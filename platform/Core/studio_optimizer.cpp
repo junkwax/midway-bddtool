@@ -1679,4 +1679,120 @@ std::vector<OptimizeRegion> optimization_regions(const OptimizationPlan &plan) {
     }
     return regions;
 }
+
+PaletteConsolidation find_exact_palette_consolidation(const Document &document) {
+    PaletteConsolidation plan;
+    plan.before = plan.after = document.state();
+    try {
+        require(plan.before.assets != nullptr, "Open artwork before reviewing palettes.");
+        const auto &source = plan.before.assets->data.palettes;
+        require(source.size() <= 256, "Palette count exceeds the supported format limit.");
+        plan.baseline = optimization_budget(plan.before);
+        auto bank = std::make_shared<AssetBank>(*plan.before.assets);
+        std::vector<BddCorePalette> kept;
+        plan.remap.resize(source.size());
+        for (size_t i = 0; i < source.size(); ++i) {
+            require(source[i].count >= 1 && source[i].count <= 256,
+                    "A palette has an invalid color count.");
+            int match = -1;
+            for (size_t j = 0; j < kept.size(); ++j)
+                if (kept[j].count == source[i].count &&
+                    std::equal(source[i].rgb555, source[i].rgb555 + source[i].count,
+                               kept[j].rgb555)) {
+                    match = (int)j;
+                    break;
+                }
+            if (match < 0) {
+                plan.remap[i] = (int)kept.size();
+                kept.push_back(source[i]);
+                continue;
+            }
+            plan.remap[i] = match;
+            PaletteMerge merge;
+            merge.source = (int)i;
+            merge.target = match;
+            merge.source_name = source[i].name;
+            merge.target_name = kept[match].name;
+            for (const auto &p : plan.before.objects) merge.placements += p.object.fl == (int)i;
+            for (int p : plan.before.assets->default_palettes) merge.defaults += p == (int)i;
+            plan.merges.push_back(std::move(merge));
+        }
+        bank->data.palettes = std::move(kept);
+        for (auto &p : plan.after.objects) {
+            require(p.object.fl >= 0 && p.object.fl < (int)plan.remap.size(),
+                    "A placement references a missing palette.");
+            p.object.fl = plan.remap[p.object.fl];
+        }
+        for (auto &p : bank->default_palettes) {
+            require(p >= 0 && p < (int)plan.remap.size(),
+                    "An artwork default references a missing palette.");
+            p = plan.remap[p];
+        }
+        plan.after.assets = std::move(bank);
+        plan.proposed = optimization_budget(plan.after);
+        plan.verified = verify_palette_consolidation(plan, plan.error);
+    } catch (const std::exception &e) {
+        plan.error = e.what();
+    }
+    return plan;
+}
+
+bool verify_palette_consolidation(const PaletteConsolidation &plan, std::string &error) {
+    try {
+        require(plan.before.assets && plan.after.assets, "Palette review has no artwork.");
+        require(plan.remap.size() == plan.before.assets->data.palettes.size(),
+                "Palette remap is incomplete.");
+        require(plan.before.assets->data.images.size() == plan.after.assets->data.images.size() &&
+                    plan.before.objects.size() == plan.after.objects.size(),
+                "Palette consolidation changed artwork or placement counts.");
+        for (size_t i = 0; i < plan.before.assets->data.images.size(); ++i) {
+            const auto &a = plan.before.assets->data.images[i], &b = plan.after.assets->data.images[i];
+            require(a.idx == b.idx && a.w == b.w && a.h == b.h && a.flags == b.flags &&
+                        a.pix == b.pix,
+                    "Palette consolidation changed image pixels or metadata.");
+        }
+        for (size_t i = 0; i < plan.before.objects.size(); ++i) {
+            const auto &a = plan.before.objects[i], &b = plan.after.objects[i];
+            require(a.id == b.id && a.plane == b.plane && a.hidden == b.hidden &&
+                        a.locked == b.locked && a.runtime_dx == b.runtime_dx &&
+                        a.object.ii == b.object.ii && a.object.wx == b.object.wx &&
+                        a.object.depth == b.object.depth && a.object.sy == b.object.sy &&
+                        a.object.order == b.object.order && b.object.fl == plan.remap.at(a.object.fl),
+                    "Palette consolidation changed placement data.");
+            const auto &oldp = plan.before.assets->data.palettes.at(a.object.fl);
+            const auto &newp = plan.after.assets->data.palettes.at(b.object.fl);
+            require(oldp.count == newp.count &&
+                        std::equal(oldp.rgb555, oldp.rgb555 + oldp.count, newp.rgb555),
+                    "Palette consolidation changed a rendered RGB555 color.");
+        }
+        for (size_t i = 0; i < plan.before.assets->default_palettes.size(); ++i)
+            require(plan.after.assets->default_palettes.at(i) ==
+                        plan.remap.at(plan.before.assets->default_palettes[i]),
+                    "Palette consolidation changed an artwork default incorrectly.");
+        require(plan.after.assets->data.palettes.size() + plan.merges.size() ==
+                    plan.before.assets->data.palettes.size(),
+                "Palette merge count does not match the proposed bank.");
+        error.clear();
+        return true;
+    } catch (const std::exception &e) {
+        error = e.what();
+        return false;
+    }
+}
+
+std::string palette_consolidation_report(const PaletteConsolidation &plan) {
+    std::ostringstream out;
+    out << "bddtool exact palette consolidation\nStage: " << plan.before.name
+        << "\nPalettes: " << plan.baseline.palettes << " -> " << plan.proposed.palettes
+        << "\nPalette data: " << plan.baseline.palette_bytes << " -> "
+        << plan.proposed.palette_bytes << " bytes\nExact RGB555 verification: "
+        << (plan.verified ? "PASS" : "NOT VERIFIED") << '\n';
+    for (const auto &m : plan.merges)
+        out << "Palette " << m.source << " " << m.source_name << " -> " << m.target << " "
+            << m.target_name << " | placements " << m.placements << " | image defaults "
+            << m.defaults << '\n';
+    out << "Palette slot identity, cycling and assembly references require game-source review.\n";
+    if (!plan.error.empty()) out << plan.error << '\n';
+    return out.str();
+}
 } // namespace studio

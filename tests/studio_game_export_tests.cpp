@@ -113,6 +113,16 @@ int main(int argc, char **argv) {
         projection(trimmed, trim_after);
         auto d = Document::demo();
         auto original = assembly();
+        {
+            auto bg = Document::demo(); AssemblyExport result;
+            require(export_game_assembly(bg, original, result, error) && result.text.find(".word 123 ; background") != std::string::npos,
+                    "Unspecified backdrop replaced source color");
+            require(bg.set_backdrop(0x1234) && export_game_assembly(bg, original, result, error), error);
+            require(result.text.find(".word\t4660\t; background") != std::string::npos, "Backdrop not exported with retained comment");
+            require(result.text.substr(result.text.find("calla_test\r\n\tmovi")) == original.substr(original.find("calla_test\r\n\tmovi")),
+                    "Backdrop edit changed runtime actors");
+            require(bg.set_backdrop(444) && !export_game_assembly(bg, original, result, error), "Reserved clear sentinel exported as color");
+        }
         AssemblyExport out;
         require(export_game_assembly(d, original, out, error), error);
         projection(d, out);

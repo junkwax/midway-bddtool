@@ -89,6 +89,35 @@ int main(int argc, char **argv) {
         Document doc;
         std::string error;
         require(doc.load((root / "fixture.BDB").u8string(), error), error);
+        {
+            auto palettes_doc = doc;
+            auto bank = std::make_shared<AssetBank>(*palettes_doc.state().assets);
+            auto duplicate = bank->data.palettes[0];
+            std::snprintf(duplicate.name, sizeof duplicate.name, "DUPLICATE_SLOT");
+            bank->data.palettes.push_back(duplicate);
+            bank->default_palettes[0] = 2;
+            auto &state = const_cast<State &>(palettes_doc.state());
+            state.assets = bank;
+            state.objects[0].object.fl = 2;
+            auto pixels = render(palettes_doc, palettes_doc.bounds());
+            auto palette_plan = find_exact_palette_consolidation(palettes_doc);
+            require(palette_plan.verified && palette_plan.merges.size() == 1 &&
+                        palette_plan.merges[0].source == 2 && palette_plan.merges[0].target == 0 &&
+                        palette_plan.proposed.palettes == palette_plan.baseline.palettes - 1,
+                    "Exact duplicate palette was not consolidated deterministically");
+            require(!palettes_doc.apply_palette_consolidation(palette_plan, false, error),
+                    "Palette slots changed without runtime-reference confirmation");
+            require(palettes_doc.apply_palette_consolidation(palette_plan, true, error), error);
+            require(render(palettes_doc, palettes_doc.bounds()) == pixels &&
+                        palettes_doc.state().objects[0].object.fl == 0 &&
+                        palettes_doc.state().assets->default_palettes[0] == 0,
+                    "Palette consolidation changed pixels or missed a reference");
+            require(palettes_doc.undo() && palettes_doc.state().assets->data.palettes.size() == 3 &&
+                        palettes_doc.redo() && palettes_doc.state().assets->data.palettes.size() == 2,
+                    "Palette consolidation undo/redo failed");
+            auto damaged = palette_plan; damaged.after.objects[0].object.fl = 1;
+            require(!verify_palette_consolidation(damaged, error), "Damaged palette remap verified");
+        }
         OptimizeOptions options;
         options.policy = 0;
         auto plan = find_lossless_savings(doc, options);
@@ -99,6 +128,13 @@ int main(int argc, char **argv) {
                 "Mirrored subdivision did not save bytes");
         require(plan.proposed.palettes > plan.baseline.palettes,
                 "Palette variants were not independently remapped");
+        auto focused_options = options;
+        focused_options.source_image = 7;
+        auto focused = find_lossless_savings(doc, focused_options);
+        require(focused.verified && focused.options.source_image == 7 &&
+                    std::all_of(focused.changes.begin(), focused.changes.end(),
+                                [](const auto &change) { return change.source_image == 7; }),
+                "Focused subframe scan changed artwork outside its selected image");
         check_roundtrip(doc, plan, root);
         auto changed = doc;
         changed.move({doc.state().objects[0].id}, 1, 0);
