@@ -38,7 +38,8 @@ struct AnimationLibrary {
 // when loaded. Analysis does not modify the document or runtime overlay;
 // Document::import_img explicitly copies selected artwork into the authoring bank.
 AnimationLibrary inspect_animation_library(const std::string &path);
+// Floor compositing can preserve stored palette zero as opaque; trimmed margins stay transparent.
 AnimationPreview load_animation_selection(const std::string &path,
                                           const std::vector<std::string> &labels,
-                                          int preview_ticks = 5);
+                                          int preview_ticks = 5, bool opaque_zero = false);
 } // namespace studio

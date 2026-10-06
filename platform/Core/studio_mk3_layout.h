@@ -8,6 +8,10 @@ struct Mk3Layout {
     uint64_t revision = 0;
     std::shared_ptr<const AssetBank> assets;
     std::string source, label, error, report;
+    // Source positions retained for a read-only floor preview from the same definition.
+    size_t floor_line = 0;
+    std::string display_list;
+    std::vector<double> scroll_rates;
     bool valid() const { return error.empty() && !planes.empty(); }
 };
 // Read-only MK3 MKBT.ASM import. No implicit search of unrelated checkouts.

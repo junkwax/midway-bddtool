@@ -77,7 +77,7 @@ replacement. Art-changing cleanup remains a deliberate editing/Optimize action.
 Use **Stage → Floor...** for floors missing from the map. It offers two paths:
 
 - **Existing game floor:** supported external floors load automatically from
-  the chosen game checkout. Toggle **Game floor reference** on Stage, or use
+  the chosen game checkout or when applying an MK3 game layout. Toggle **Game floor reference** on Stage, or use
   **Load / reload game floor** after changing the checkout or floor sources.
   The reference is excluded from saving, picking, optimization, sharing and
   ROM budgets. Source layout and layer solo hide it.
@@ -93,12 +93,61 @@ It does not replace the game's external floor or its runtime code. The new
 layer needs explicit runtime integration before it can appear in the game.
 Custom stage profiles such as MK3CAVE still manage their floors separately.
 
-The reference loader matches source module names to a stage in `BGND.ASM`,
+The MK2 reference loader matches source module names to a stage in `BGND.ASM`,
 reads its literal floor descriptor/palette and `data/FL_*.BIN` texture, and
 uses its display-list order. This first version supports 1200-pixel raw 6bpp
 rows. Unsupported, missing or ambiguous data is reported in the Floor dialog.
 The floor is a static start-position reference with 1x camera scrolling;
 perspective skew, skipped rows and palette effects are not simulated.
+
+For MK3, select **MKBT.ASM** in **Game layout...** and apply the layout. The
+floor loads from its stage descriptor, using `FL_*.BIN` in the map's `BINFILES`
+folder (or beside the map/source file, or in the checkout's `data` folder).
+Palettes come from `MKBT.ASM` or the adjacent `BGNDPAL.ASM`. The reference uses
+the source display order and floor scroll rate, starts 400 pixels into the
+1200-pixel texture, and aligns its bottom with the 254-pixel game frame at the
+start camera. Original palette index zero stays opaque. Perspective skew,
+palette animation and stage callbacks are not simulated. Missing floor data
+is explained in **Floor...**; it does not prevent applying the module layout.
+The floor stays hidden until its layers have runtime bindings. After a restart,
+select the source again if it is not adjacent to the map or in the checkout.
+
+**Floor... → Browse IMG floors...** opens a searchable floor library. It finds
+nearby `MKFLOOR*.IMG` files beside the map, in the selected checkout's `data`
+folder, and beside a library you explicitly open. Use the library dropdown to
+switch between files such as `MKFLOORS.IMG`, `MKFLOOR2.IMG` and `MKFLOOR3.IMG`.
+**Refresh list** rescans those folders; **Open IMG...** selects any other library.
+The scan does not recurse or search other checkouts. Hover a filename to see its
+full path when multiple folders contain the same name.
+All entries are included, even artwork not used by the map;
+IMG files do not prove whether an image was used in a shipped game.
+
+Numbered strips such as `SUBFLOR1`–`SUBFLOR6` form one suggested floor choice,
+joined left to right with their bottoms aligned. Individual unnumbered images
+remain separate choices. Missing/duplicate strip numbers, missing palettes and
+unsupported data are reported rather than silently assembled. Each strip keeps
+its colors, including opaque stored color zero; trimmed margins stay transparent.
+
+Selecting a floor changes the reference immediately. Close the library window
+to see the stage, then use its new floor dropdown or **< / >** buttons to cycle
+through the matching choices. **Game floor** or **Restore game floor** returns
+to the runtime texture. Alternatives retain its bottom position, scrolling and
+draw order; without a runtime floor they are centered and bottom-aligned in the
+400×254 frame with 1x scrolling. This is a static comparison, not proof of the
+original strip assembly or runtime behavior. Choices last for the current tab
+session and do not alter Save, exports, ROM budgets or game sources.
+
+Below the preview controls, a pixel comparison reports an **exact pixel match**,
+different dimensions, or the number of different pixels against the loaded game
+floor. It compares colors and transparency, so palette renumbering does not
+create a false difference. A changed or unavailable runtime source disables the
+comparison until reloaded. This identifies a texture match only; differences do
+not establish whether an alternative was unused in the game.
+
+**Use as editable artwork** transfers the preview into the existing floor draft.
+Set its placement/repeat width and click **Add floor to map** to make an undoable
+edit. Source IMG files remain unchanged. Composites are limited to 4096×254,
+128 strips and 255 opaque RGB555 colors; color reduction is never automatic.
 
 ## Camera and runtime interpretation
 
@@ -121,6 +170,37 @@ and compiled ROM output are not reproduced or emulator-verified.
 Inferred runtime bindings do not establish complete
 game fidelity. Stages opened without runtime source need their layer positions
 arranged manually in this first implementation.
+
+## MK3 artwork archives and the game frame
+
+An artwork-only archive such as `deadlythirdcombat-main` supplies BDB/BDD
+source sheets, not the camera and layer arrangement used in the game. Without
+runtime bindings, the rectangle is now labeled **Frame guide (layout not
+loaded)** and Stage explains why the artwork is still at source-sheet positions.
+Changing the frame dimensions cannot recover the missing layer transforms.
+
+Use **Stage → Game layout...**, browse to the matching MK3 revision's
+**MKBT.ASM**, review the detected stage and layer transforms, then **Apply game
+layout**. The importer handles MK3's camera-Y/ground-offset header order,
+per-layer `center_x` initialization, module offsets, parallax and display order.
+It matches source module names, preferring the definition covering the most
+modules; equally complete matches are refused. Centering uses the current
+artwork's tight module bounds, not potentially stale compiled BMOD tables.
+
+Apply is one undoable edit. It preserves pixels and placement source coordinates,
+switches to the imported start camera and fits the game frame. Save preserves
+the resulting transforms in `.bddstudio`. An optional session setting reuses
+the selected definition file when opening other maps from the same asset folder;
+existing saved layouts remain authoritative. For original source trees,
+`MKBT.ASM` beside the art or in the checkout's `src` directory loads on open.
+The MK2 custom MK3CAVE adapter is used only when its generator exists.
+
+This imports static module layout and an optional floor reference, not MK3
+build/export support or runtime actors, callbacks and palette effects. Unassigned artwork remains at
+its source position. Missing, ambiguous or unsupported definitions leave the
+document unchanged. The local MK3 V13 scan matched 29 of 47 archive BDBs; the
+other 18 had no matching module definition in that source revision. No archive
+files were saved during testing.
 
 ## Forest animation preview
 
@@ -358,6 +438,8 @@ bddview --studio-smoke tmp/checks-ui --demo --checks
 bddview --studio-smoke tmp/camera-checks-ui --demo --camera-checks
 bddview --studio-smoke tmp/export-checks-ui --demo --export-checks
 bddview --studio-smoke tmp/floors-ui --demo --floors
+bddview --studio-smoke tmp/mk3-layout-ui --demo --mk3-layout
+bddview --studio-smoke tmp/mk3-layout-real path/to/MAP.BDB --mk3-layout path/to/MKBT.ASM
 bddview --studio-smoke tmp/help-share-ui --demo --help-share
 studio_document_tests tmp/fixture-test path/to/fixture.BDB
 studio_game_export_tests tmp/export-test [path/to/fixture.BDB path/to/BGND.ASM]

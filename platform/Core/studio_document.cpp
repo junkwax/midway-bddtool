@@ -672,7 +672,9 @@ bool Document::set_start(int x, int y, int ground) {
 
 bool Document::apply_mk3_layout(const Mk3Layout &layout, std::string &error) {
     if (!layout.valid() || active_ || !state_.runtime_profile.empty() ||
-        layout.revision != state_.revision || layout.assets != state_.assets) {
+        layout.revision != state_.revision || layout.assets != state_.assets ||
+        std::abs((int64_t)layout.start_x) > 100000 || std::abs((int64_t)layout.start_y) > 100000 ||
+        std::abs((int64_t)layout.ground) > 100000) {
         error = "The layout review is unavailable or stale. Load the definition again."; return false;
     }
     auto after = state_;

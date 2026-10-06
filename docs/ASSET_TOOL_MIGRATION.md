@@ -237,6 +237,151 @@ ctest --test-dir BUILD -C Release -R "^studio_(floor|document|animation|game_exp
 bddview --studio-smoke NEW_OUTPUT --demo --floors
 ```
 
+## MK3 game-frame alignment — October 5, 2026
+
+The `deadlythirdcombat-main` archive has BDB/BDD art but no runtime definitions.
+Its module rectangles are source-sheet coordinates. The old new-UI loader only
+searched MK2-style BGND sources, leaving those coordinates unchanged. MK3 also
+uses a different header order: world Y, ground offset, world X. Its per-layer
+`center_x` origins must be accounted for independently of parallax.
+
+**Stage → Game layout...** now imports a reviewed MK3 **MKBT.ASM** definition.
+It reads camera/ground fields, signed expressions, layer offsets, tight-bound
+centering, scroll rates and display-list order. It supports skipped actor slots,
+equivalent camera aliases, shared display-list tails and zero-scroll UI screens.
+The most complete module-name match wins; ties and unsupported sources fail
+without changing the document. No unrelated checkout is selected implicitly.
+Unbound maps label the rectangle as a frame guide with the layout not loaded.
+
+Apply replaces transforms and camera as one undoable edit, preserving artwork
+and object source coordinates. Save persists those transforms using the existing
+layout companion. The selected source can be reused for other maps in the same
+asset folder during the current session. Saved layouts are never automatically
+replaced. Adjacent MKBT sources and `src/MKBT.ASM` also load on clean open. The
+MK2 custom MK3CAVE adapter now requires its generator, avoiding the similarly
+named original MK3 artwork being treated as that custom stage.
+
+A read-only scan of all 47 local archive BDBs against MK3 V13 matched 29; 18
+had no matching definition in that revision. This does not establish that every
+archive variant shipped in that game revision. At this step, runtime floors/actors, palette
+effects, stage callbacks and unassigned artwork are outside the static-layout
+import. Generated tables and emulator parity remain separate validation.
+
+Verification: Release build; MK3 layout, document, game-export, synthetic
+runtime-export, floor and animation tests (6/6). Core cases cover header order,
+independent centering, signed expressions, parallax at multiple cameras, draw
+order, ambiguous/missing definitions, stale reviews, undo/redo and save/reopen
+scene positions. The 900×640 UI smoke passes on synthetic art and local Subway,
+Street and Rooftop maps; their previews were inspected. Floor, checks,
+navigation and Forest animation regressions pass. No live artwork, source tree
+or ROM was written.
+
+```text
+ctest --test-dir BUILD -C Release -R "^studio_mk3_layout$" --output-on-failure
+bddview --studio-smoke NEW_OUTPUT --demo --mk3-layout
+bddview --studio-smoke NEW_OUTPUT MAP.BDB --mk3-layout path/to/MKBT.ASM
+studio_mk3_layout_tests SCRATCH [ASSET_FOLDER path/to/MKBT.ASM]
+```
+
+## MK3 runtime floor references — October 5, 2026
+
+Applying **Game layout...** now loads and enables the stage's separate floor
+reference. **Floor...** reloads it and offers the existing copy-to-editable-artwork
+action. MK3 descriptors follow the module/center_x terminator, including labeled
+descriptors such as `street_floor_info`. The loader reads their texture, palette,
+height and scroll source, follows display-list placement, and aligns the bottom
+with the 254-pixel frame at the start camera. It preserves opaque palette zero
+when decoding 1200-pixel, packed 6bpp rows.
+
+Textures resolve in the map's `BINFILES` folder, beside the map/source, or in
+the checkout's `data` folder. Palettes resolve in the selected `MKBT.ASM` or
+adjacent `BGNDPAL.ASM`. No unrelated checkout is searched. Missing or unsupported
+data is reported in the Floor dialog without preventing the layout import.
+The reference is hidden for unbound layouts, source view, solo, a changed source
+selection, or its visibility toggle. Loading it never adds document artwork or
+changes saved assets, optimization budgets or game sources.
+
+Verification: Release build and six core suites pass. New floor cases cover
+inline/labeled descriptors, both palette sources, raw pixel decoding, opaque
+zero, bottom alignment, scroll, display order, missing/truncated data, invalid
+indices, duplicate floor callbacks, unrelated modules and read-only loading.
+MK3 UI tests cover automatic loading, undo/redo, visibility and source changes.
+Local Subway, Street, Rooftop and Bank floor/core and UI checks pass; Subway and
+Street previews were inspected. Bank intentionally resolves `FL_CITY`, as its
+V13 definition specifies. Existing editable-floor UI and MK2 Forest animation
+and floor regressions pass. Perspective skew, palette animation and stage
+callbacks are not simulated; no emulator or game build was run.
+
+```text
+ctest --test-dir BUILD -C Release -R "^studio_(floor|mk3_layout|document|animation|game_export|runtime_export)$" --output-on-failure
+studio_floor_tests SCRATCH MAP.BDB path/to/MKBT.ASM --mk3
+bddview --studio-smoke NEW_OUTPUT MAP.BDB --mk3-layout path/to/MKBT.ASM
+```
+
+## IMG floor alternatives — October 5, 2026
+
+**Floor... → Browse IMG floors...** now lists artwork from floor IMG libraries,
+including entries absent from the current map. Consecutive numbered strips are
+suggested as complete floors; unnumbered images remain individual choices.
+The movable browser supports search, dimensions, strip-label tooltips, preview
+and restoring the game floor. After closing it, a Stage dropdown and previous/
+next buttons cycle through the filtered choices. Another IMG can be opened
+without importing its artwork. IMG does not record shipped-game usage, so the
+browser does not label unmatched choices as definitively unused.
+
+Composites preserve mixed source palettes and opaque stored index zero while
+retaining transparent trimmed margins and padding above shorter strips. They
+inherit runtime floor bottom alignment, scroll and draw order where available;
+otherwise they use a centered, bottom-aligned 1x reference. Preview selection is
+tab-local and does not dirty the document. **Use as editable artwork** feeds the
+existing undoable add-floor workflow. Invalid data leaves the previous preview
+intact. The animation/ordinary IMG import path retains transparent-zero behavior.
+
+Verification: six core suites pass; new pixel checks cover numerical strip
+ordering, mixed palettes, opaque zero, trimmed margins, different heights,
+missing strips, truncated data and copying the composite as editable artwork.
+Read-only checks decoded 34 choices across the local MK2 `MKFLOORS.IMG` and MK3
+`MKFLOORS.IMG`, `MKFLOOR2.IMG`, `MKFLOOR3.IMG`; the duplicate `TREEFRONT` entry
+is unavailable with an explanation. UI checks at 900×640 cover cycling,
+restoring the runtime reference, document isolation, editable copy, undo/redo
+and failed file-open isolation. No live source assets or game builds are written.
+
+```text
+studio_floor_tests SCRATCH --library path/to/MKFLOORS.IMG
+bddview --studio-smoke NEW_OUTPUT --demo --floor-library
+bddview --studio-smoke NEW_OUTPUT MAP.BDB --floor-library path/to/MKFLOORS.IMG [path/to/MKBT.ASM]
+```
+
+## Nearby floor libraries and runtime comparison — October 6, 2026
+
+The floor browser now discovers immediate `MKFLOOR*.IMG` siblings in the map
+folder, selected checkout's `data` directory, and explicitly opened library's
+folder. A dropdown switches between them; path tooltips distinguish duplicate
+filenames, **Refresh list** rescans, and **Open IMG...** remains available for
+custom filenames. Discovery deduplicates paths without scanning unrelated
+checkouts or subfolders. It bounds each folder scan to 8192 entries and the
+result to 128 libraries, reporting limits or directory errors.
+
+The selected alternative reports exact texture equality, different dimensions,
+or a count of different pixels relative to the loaded runtime floor. Comparison
+uses decoded colors and transparency, independent of labels or palette indices.
+It is cached by immutable artwork snapshots and suppressed when the selected
+source changes. This is texture evidence, not proof of shipped-game usage or
+runtime effects. Library switching and comparison never edit the document.
+
+Verification covers filename case, ordering, path deduplication, explicit custom
+libraries, non-recursive discovery, palette reindexing, opaque-zero versus
+transparency, malformed pixels, unavailable references and differing sizes.
+Local read-only comparisons identified Forest's `FORFLOR` and Subway's
+`SUBFLOR` as exact matches. The 900×640 UI smoke exercises library-dropdown
+switching, comparison refresh/source invalidation, restoration and the existing
+editable-floor workflow. Floor, animation, MK3 layout, document, game-export and
+synthetic runtime-export regressions pass. No game source or ROM was written.
+
+```text
+studio_floor_tests SCRATCH --library path/to/MKFLOORS.IMG [MAP.BDB GAME_ROOT_OR_MKBT_ASM]
+```
+
 ## Remaining candidates, subject to the decisions above
 
 | Legacy capability | Current route / next work |

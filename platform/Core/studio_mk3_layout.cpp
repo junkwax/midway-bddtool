@@ -88,7 +88,9 @@ Mk3Layout read_mk3_layout(const Document &doc, const std::string &path) {
         std::vector<Entry> entries;
         std::map<int, std::string> centers;
         bool centering = false, terminated = false; int slot = 0, pending = -1;
-        for (const auto &line : source.block(out.label)) {
+        auto stage_start = source.at(out.label);
+        for (size_t line_index = stage_start; line_index < source.end(stage_start); ++line_index) {
+            const auto &line = source.lines[line_index];
             if (line.empty()) continue;
             if (directive(line, ".WORD", args)) {
                 if (longs.empty()) for (const auto &arg : args) header.push_back(eval(arg));
@@ -99,7 +101,9 @@ Mk3Layout read_mk3_layout(const Document &doc, const std::string &path) {
             } else if (directive(line, ".LONG", args)) {
                 require(pending < 0, "Module offsets are missing.");
                 if (longs.size() < 4) { require(args.size() == 1, "Unsupported stage header."); longs.push_back(args[0]); continue; }
-                if (args[0] == "0" || args[0] == ">FFFFFFFF" || args[0] == "0FFFFFFFFH" || args[0] == "-1") { terminated = true; break; }
+                if (args[0] == "0" || args[0] == ">FFFFFFFF" || args[0] == "0FFFFFFFFH" || args[0] == "-1") {
+                    terminated = true; out.floor_line = line_index + 1; break;
+                }
                 if (args[0] == "CENTER_X") { require(!centering && args.size() == 1, "Repeated center_x directive."); centering = true; continue; }
                 if (centering) {
                     std::smatch m;
@@ -146,6 +150,8 @@ Mk3Layout read_mk3_layout(const Document &doc, const std::string &path) {
         }
         require(scroll.size() == 9 && (scroll.back() == 0x20000 ||
                 std::all_of(scroll.begin(), scroll.end(), [](int n) { return n == 0; })), "Unsupported MK3 player scroll scale.");
+        out.display_list = longs[2];
+        for (int value : scroll) out.scroll_rates.push_back(value / 131072.0);
         std::map<int, int> ranks, projections; bool ended = false; int rank = 0;
         auto list_start = source.at(longs[2]);
         // Display-list tails can have another label and fall through (dlists_bogus).
@@ -183,7 +189,7 @@ Mk3Layout read_mk3_layout(const Document &doc, const std::string &path) {
             out.planes.push_back(p);
             report << entry.module << ": offset " << entry.x << ", " << entry.y << "; scroll " << p.scroll << "x; origin " << origin << "\n";
         }
-        report << "Centering uses the current artwork's tight module bounds. Runtime actors, floors, palette effects and callbacks are not recreated. Unassigned artwork keeps its source positions.";
+        report << "Centering uses the current artwork's tight module bounds. Apply also loads a separate floor reference when its texture and palette are available. Runtime actors, perspective skew, palette effects and callbacks are not recreated. Unassigned artwork keeps its source positions.";
         out.report = report.str();
     } catch (const std::exception &e) { out.planes.clear(); out.error = e.what(); }
     return out;

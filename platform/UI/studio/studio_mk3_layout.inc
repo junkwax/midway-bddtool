@@ -8,6 +8,7 @@ bool apply_layout_review(Tab &t) {
     t.camera_check_options.min_y = t.camera_check_options.max_y = t.document.state().start_y;
     auto folder = fs::u8path(t.document.path()).parent_path().u8string();
     if (t.layout_remember && !folder.empty()) layout_sources[folder] = t.mk3_layout.source;
+    reload_floor(t); t.show_floor = true;
     toast("Loaded MK3 layer layout. Undo restores the previous arrangement; Save keeps this layout.");
     return true;
 }
@@ -28,6 +29,7 @@ void mk3_layout_dialog(Tab &t) {
     }
     ImGui::BeginDisabled(!t.layout_source[0]);
     if (ImGui::Button("Review layout")) t.mk3_layout = read_mk3_layout(t.document, t.layout_source);
+    layout_review_point = item_center();
     ImGui::EndDisabled();
     ImGui::Checkbox("Use this source for other maps in this asset folder during this session", &t.layout_remember);
     ImGui::TextWrapped("Apply replaces layer transforms and the start camera as one undoable edit. Pixels, source rectangles and placements stay intact. Save stores the resulting layout beside the map; nothing writes to the game source.");
@@ -42,5 +44,6 @@ void mk3_layout_dialog(Tab &t) {
     if (ImGui::Button("Apply game layout") && apply_layout_review(t)) ImGui::CloseCurrentPopup();
     layout_apply_point = item_center(); ImGui::EndDisabled(); ImGui::SameLine();
     if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+    layout_close_point = item_center();
     ImGui::EndPopup();
 }

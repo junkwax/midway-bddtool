@@ -50,10 +50,26 @@ int main(int argc, char **argv) {
         auto stale = read_mk3_layout(doc, source.u8string()); doc.move({doc.state().objects[0].id}, 1, 0);
         auto revision = doc.state().revision;
         require(!doc.apply_mk3_layout(stale, error) && doc.state().revision == revision, "Stale review was applied");
-        auto bad = fixture(); auto pos = bad.find("1200-scrrgt"); bad.replace(pos, 12, "unknown_constant"); write(source, bad);
+        auto bad = fixture(); auto pos = bad.find("1200-scrrgt"); bad.replace(pos, 11, "unknown_constant"); write(source, bad);
         require(!read_mk3_layout(doc, source.u8string()).valid(), "Unknown expression accepted");
         write(source, fixture() + fixture()); require(!read_mk3_layout(doc, source.u8string()).valid(), "Ambiguous labels accepted");
         write(source, fixture()); require(!read_mk3_layout(Document::empty(), source.u8string()).valid(), "Wrong source matched unrelated map");
+        auto extended = fixture();
+        auto at = extended.find("\t.long objlst,worldtlx+16");
+        extended.insert(at, "\t.long baklst9,worldtlx1+16\n\t.long -1,use_next_y,worldtly\nshared_tail\n");
+        extended += "variant_mod\n\t.long calla\n\t.long rates\n\t.long lists\n\t.long bak1mods\n\t.long PLANE1BMOD\n\t.word 0,0\n\t.long 0\n";
+        write(source, extended);
+        auto full = read_mk3_layout(Document::demo(), source.u8string());
+        require(full.valid() && full.label == "TEST_MOD", "Actor list, shared tail, or complete-module matching failed: " + full.error);
+        auto stationary = fixture(); at = stationary.find("0,0,0,0,0,>8000,>20000,>10000,>20000");
+        stationary.replace(at, std::string("0,0,0,0,0,>8000,>20000,>10000,>20000").size(), "0,0,0,0,0,0,0,0,0");
+        write(source, stationary);
+        auto still = read_mk3_layout(Document::demo(), source.u8string());
+        require(still.valid() && still.planes[0].scroll == 0, "Stationary UI-screen scroll table rejected");
+        auto saved_scene = reopened.scene({400,7});
+        require(saved_scene.size() == scene.size(), "Save changed scene count");
+        for (size_t i = 0; i < scene.size(); ++i)
+            require(saved_scene[i].rect.x == scene[i].rect.x && saved_scene[i].rect.y == scene[i].rect.y, "Save changed imported layer positions");
         if (argc >= 4) {
             int matched = 0, unavailable = 0;
             for (const auto &file : fs::directory_iterator(fs::u8path(argv[2]))) {

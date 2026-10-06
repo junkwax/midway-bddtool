@@ -6,6 +6,7 @@
 #include "Core/studio_game_build.h"
 #include "Core/studio_animation.h"
 #include "Core/studio_floor.h"
+#include "Core/img_format.h"
 #include "Core/studio_mk3_layout.h"
 #include "Core/studio_animation_optimizer.h"
 #include "Core/studio_optimizer.h"
@@ -115,6 +116,15 @@ struct Tab {
     std::string reviewed_output;
     AnimationPreview animation;
     FloorPreview floor;
+    FloorPreview floor_alternative;
+    FloorLibrary floor_library;
+    FloorLibraryDiscovery floor_libraries;
+    FloorComparison floor_comparison;
+    std::shared_ptr<const AssetBank> floor_compared_art, floor_compared_runtime;
+    ImGuiTextFilter floor_filter;
+    int floor_choice = -1;
+    bool floor_use_library = false, floor_library_open = false;
+    std::string floor_library_root, floor_library_error;
     Mk3Layout mk3_layout;
     bool layout_requested = false, layout_remember = true;
     char layout_source[1024] = {};
@@ -285,7 +295,9 @@ class App {
     float export_section_y = 0;
     Point check_locate_point, check_artwork_point, check_report_point, camera_scan_point, camera_jump_point;
     Point floor_open_point, floor_asset_point, floor_add_point, floor_close_point;
-    Point layout_open_point, layout_apply_point;
+    Point floor_library_next_point, floor_library_restore_point, floor_library_art_point;
+    Point floor_library_selector_point, floor_library_second_point;
+    Point layout_open_point, layout_review_point, layout_apply_point, layout_close_point;
     std::map<std::string, std::string> layout_sources;
     int check_visible_count = 0;
     Tab *tab() { return active >= 0 && active < (int)tabs.size() ? tabs[active].get() : nullptr; }
@@ -333,8 +345,14 @@ class App {
             t->plane = -1;
         t->animation = load_animation_preview(t->document, t->game_root);
         t->animation_root = t->game_root;
-        t->floor = load_floor_preview(t->document, t->game_root);
-        t->floor_root = t->game_root;
+        if (!t->layout_source[0] && !t->document.path().empty()) {
+            auto parent = fs::u8path(t->document.path()).parent_path();
+            for (const auto &candidate : {parent / "MKBT.ASM", parent.parent_path() / "src" / "MKBT.ASM"})
+                if (fs::is_regular_file(candidate)) {
+                    std::snprintf(t->layout_source, sizeof t->layout_source, "%s", candidate.u8string().c_str()); break;
+                }
+        }
+        reload_floor(*t);
         bool assets = !t->document.state().has_bdb;
         tabs.push_back(std::move(t));
         active = (int)tabs.size() - 1;
@@ -1359,11 +1377,12 @@ class App {
         bool animation_drawn = false, floor_drawn = false;
         auto draw_floor = [&]() {
             floor_drawn = true;
-            if (t.source || t.solo >= 0 || !t.show_floor || !t.floor.ready() || t.floor_root != t.game_root) return;
+            if (!floor_visible(t)) return;
             floor_textures.renderer = renderer;
-            auto tex = floor_textures.get(t.floor.layout.artwork, 0, 0);
+            const auto &floor = active_floor(t);
+            auto tex = floor_textures.get(floor.layout.artwork, 0, 0);
             if (!tex) return;
-            auto r = t.floor.rect(t.document.state(), cam);
+            auto r = floor.rect(t.document.state(), cam);
             draw->AddImage((ImTextureID)(intptr_t)tex,
                 vec(t.view.to_screen({r.x, r.y}, point(origin))),
                 vec(t.view.to_screen({r.x + r.w, r.y + r.h}, point(origin))));
@@ -1387,7 +1406,7 @@ class App {
             }
         };
         auto animation_rank = t.animation.draw_rank(t.document);
-        auto floor_rank = t.floor.layout.draw_rank(t.document);
+        auto floor_rank = active_floor(t).layout.draw_rank(t.document);
         for (const auto &p : items) {
             if (!floor_drawn && p.rank > floor_rank && floor_rank <= animation_rank) draw_floor();
             if (!animation_drawn && p.rank > animation_rank)
@@ -3509,10 +3528,11 @@ class App {
         if (std::none_of(t.document.state().planes.begin(), t.document.state().planes.end(), [](const Plane &p) { return p.bound; })) {
             ImGui::SameLine(); ImGui::TextDisabled("Source-sheet positions; load a game layout to align the frame.");
         }
-        if (t.floor.ready() && t.floor_root == t.game_root) {
-            ImGui::SameLine(); ImGui::Checkbox("Game floor reference", &t.show_floor);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nPreview only; excluded from Save and ROM budgets.", t.floor.notice.c_str());
+        if (active_floor(t).ready() && floor_context_current(t)) {
+            ImGui::SameLine(); ImGui::Checkbox("Floor reference", &t.show_floor);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nPreview only; excluded from Save and ROM budgets.", active_floor(t).notice.c_str());
         }
+        if (!t.floor_library.entries.empty()) floor_variant_controls(t);
         if (t.animation.ready() && !t.source && t.animation_root == t.game_root) {
             ImGui::Checkbox("Animations", &t.show_animation);
             ImGui::SameLine();
@@ -3939,7 +3959,7 @@ class App {
             ImGui::TextDisabled("Local files  /  Indexed artwork  /  Stage composition");
         ImGui::End();
         help_share_dialogs();
-        if (auto *t = tab()) { asset_dialogs(*t); floor_dialog(*t); mk3_layout_dialog(*t); }
+        if (auto *t = tab()) { asset_dialogs(*t); floor_dialog(*t); mk3_layout_dialog(*t); floor_library_window(*t); }
         prompts();
         recover();
     }
@@ -3950,6 +3970,7 @@ class App {
 #include "studio_batch_smoke.inc"
 #include "studio_checks_smoke.inc"
 #include "studio_floor_smoke.inc"
+#include "studio_mk3_layout_smoke.inc"
 #include "studio_camera_checks_smoke.inc"
 #include "studio_help_share_smoke.inc"
 #include "studio_export_checks_smoke.inc"
@@ -4286,7 +4307,14 @@ int run(int argc, char **argv) {
     BatchImportSmoke batch_smoke;
     ChecksSmoke checks_smoke;
     FloorSmoke floor_smoke;
-    bool test_floors = smoke && argc >= 5 && std::string(argv[4]) == "--floors";
+    FloorLibrarySmoke floor_library_smoke;
+    Mk3LayoutSmoke layout_smoke;
+    bool test_layout = smoke && argc >= 5 && std::string(argv[4]) == "--mk3-layout";
+    if (test_layout && argc >= 6) layout_smoke.source = argv[5];
+    bool test_floor_library = smoke && argc >= 5 && std::string(argv[4]) == "--floor-library";
+    if (test_floor_library && argc >= 6) floor_library_smoke.path = argv[5];
+    if (test_floor_library && argc >= 7) floor_library_smoke.runtime_source = argv[6];
+    bool test_floors = test_floor_library || (smoke && argc >= 5 && std::string(argv[4]) == "--floors");
     ExportChecksSmoke export_checks_smoke;
     bool test_export_checks = smoke && argc >= 5 && std::string(argv[4]) == "--export-checks";
     HelpShareSmoke help_share_smoke;
@@ -4429,7 +4457,9 @@ int run(int argc, char **argv) {
                 io.AddMouseButtonEvent(0, frames == 9 || frames == 15);
         }
         if (test_export_checks) export_checks_smoke.input(app, frames);
-        if (test_floors) floor_smoke.input(app, frames);
+        if (test_floor_library) floor_library_smoke.input(app, frames);
+        else if (test_floors) floor_smoke.input(app, frames);
+        if (test_layout) layout_smoke.input(app, frames);
         if (test_help_share) help_share_smoke.input(app, frames);
         if (test_camera_checks) camera_checks_smoke.input(app, frames);
         if (test_checks) checks_smoke.input(app, frames);
@@ -4448,7 +4478,9 @@ int run(int argc, char **argv) {
         }
         app.frame();
         if (test_export_checks && !export_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
-        if (test_floors && !floor_smoke.check(app, frames)) { rc = 1; app.running = false; }
+        if (test_floor_library && !floor_library_smoke.check(app, frames)) { rc = 1; app.running = false; }
+        else if (test_floors && !test_floor_library && !floor_smoke.check(app, frames)) { rc = 1; app.running = false; }
+        if (test_layout && !layout_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_help_share && !help_share_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_camera_checks && !camera_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_checks && !checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
@@ -4477,6 +4509,7 @@ int run(int argc, char **argv) {
         SDL_RenderClear(app.renderer);
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), app.renderer);
         if (smoke && (frames == 3 || frames == 7 || frames == 11 || frames == 31 ||
+                      (test_floor_library && frames == 27) ||
                       ((test_animation || test_review) && frames == 23) ||
                       ((test_asset_tools || test_batch_import || test_help_share) && (frames == 13 || frames == 19 || frames == 23)))) {
             int w, h;
@@ -4487,6 +4520,7 @@ int run(int argc, char **argv) {
                                : frames == 7   ? "compact.png"
                                : frames == 11  ? "assets.png"
                                : frames == 23  ? "animation.png"
+                               : frames == 27  ? "floor-libraries.png"
                                : test_animation_analysis ? "animation-analysis.png"
                                : test_visibility ? "visibility.png"
                                : test_art_audit ? "art-audit.png"
@@ -4602,14 +4636,14 @@ int run(int argc, char **argv) {
                     } else t.receipt_before = std::make_unique<RomReceipt>(*t.receipt_after);
                 }
             }
-            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors) {
+            if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout) {
                 SDL_SetWindowSize(app.window, 1000, 720);
                 if (app.tab() && !test_navigation)
                     app.tab()->fit = true;
             }
-            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors)
+            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout)
                 app.page = 1;
-            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors) {
+            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout) {
                 app.page = 2;
                 if (argc >= 5 && std::string(argv[4]) == "--prepare" && app.tab())
                     app.prepare_game(*app.tab());

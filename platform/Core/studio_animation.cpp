@@ -65,7 +65,7 @@ struct ImgDirectory {
         return {};
     }
 };
-void read_art(const fs::path &path, const std::vector<std::string> &names, AnimationPreview &out) {
+void read_art(const fs::path &path, const std::vector<std::string> &names, AnimationPreview &out, bool opaque_zero = false) {
     ImgDirectory directory(path);
     auto raw = directory.file.get();
     auto size = directory.size;
@@ -107,6 +107,11 @@ void read_art(const fs::path &path, const std::vector<std::string> &names, Anima
                 colors.rgb555[i] = bytes[0] | (bytes[1] << 8);
                 colors.argb[i] = img_pal_word_to_argb(colors.rgb555[i], i);
             }
+            if (opaque_zero) {
+                require(colors.count < 256, "Opaque floor zero needs a free palette entry (maximum 255 source colors).");
+                colors.rgb555[colors.count] = colors.rgb555[0];
+                colors.argb[colors.count++] = img_pal_word_to_argb_opaque(colors.rgb555[0]);
+            }
             palette_slots[palette] = (int)bank->data.palettes.size();
             bank->data.palettes.push_back(colors);
         }
@@ -125,8 +130,19 @@ void read_art(const fs::path &path, const std::vector<std::string> &names, Anima
                 "Cannot decode animation frame " + name);
         int pi = palette_slots.at(palette);
         for (auto pixel : image.pix)
-            require(pixel < bank->data.palettes[pi].count,
+            require(pixel < bank->data.palettes[pi].count - (opaque_zero ? 1 : 0),
                     "Animation frame references an absent palette color.");
+        if (opaque_zero) {
+            // A second decode distinguishes stored zero from transparent trimmed margins.
+            std::vector<uint8_t> coverage(image.pix.size(), 1);
+            if (record.flags & 0x80) {
+                uint8_t solid[256]; std::fill(std::begin(solid), std::end(solid), uint8_t(1));
+                require(img_decode_pixels(raw, size, &record, image.w, image.h, coverage.data(), solid, nullptr) != 0,
+                        "Cannot decode floor coverage.");
+            }
+            for (size_t i = 0; i < image.pix.size(); ++i)
+                if (!image.pix[i] && coverage[i]) image.pix[i] = uint8_t(bank->data.palettes[pi].count - 1);
+        }
         int slot = (int)out.frames.size();
         out.frames.push_back({image.idx, pi, img_s16(record.anix), img_s16(record.aniy), name});
         BddImageMetadata meta{};
@@ -174,7 +190,7 @@ AnimationLibrary inspect_animation_library(const std::string &path) {
 }
 AnimationPreview load_animation_selection(const std::string &path,
                                           const std::vector<std::string> &labels,
-                                          int preview_ticks) {
+                                          int preview_ticks, bool opaque_zero) {
     AnimationPreview out;
     try {
         require(!labels.empty() && labels.size() <= 128, "Select between 1 and 128 frame entries.");
@@ -184,7 +200,7 @@ AnimationPreview load_animation_selection(const std::string &path,
             require(!label.empty(), "An image label is empty.");
             names.push_back(upper(label));
         }
-        read_art(fs::u8path(path), names, out);
+        read_art(fs::u8path(path), names, out, opaque_zero);
         out.anchors.push_back({0, 0});
         out.frame_ticks = preview_ticks;
         out.manual_sequence = true;
