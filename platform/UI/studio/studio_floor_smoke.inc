@@ -86,8 +86,9 @@ struct FloorLibrarySmoke {
         if (frame == 3 || frame == 4) io.AddMouseButtonEvent(0, frame == 3);
         if (frame == 6 || frame == 7) move(app.floor_library_restore_point);
         if (frame == 7 || frame == 8) io.AddMouseButtonEvent(0, frame == 7);
-        if (frame == 9) app.select_floor_variant(t, 0);
-        if (frame == 10 || frame == 11) move(app.floor_library_art_point);
+        if (frame == 9) move(app.floor_library_first_row_point);
+        if (frame == 9 || frame == 10) io.AddMouseButtonEvent(0, frame == 9);
+        if (frame == 11) move(app.floor_library_art_point);
         if (frame == 11 || frame == 12) io.AddMouseButtonEvent(0, frame == 11);
         if (frame == 14 || frame == 15) move(app.floor_add_point);
         if (frame == 15 || frame == 16) io.AddMouseButtonEvent(0, frame == 15);
@@ -114,6 +115,12 @@ struct FloorLibrarySmoke {
         auto &t = *app.tab(); bool ok = app.error.empty();
         if (frame < 16 || frame == 19) ok &= t.document.state().assets == original.assets && t.document.state().revision == original.revision;
         if (frame == 5) ok &= t.floor_use_library && t.floor_choice == 1 && t.floor_alternative.layout.artwork.assets != first && app.floor_visible(t);
+        if (frame == 5) {
+            auto thumb = app.floor_thumbnails.find(0);
+            ok &= thumb != app.floor_thumbnails.end() && thumb->second.texture && thumb->second.width <= 320 && thumb->second.height <= 48;
+        }
+        if (frame == 10) ok &= t.floor_use_library && t.floor_choice == 0;
+        if (t.floor_library_open) ok &= app.floor_thumbnails.size() <= 64 && app.floor_thumbnail_generation == t.floor_library_generation;
         if (synthetic && frame == 1) ok &= app.floor_pixel_comparison(t).match == FloorMatch::Exact && t.floor_libraries.paths.size() == 2;
         if (synthetic && frame == 5) ok &= app.floor_pixel_comparison(t).match == FloorMatch::DifferentPixels && app.floor_pixel_comparison(t).different_pixels == 16;
         if (frame == 8) ok &= !t.floor_use_library && app.active_floor(t).layout.artwork.assets == runtime && app.floor_visible(t);
@@ -125,7 +132,7 @@ struct FloorLibrarySmoke {
         if (frame != 23 && frame != 24) ok &= t.floor_library_error.empty();
         if (frame == 31 && !switch_target.empty()) ok &= t.floor_library.path == switch_target && !t.floor_use_library && t.floor_choice == -1 && t.document.state().assets == copied;
         if (!ok) std::fprintf(stderr, "Floor library UI failed at %d: %s / %s / %s | library %s expected %s, choice %d\n", frame, app.error.c_str(), t.floor_error.c_str(), t.floor_library_error.c_str(), t.floor_library.path.c_str(), switch_target.c_str(), t.floor_choice);
-        if (frame == 32 && ok) std::fprintf(stderr, "Floor library UI: cycle, restore runtime, nearby library switching, pixel comparison, preview isolation, editable copy, undo/redo and failed-load isolation passed at 900x640.\n");
+        if (frame == 32 && ok) std::fprintf(stderr, "Floor library UI: thumbnail loading/selection, cycle, restore runtime, nearby library switching, pixel comparison, preview isolation, editable copy, undo/redo and failed-load isolation passed at 900x640.\n");
         return ok;
     }
 };

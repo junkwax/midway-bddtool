@@ -32,7 +32,7 @@ void read_runtime_defaults(Document &document) {
     for (const auto &candidate : {input.parent_path() / "MKBT.ASM", root / "src" / "MKBT.ASM"}) {
         if (!fs::is_regular_file(candidate)) continue;
         auto layout = read_mk3_layout(document, candidate.u8string());
-        if (layout.valid()) document.seed_runtime(layout.planes, layout.start_x, layout.start_y, layout.ground);
+        if (layout.valid()) document.seed_runtime(layout.planes, layout.start_x, layout.start_y, layout.ground, layout.backdrop);
         else std::fprintf(stderr, "MK3 runtime layout: %s\n", layout.error.c_str());
         return;
     }
@@ -96,6 +96,8 @@ void read_runtime_defaults(Document &document) {
         p.bound = true;
         planes.push_back(p);
     }
-    document.seed_runtime(planes, x, y, ground);
+    int backdrop = -1;
+    if (!bdd_get_stage_bg_color(&backdrop) || backdrop == 444) backdrop = -1;
+    document.seed_runtime(planes, x, y, ground, backdrop);
 }
 } // namespace studio

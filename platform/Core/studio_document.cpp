@@ -189,7 +189,7 @@ bool Document::load(const std::string &path, std::string &error) {
             int version = 0;
             uint64_t bh = 0, dh = 0;
             in >> tag >> version >> bh >> dh;
-            if (tag != "BDDSTUDIO" || (version != 1 && version != 2)) {
+            if (tag != "BDDSTUDIO" || (version != 1 && version != 2 && version != 3)) {
                 error = "Unsupported or damaged studio layout: " + layout.u8string();
                 return false;
             }
@@ -198,13 +198,18 @@ bool Document::load(const std::string &path, std::string &error) {
                             "are shown; review before saving.";
             } else {
                 while (in >> tag) {
-                    if (tag == "profile" && version == 2) {
+                    if (tag == "backdrop" && version >= 3) {
+                        in >> d.state_.backdrop;
+                        if (d.state_.backdrop < -1 || d.state_.backdrop > 32767) {
+                            error = "Invalid stage backdrop color."; return false;
+                        }
+                    } else if (tag == "profile" && version >= 2) {
                         in >> d.state_.runtime_profile;
                         if (d.state_.runtime_profile != "mk3cave") {
                             error = "Unsupported custom runtime profile.";
                             return false;
                         }
-                    } else if (tag == "source-shift" && version == 2) {
+                    } else if (tag == "source-shift" && version >= 2) {
                         size_t i = 0;
                         int dx = 0;
                         in >> i >> dx;
@@ -377,7 +382,7 @@ Rect Document::bounds(bool source) const {
     }
     return {x1, y1, x2 - x1, y2 - y1};
 }
-void Document::seed_runtime(const std::vector<Plane> &planes, int x, int y, int ground) {
+void Document::seed_runtime(const std::vector<Plane> &planes, int x, int y, int ground, int backdrop) {
     if (has_layout_ || !notice_.empty() || dirty() || active_)
         return;
     for (auto &p : state_.planes)
@@ -392,6 +397,7 @@ void Document::seed_runtime(const std::vector<Plane> &planes, int x, int y, int 
     state_.start_x = x;
     state_.start_y = y;
     state_.ground = ground;
+    if (backdrop >= 0 && backdrop <= 32767) state_.backdrop = backdrop;
 }
 void Document::seed_custom_runtime(const std::vector<Plane> &planes, int x, int y, int ground,
                                    const std::vector<int> &dx, const std::string &profile) {
@@ -669,6 +675,11 @@ bool Document::set_start(int x, int y, int ground) {
     commit();
     return true;
 }
+bool Document::set_backdrop(int rgb555) {
+    if (active_ || rgb555 < -1 || rgb555 > 32767) return false;
+    if (state_.backdrop == rgb555) return true;
+    begin("Change stage background"); state_.backdrop = rgb555; touch(); commit(); return true;
+}
 
 bool Document::apply_mk3_layout(const Mk3Layout &layout, std::string &error) {
     if (!layout.valid() || active_ || !state_.runtime_profile.empty() ||
@@ -688,6 +699,7 @@ bool Document::apply_mk3_layout(const Mk3Layout &layout, std::string &error) {
         found->rank = runtime.rank; found->bound = true;
     }
     after.start_x = layout.start_x; after.start_y = layout.start_y; after.ground = layout.ground;
+    after.backdrop = layout.backdrop;
     begin("Load MK3 game layout"); state_ = std::move(after); touch(); commit(); error.clear(); return true;
 }
 
@@ -970,7 +982,7 @@ bool Document::save(const std::string &path, std::string &error, bool recovery) 
         }
         {
             std::ofstream out(files[index++].temp, std::ios::trunc);
-            out << "BDDSTUDIO " << (state_.runtime_profile.empty() ? 1 : 2) << ' '
+            out << "BDDSTUDIO " << (state_.backdrop >= 0 ? 3 : state_.runtime_profile.empty() ? 1 : 2) << ' '
                 << (output.has_bdb ? file_hash(files[0].temp) : 0) << ' '
                 << file_hash(temp_bdd) << '\n';
             if (!state_.runtime_profile.empty()) {
@@ -980,6 +992,7 @@ bool Document::save(const std::string &path, std::string &error, bool recovery) 
             }
             out << "camera " << state_.start_x << ' ' << state_.start_y << ' ' << state_.ground
                 << '\n';
+            if (state_.backdrop >= 0) out << "backdrop " << state_.backdrop << '\n';
             for (size_t i = 0; i < planes.size(); i++) {
                 const auto &p = planes[i];
                 out << "plane " << i << ' ' << std::quoted(p.source.name) << ' '

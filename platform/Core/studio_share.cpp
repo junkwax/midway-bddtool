@@ -40,6 +40,13 @@ void render(const State &s, Point camera, Rect bounds, const fs::path &path) {
     double scale = std::min({1.0, 2048.0 / std::max(1.0, bounds.w), 1024.0 / std::max(1.0, bounds.h)});
     int w = std::max(1, (int)std::ceil(bounds.w * scale)), h = std::max(1, (int)std::ceil(bounds.h * scale));
     std::vector<uint8_t> rgba(size_t(w) * h * 4, 0);
+    if (s.backdrop >= 0 && s.backdrop <= 32767) {
+        auto color = bdd_core_rgb555_to_argb((uint16_t)s.backdrop);
+        for (size_t i = 0; i < rgba.size(); i += 4) {
+            rgba[i] = uint8_t(color >> 16); rgba[i + 1] = uint8_t(color >> 8);
+            rgba[i + 2] = uint8_t(color); rgba[i + 3] = 255;
+        }
+    }
     uint64_t work = 0;
     for (const auto &item : scene_items(s, camera)) {
         const auto &im = s.assets->data.images[item.image_slot];

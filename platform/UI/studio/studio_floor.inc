@@ -68,6 +68,7 @@ void load_floor_library(Tab &t, const std::string &path) {
     auto library = inspect_floor_library(path);
     if (!library.error.empty()) { t.floor_library_error = library.error; return; }
     t.floor_library = std::move(library); t.floor_filter.Clear();
+    ++t.floor_library_generation;
     t.floor_choice = -1; t.floor_use_library = false; t.floor_library_error.clear();
     refresh_floor_libraries(t);
 }
@@ -140,6 +141,51 @@ void floor_variant_controls(Tab &t) {
     ImGui::SameLine(); if (ImGui::SmallButton("Browse floors")) t.floor_library_open = true;
     if (!t.floor_library_error.empty()) ImGui::TextWrapped("%s", t.floor_library_error.c_str());
 }
+void begin_floor_thumbnails(const Tab &t) {
+    if (floor_thumbnail_tab != t.id || floor_thumbnail_generation != t.floor_library_generation) {
+        floor_thumbnails.clear();
+        floor_thumbnail_tab = t.id; floor_thumbnail_generation = t.floor_library_generation;
+    }
+    floor_thumbnail_budget = 1; // Decode only one newly visible floor per UI frame.
+}
+FloorThumbnail *floor_thumbnail(const Tab &t, int index) {
+    auto existing = floor_thumbnails.find(index);
+    if (existing != floor_thumbnails.end()) {
+        existing->second.last_frame = ImGui::GetFrameCount(); return &existing->second;
+    }
+    if (floor_thumbnail_budget <= 0) return nullptr;
+    if (floor_thumbnails.size() >= 64) {
+        auto oldest = floor_thumbnails.end();
+        for (auto it = floor_thumbnails.begin(); it != floor_thumbnails.end(); ++it)
+            if (it->second.last_frame < ImGui::GetFrameCount() &&
+                (oldest == floor_thumbnails.end() || it->second.last_frame < oldest->second.last_frame)) oldest = it;
+        // Textures already submitted in this frame must survive until rendering finishes.
+        if (oldest == floor_thumbnails.end()) return nullptr;
+        floor_thumbnails.erase(oldest);
+    }
+    --floor_thumbnail_budget;
+    auto &thumb = floor_thumbnails[index]; thumb.last_frame = ImGui::GetFrameCount();
+    auto floor = load_floor_library_entry(t.floor_library, size_t(index), {});
+    if (!floor.ready()) { thumb.error = floor.notice; return &thumb; }
+    const auto &bank = *floor.layout.artwork.assets;
+    const auto &im = bank.data.images.front(); const auto &palette = bank.data.palettes.front();
+    double scale = std::min({1.0, 320.0 / im.w, 48.0 / im.h});
+    thumb.width = std::max(1, (int)std::round(im.w * scale));
+    thumb.height = std::max(1, (int)std::round(im.h * scale));
+    std::vector<uint8_t> rgba(size_t(thumb.width) * thumb.height * 4);
+    for (int y = 0; y < thumb.height; ++y) for (int x = 0; x < thumb.width; ++x) {
+        int sx = x * im.w / thumb.width, sy = y * im.h / thumb.height;
+        auto color = palette.argb[im.pix[size_t(sy) * im.w + sx]];
+        size_t p = (size_t(y) * thumb.width + x) * 4;
+        rgba[p] = uint8_t(color >> 16); rgba[p + 1] = uint8_t(color >> 8);
+        rgba[p + 2] = uint8_t(color); rgba[p + 3] = uint8_t(color >> 24);
+    }
+    thumb.texture.reset(SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, thumb.width, thumb.height));
+    if (!thumb.texture || SDL_UpdateTexture(thumb.texture.get(), nullptr, rgba.data(), thumb.width * 4) != 0) {
+        thumb.texture.reset(); thumb.error = "Could not create thumbnail texture.";
+    } else SDL_SetTextureBlendMode(thumb.texture.get(), SDL_BLENDMODE_BLEND);
+    return &thumb;
+}
 void floor_library_window(Tab &t) {
     if (!t.floor_library_open) return;
     const auto display = ImGui::GetIO().DisplaySize;
@@ -176,45 +222,62 @@ void floor_library_window(Tab &t) {
         std::snprintf(path, sizeof path, "%s", t.floor_library.path.c_str());
         if (file_dialog_open("Choose floor IMG library", "Midway image libraries\0*.IMG;*.img\0All files\0*.*\0", path, sizeof path)) load_floor_library(t, path);
     }
+    if (ImGui::IsItemHovered() && !t.floor_library.path.empty()) ImGui::SetTooltip("%s", t.floor_library.path.c_str());
     ImGui::SameLine(); ImGui::TextDisabled("%zu choices", t.floor_library.entries.size());
     if (!t.floor_libraries.notice.empty()) ImGui::TextWrapped("%s", t.floor_libraries.notice.c_str());
-    ImGui::TextWrapped("%s", t.floor_library.path.empty() ? "Open an IMG library to compare floors." : t.floor_library.path.c_str());
-    ImGui::TextWrapped("Includes unused artwork. IMG does not record game usage. Numbered strips are joined in order, aligned at the bottom.");
+    ImGui::TextWrapped("%s", t.floor_library.path.empty() ? "Open an IMG library to compare floors." : "Click a floor to preview it on Stage.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("All library artwork is included. IMG does not record game usage. Numbered strips are joined in order, aligned at the bottom.");
     t.floor_filter.Draw("Search", 270);
-    if (ImGui::BeginTable("floor-choices", 3, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH,
-                          {0, std::max(70.f, ImGui::GetContentRegionAvail().y - 198)})) {
+    begin_floor_thumbnails(t);
+    if (ImGui::BeginTable("floor-choices", 1, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH,
+                          {0, std::max(70.f, ImGui::GetContentRegionAvail().y - 112)})) {
         ImGui::TableSetupColumn("Floor", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 85);
-        ImGui::TableSetupColumn("Strips", ImGuiTableColumnFlags_WidthFixed, 40);
         ImGui::TableSetupScrollFreeze(0, 1); ImGui::TableHeadersRow();
-        for (size_t i = 0; i < t.floor_library.entries.size(); ++i) {
+        std::vector<int> matches;
+        for (size_t i = 0; i < t.floor_library.entries.size(); ++i)
+            if (t.floor_filter.PassFilter(t.floor_library.entries[i].label.c_str())) matches.push_back((int)i);
+        if (matches.empty()) ImGui::TextDisabled("No matching floors.");
+        ImGuiListClipper clipper; clipper.Begin((int)matches.size());
+        while (clipper.Step()) for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+            int i = matches[row];
             const auto &entry = t.floor_library.entries[i];
-            if (!t.floor_filter.PassFilter(entry.label.c_str())) continue;
             ImGui::PushID((int)i); ImGui::TableNextRow(); ImGui::TableNextColumn();
+            auto thumb = entry.problem.empty() ? floor_thumbnail(t, i) : nullptr;
+            std::string title = entry.label + "  |  " + std::to_string(entry.width) + " x " + std::to_string(entry.height) +
+                                "  |  " + std::to_string(entry.strips.size()) + (entry.strips.size() == 1 ? " strip" : " strips");
             ImGui::BeginDisabled(!entry.problem.empty());
-            if (ImGui::Selectable(entry.label.c_str(), t.floor_use_library && t.floor_choice == (int)i, ImGuiSelectableFlags_SpanAllColumns)) select_floor_variant(t, (int)i);
+            if (ImGui::Selectable(title.c_str(), t.floor_use_library && t.floor_choice == i, ImGuiSelectableFlags_SpanAllColumns, {0, 62})) select_floor_variant(t, i);
             ImGui::EndDisabled();
+            if (i == 0) floor_library_first_row_point = item_center();
+            auto a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            auto draw = ImGui::GetWindowDrawList();
+            if (thumb && thumb->texture) {
+                float scale = std::min((b.x - a.x - 12) / thumb->width, 36.f / thumb->height);
+                float w = thumb->width * scale, h = thumb->height * scale;
+                ImVec2 p(a.x + (b.x - a.x - w) / 2, a.y + 22 + (36 - h) / 2);
+                for (float y = 0; y < h; y += 6) for (float x = 0; x < w; x += 6)
+                    draw->AddRectFilled({p.x + x, p.y + y}, {p.x + std::min(x + 6, w), p.y + std::min(y + 6, h)},
+                        ((int(x / 6) + int(y / 6)) % 2) ? IM_COL32(52, 61, 70, 255) : IM_COL32(29, 36, 43, 255));
+                draw->AddImage((ImTextureID)(intptr_t)thumb->texture.get(), p, {p.x + w, p.y + h});
+            } else {
+                const char *message = !entry.problem.empty() || (thumb && !thumb->error.empty()) ? "Preview unavailable (hover for details)" : "Loading preview...";
+                draw->AddText({a.x + 6, a.y + 29}, IM_COL32(145, 156, 168, 255), message);
+            }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                 ImGui::BeginTooltip();
                 for (const auto &strip : entry.strips) ImGui::TextUnformatted(strip.c_str());
                 if (!entry.problem.empty()) ImGui::TextWrapped("%s", entry.problem.c_str());
+                if (thumb && !thumb->error.empty()) ImGui::TextWrapped("%s", thumb->error.c_str());
                 ImGui::EndTooltip();
             }
-            ImGui::TableNextColumn(); ImGui::Text("%d x %d", entry.width, entry.height);
-            ImGui::TableNextColumn(); ImGui::Text("%zu", entry.strips.size()); ImGui::PopID();
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }
     floor_variant_controls(t);
     floor_comparison_status(t);
-    if (t.floor_use_library && t.floor_alternative.ready()) {
-        const auto &art = t.floor_alternative.layout.artwork;
-        const auto &im = art.assets->data.images.front(); floor_draft_textures.renderer = renderer;
-        auto tex = floor_draft_textures.get(art, 0, 0);
-        float scale = std::min({1.f, ImGui::GetContentRegionAvail().x / im.w, 45.f / im.h});
-        if (tex) ImGui::Image((ImTextureID)(intptr_t)tex, {im.w * scale, im.h * scale});
-        if (!floor_layers_bound(t)) ImGui::TextWrapped("Apply the game layout to show this floor on Stage.");
-    }
+    if (t.floor_use_library && t.floor_alternative.ready() && !floor_layers_bound(t))
+        ImGui::TextWrapped("Apply the game layout to show this floor on Stage.");
     if (ImGui::Button("Restore game floor")) select_floor_variant(t, -1);
     floor_library_restore_point = item_center(); ImGui::SameLine();
     ImGui::BeginDisabled(!t.floor_use_library || !t.floor_alternative.ready());

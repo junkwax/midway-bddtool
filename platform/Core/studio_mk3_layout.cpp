@@ -139,6 +139,7 @@ Mk3Layout read_mk3_layout(const Document &doc, const std::string &path) {
             return bounds.at(name).width / 2 - 399 / 2;
         };
         out.start_y = header[1]; out.ground = header[1] + header[2]; out.start_x = header[3];
+        if (header[0] >= 0 && header[0] <= 32767 && header[0] != 444) out.backdrop = header[0];
         if (centers.count(0)) out.start_x = centered(centers.at(0));
         require(out.start_x != -2, "center_x camera has no explicit worldtlx initializer.");
         require(header[4] <= header[5], "Invalid scroll limits.");

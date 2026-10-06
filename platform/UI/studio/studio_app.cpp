@@ -64,6 +64,8 @@ struct Tab {
     uint64_t batch_revision = 0;
     uint64_t id = 0;
     Document document;
+    bool backdrop_preview = false, backdrop_enabled = false;
+    float backdrop_rgb[3] = {};
     char share_name[64] = {}, share_author[96] = {}, share_description[512] = {}, share_sources[512] = {}, share_license[128] = {}, share_tested[256] = {};
     bool share_requested = false, share_show_result = false;
     std::future<ShareBundle> share_job;
@@ -118,6 +120,7 @@ struct Tab {
     FloorPreview floor;
     FloorPreview floor_alternative;
     FloorLibrary floor_library;
+    uint64_t floor_library_generation = 0;
     FloorLibraryDiscovery floor_libraries;
     FloorComparison floor_comparison;
     std::shared_ptr<const AssetBank> floor_compared_art, floor_compared_runtime;
@@ -213,6 +216,7 @@ struct AssetPayload {
 };
 struct TextureCache {
     SDL_Renderer *renderer = nullptr;
+    float canvas_rgb[3] = {20.f / 255, 25.f / 255, 31.f / 255};
     bool palette_alpha = false; // Overlay masks only; authored indexed art stays opaque above zero.
     std::shared_ptr<const AssetBank> bank;
     std::map<std::pair<int, int>, SDL_Texture *> values;
@@ -262,6 +266,14 @@ class App {
     TextureCache block_textures;
     TextureCache animation_textures;
     TextureCache floor_textures, floor_draft_textures;
+    struct FloorThumbnail {
+        std::unique_ptr<SDL_Texture, decltype(&SDL_DestroyTexture)> texture{nullptr, SDL_DestroyTexture};
+        std::string error;
+        int width = 0, height = 0, last_frame = -1;
+    };
+    std::map<int, FloorThumbnail> floor_thumbnails;
+    uint64_t floor_thumbnail_tab = 0, floor_thumbnail_generation = 0;
+    int floor_thumbnail_budget = 0;
     TextureCache animation_analysis_before, animation_analysis_after;
     TextureCache optimize_before_textures, optimize_after_textures;
     TextureCache compare_before_textures, compare_after_textures;
@@ -297,6 +309,8 @@ class App {
     Point floor_open_point, floor_asset_point, floor_add_point, floor_close_point;
     Point floor_library_next_point, floor_library_restore_point, floor_library_art_point;
     Point floor_library_selector_point, floor_library_second_point;
+    Point floor_library_first_row_point;
+    Point background_open_point, background_apply_point, background_cancel_point;
     Point layout_open_point, layout_review_point, layout_apply_point, layout_close_point;
     std::map<std::string, std::string> layout_sources;
     int check_visible_count = 0;
@@ -316,7 +330,7 @@ class App {
             std::snprintf(t->layout_source, sizeof t->layout_source, "%s", remembered->second.c_str());
             if (!t->document.has_layout() && t->document.notice().empty() && !t->document.dirty()) {
                 t->mk3_layout = read_mk3_layout(t->document, remembered->second);
-                if (t->mk3_layout.valid()) t->document.seed_runtime(t->mk3_layout.planes, t->mk3_layout.start_x, t->mk3_layout.start_y, t->mk3_layout.ground);
+                if (t->mk3_layout.valid()) t->document.seed_runtime(t->mk3_layout.planes, t->mk3_layout.start_x, t->mk3_layout.start_y, t->mk3_layout.ground, t->mk3_layout.backdrop);
             }
         }
         if (t->document.state().runtime_profile == "mk3cave") {
@@ -1355,7 +1369,15 @@ class App {
         }
         draw->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
         draw->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y),
-                            IM_COL32(20, 25, 31, 255));
+                            ImGui::ColorConvertFloat4ToU32({canvas_rgb[0], canvas_rgb[1], canvas_rgb[2], 1}));
+        int backdrop = displayed_backdrop(t);
+        if (!t.source && backdrop >= 0) {
+            auto color = bdd_core_rgb555_to_argb((uint16_t)backdrop);
+            Point frame = t.camera_preview ? Point{} : Point{double(t.document.state().start_x), double(t.document.state().start_y)};
+            draw->AddRectFilled(vec(t.view.to_screen(frame, point(origin))),
+                vec(t.view.to_screen({frame.x + 400, frame.y + 254}, point(origin))),
+                IM_COL32((color >> 16) & 255, (color >> 8) & 255, color & 255, 255));
+        }
         if (grid) {
             double step = 32;
             while (step * t.view.zoom < 16)
@@ -1570,6 +1592,7 @@ class App {
     }
     #include "studio_asset_tools.inc"
     #include "studio_floor.inc"
+    #include "studio_background.inc"
     #include "studio_mk3_layout.inc"
     #include "studio_batch_import.inc"
     bool game_build_running() const {
@@ -3525,6 +3548,7 @@ class App {
         ImGui::SameLine();
         if (ImGui::Button("Game layout...")) { cancel_gesture(); t.layout_requested = true; }
         layout_open_point = item_center();
+        ImGui::SameLine(); background_controls(t);
         if (std::none_of(t.document.state().planes.begin(), t.document.state().planes.end(), [](const Plane &p) { return p.bound; })) {
             ImGui::SameLine(); ImGui::TextDisabled("Source-sheet positions; load a game layout to align the frame.");
         }
@@ -4657,6 +4681,7 @@ int run(int argc, char **argv) {
     app.animation_textures.clear();
     app.floor_textures.clear();
     app.floor_draft_textures.clear();
+    app.floor_thumbnails.clear();
     app.animation_analysis_before.clear();
     app.animation_analysis_after.clear();
     app.optimize_before_textures.clear();

@@ -382,6 +382,27 @@ synthetic runtime-export regressions pass. No game source or ROM was written.
 studio_floor_tests SCRATCH --library path/to/MKFLOORS.IMG [MAP.BDB GAME_ROOT_OR_MKBT_ASM]
 ```
 
+## Floor library thumbnails — October 6, 2026
+
+Floor choices now show clickable artwork thumbnails with dimensions and strip
+counts. Transparent areas use a checkerboard, and unavailable previews expose
+their errors on hover. The compact browser removes the duplicate selected-image
+preview and moves source details into tooltips to leave room for more choices.
+Stage comparison and editable-copy actions continue to use full-resolution art.
+
+The UI decodes at most one new visible entry per frame, clips offscreen rows,
+and keeps at most 64 thumbnails of at most 320×48 pixels. Cache entries are
+discarded on library reload/switch or tab change; textures referenced by the
+current draw frame are not evicted. Decoded full-size thumbnail inputs are
+released immediately. Failed previews are cached until the library is reopened.
+Browsing does not change document assets, saves or ROM budgets.
+
+Verification: Release build; floor, animation, MK3 layout and document tests
+(4/4). The 900×640 UI smoke passes with synthetic artwork and local Subway art,
+covering thumbnail loading and clicking, cache bounds/library invalidation,
+runtime restore, pixel comparison, failed-open isolation, editable copy and
+undo/redo. The Subway browser was visually inspected with multiple thumbnails.
+
 ## Remaining candidates, subject to the decisions above
 
 | Legacy capability | Current route / next work |

@@ -128,6 +128,12 @@ remain separate choices. Missing/duplicate strip numbers, missing palettes and
 unsupported data are reported rather than silently assembled. Each strip keeps
 its colors, including opaque stored color zero; trimmed margins stay transparent.
 
+Each choice has a clickable thumbnail, dimensions and strip count. Transparent
+areas show a checkerboard. Scroll or search to browse visually; thumbnails load
+as rows become visible. Hover an unavailable preview for its error and strip
+details. Reopen the IMG to refresh thumbnails after editing it outside bddtool.
+Thumbnails are reduced previews; the selected stage reference uses full-size art.
+
 Selecting a floor changes the reference immediately. Close the library window
 to see the stage, then use its new floor dropdown or **< / >** buttons to cycle
 through the matching choices. **Game floor** or **Restore game floor** returns

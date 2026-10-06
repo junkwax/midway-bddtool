@@ -5,6 +5,7 @@ namespace studio {
 struct Mk3Layout {
     std::vector<Plane> planes;
     int start_x = 0, start_y = 0, ground = 0;
+    int backdrop = -1;
     uint64_t revision = 0;
     std::shared_ptr<const AssetBank> assets;
     std::string source, label, error, report;

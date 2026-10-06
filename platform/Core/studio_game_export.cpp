@@ -392,6 +392,12 @@ bool export_game_assembly(const Document &doc, const std::string &bytes, Assembl
         for (size_t i = 0; i < slots.size(); i++)
             source.lines[slots[i]] = reordered[i];
         source.set(stage.words[1], ".word", std::to_string(state.ground));
+        check(state.backdrop >= -1 && state.backdrop <= 32767 && state.backdrop != 444,
+              "Invalid stage backdrop color (444 is reserved for null_irqskye).");
+        if (state.backdrop >= 0) {
+            source.set(stage.words[0], ".word", std::to_string(state.backdrop));
+            report << "Stage backdrop RGB555: " << state.backdrop << "\n";
+        }
         source.set(stage.words[2], ".word", std::to_string(state.start_y));
         source.set(stage.words[3], ".word", std::to_string(state.start_x));
         report << "Draw order (back to front):";

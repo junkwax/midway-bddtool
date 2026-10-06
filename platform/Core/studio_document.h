@@ -59,6 +59,7 @@ struct State {
     std::string name = "UNTITLED", header;
     int world_w = 800, world_h = 254, depth = 255;
     int start_x = 0, start_y = 0, ground = 230;
+    int backdrop = -1; // RGB555; -1 leaves the runtime color unspecified.
     bool has_bdb = true;
     std::string runtime_profile;
     uint64_t revision = 0;
@@ -131,6 +132,7 @@ class Document {
     bool reorder_plane(int index, int direction);
     int add_plane();
     bool set_start(int x, int y, int ground);
+    bool set_backdrop(int rgb555);
     bool apply_mk3_layout(const Mk3Layout &layout, std::string &error);
     bool import_rgba(const std::string &name, int width, int height, const uint8_t *rgba,
                      std::string &error, int &image_id);
@@ -148,7 +150,7 @@ class Document {
     bool apply_pattern(const PatternPlan &plan, std::string &error);
     bool apply_visibility(const VisibilityPlan &plan, bool gameplay_contract_confirmed, std::string &error);
     // Read-only legacy runtime adapter seeds defaults once, before any editing.
-    void seed_runtime(const std::vector<Plane> &planes, int start_x, int start_y, int ground);
+    void seed_runtime(const std::vector<Plane> &planes, int start_x, int start_y, int ground, int backdrop = -1);
     void seed_custom_runtime(const std::vector<Plane> &planes, int start_x, int start_y, int ground,
                              const std::vector<int> &source_dx, const std::string &profile);
 
