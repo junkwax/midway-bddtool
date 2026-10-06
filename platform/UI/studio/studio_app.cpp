@@ -22,6 +22,7 @@
 #include "Core/studio_palette_file.h"
 #include "Core/studio_image_replace.h"
 #include "Core/studio_palette_usage.h"
+#include "Core/studio_view_compare.h"
 #include "Core/app_version.h"
 #include <future>
 #include <fstream>
@@ -62,6 +63,13 @@ Point item_center() {
 bool has(const std::vector<ObjectId> &ids, ObjectId id) {
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
+// Before/after review settings shared by stage comparison and artwork replacement.
+enum class CompareMode { SideBySide, Wipe, Toggle, Blink, Overlay, Difference };
+struct CompareView {
+    CompareMode mode = CompareMode::Wipe;
+    bool after = true;
+    float split = .5f, blink = .5f, opacity = .5f;
+};
 struct Tab {
     struct ImportFile { std::string path, problem; int width = 0, height = 0; bool selected = false; };
     std::vector<ImportFile> batch_files;
@@ -113,6 +121,7 @@ struct Tab {
     std::shared_ptr<const AssetBank> replace_original;
     uint64_t replace_revision = 0;
     int replace_image_id = -1, replace_palette = -1;
+    CompareView replace_compare{CompareMode::SideBySide};
     std::string replace_source;
     int edit_palette = 0, edit_color = 1, edit_image = -1, block_zoom = 8;
     bool block_grid = true, block_painting = false, block_dirty = false;
@@ -183,8 +192,8 @@ struct Tab {
     std::unique_ptr<PaletteConsolidation> palette_plan;
     int optimize_choice = 0, optimize_palette = 0;
     bool optimize_static_palettes = false, palette_slots_reviewed = false, optimize_cuts = true;
-    bool compare_open = false, compare_pattern = false, compare_after = true, compare_wipe = true;
-    float compare_split = .5f;
+    bool compare_open = false, compare_pattern = false;
+    CompareView compare;
     Point compare_camera;
     Viewport heat_view;
     bool heat_fit = true;
@@ -283,6 +292,28 @@ struct TextureCache {
         return tex;
     }
 };
+// One rendered comparison texture, rebuilt only when its inputs change.
+struct DiffTexture {
+    SDL_Renderer *renderer = nullptr;
+    SDL_Texture *texture = nullptr;
+    std::vector<uint64_t> key;
+    ViewDifference diff;
+    void clear() {
+        if (texture) SDL_DestroyTexture(texture);
+        texture = nullptr; key.clear(); diff = {};
+    }
+    template <class Build> SDL_Texture *get(std::vector<uint64_t> next, Build build) {
+        if (!key.empty() && next == key) return texture;
+        clear(); key = std::move(next); diff = build();
+        if (diff.width <= 0) return nullptr;
+        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC,
+                                    diff.width, diff.height);
+        if (!texture) return nullptr;
+        SDL_UpdateTexture(texture, nullptr, diff.rgba.data(), diff.width * 4);
+        SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+        return texture;
+    }
+};
 class App {
   public:
     SDL_Window *window = nullptr;
@@ -304,6 +335,7 @@ class App {
     TextureCache animation_analysis_before, animation_analysis_after;
     TextureCache optimize_before_textures, optimize_after_textures;
     TextureCache compare_before_textures, compare_after_textures;
+    DiffTexture compare_diff, compare_overlay, replace_diff;
     TextureCache visibility_textures, visibility_before_textures;
     std::vector<std::unique_ptr<Tab>> tabs;
     int active = -1, page = 0, select_tab = -1;
@@ -2633,7 +2665,7 @@ class App {
         ImGui::EndTable();
     }
     void draw_snapshot(const State &state, TextureCache &cache, ImVec2 origin, float scale,
-                       Point camera, ImVec2 clip_a, ImVec2 clip_b) {
+                       Point camera, ImVec2 clip_a, ImVec2 clip_b, ImU32 tint = IM_COL32_WHITE) {
         auto *draw = ImGui::GetWindowDrawList();
         cache.renderer = renderer;
         draw->PushClipRect(clip_a, clip_b, true);
@@ -2646,9 +2678,67 @@ class App {
             if (texture)
                 draw->AddImage((ImTextureID)(intptr_t)texture, a, b,
                                ImVec2(item.hflip ? 1.f : 0.f, item.vflip ? 1.f : 0.f),
-                               ImVec2(item.hflip ? 0.f : 1.f, item.vflip ? 0.f : 1.f));
+                               ImVec2(item.hflip ? 0.f : 1.f, item.vflip ? 0.f : 1.f), tint);
         }
         draw->PopClipRect();
+    }
+    // Mode picker and per-mode settings; returns whether single-view modes show the after state.
+    bool compare_controls(CompareView &v, bool side_by_side, const char *before, const char *after) {
+        static const char *names[] = {"Side by side", "Wipe", "Toggle", "Blink", "Overlay", "Difference"};
+        int first = side_by_side ? 0 : 1, mode = std::max(first, (int)v.mode);
+        ImGui::SetNextItemWidth(130);
+        if (ImGui::BeginCombo("View", names[mode])) {
+            for (int i = first; i < 6; ++i)
+                if (ImGui::Selectable(names[i], i == mode)) mode = i;
+            ImGui::EndCombo();
+        }
+        v.mode = (CompareMode)mode;
+        ImGui::SameLine();
+        std::string label = std::string(before) + " / " + after;
+        switch (v.mode) {
+        case CompareMode::Wipe:
+            ImGui::SetNextItemWidth(200);
+            ImGui::SliderFloat(label.c_str(), &v.split, 0, 1, "%.2f");
+            break;
+        case CompareMode::Toggle:
+            if (ImGui::RadioButton(before, !v.after)) v.after = false;
+            ImGui::SameLine();
+            if (ImGui::RadioButton(after, v.after)) v.after = true;
+            break;
+        case CompareMode::Blink:
+            ImGui::SetNextItemWidth(160);
+            ImGui::SliderFloat("Seconds per view", &v.blink, .15f, 2.f, "%.2f");
+            break;
+        case CompareMode::Overlay:
+            label = std::string(after) + " opacity";
+            ImGui::SetNextItemWidth(200);
+            ImGui::SliderFloat(label.c_str(), &v.opacity, 0, 1, "%.2f");
+            break;
+        case CompareMode::Difference:
+            ImGui::TextDisabled("Green added | Red removed | Magenta recolored");
+            break;
+        default:
+            ImGui::NewLine();
+            break;
+        }
+        if (v.mode == CompareMode::Blink)
+            return std::fmod(ImGui::GetTime(), 2.0 * v.blink) >= v.blink;
+        return v.mode != CompareMode::Toggle || v.after;
+    }
+    // Outlines the changed region so isolated pixel changes stay visible at any zoom.
+    void outline_changes(const ViewDifference &d, ImVec2 origin, float scale) {
+        if (!d.any()) return;
+        ImVec2 a(origin.x + d.left * scale - 3, origin.y + d.top * scale - 3);
+        ImVec2 b(origin.x + (d.right + 1) * scale + 3, origin.y + (d.bottom + 1) * scale + 3);
+        ImGui::GetWindowDrawList()->AddRect(a, b, IM_COL32(255, 220, 64, 255), 0, 0, 2);
+    }
+    void difference_summary(const ViewDifference &d) {
+        if (!d.any()) ImGui::TextDisabled("No pixel differences.");
+        else
+            ImGui::TextColored(accent, "%llu of %llu pixels differ (%.2f%%) | changes span %d x %d",
+                               (unsigned long long)d.changed, (unsigned long long)d.compared,
+                               100.0 * d.changed / std::max<uint64_t>(1, d.compared),
+                               d.right - d.left + 1, d.bottom - d.top + 1);
     }
     void stage_comparison(Tab &t) {
         if (!t.compare_open)
@@ -2739,13 +2829,7 @@ class App {
                             std::abs(scroll) > .001 ? (bounds.x + bounds.w / 2 - 200) / scroll : 0,
                             bounds.y + bounds.h / 2 - 127};
                 }
-                ImGui::Checkbox("Wipe comparison", &t.compare_wipe);
-                ImGui::SameLine();
-                if (t.compare_wipe) {
-                    ImGui::SetNextItemWidth(220);
-                    ImGui::SliderFloat("Original / proposed", &t.compare_split, 0, 1, "%.2f");
-                } else
-                    ImGui::Checkbox("Show proposed artwork", &t.compare_after);
+                bool show_after = compare_controls(t.compare, false, "Original", "Proposed");
                 auto size = ImGui::GetContentRegionAvail();
                 float scale = std::max(.1f, std::min(size.x / 400, (size.y - 24) / 254));
                 auto a = ImGui::GetCursorScreenPos();
@@ -2760,20 +2844,50 @@ class App {
                 }
                 auto *draw = ImGui::GetWindowDrawList();
                 draw->AddRectFilled(a, b, IM_COL32(10, 12, 16, 255));
-                if (t.compare_wipe) {
-                    float split = a.x + 400 * scale * t.compare_split;
+                if (t.compare.mode == CompareMode::Wipe) {
+                    float split = a.x + 400 * scale * t.compare.split;
                     draw_snapshot(*before, compare_before_textures, a, scale, t.compare_camera, a,
                                   ImVec2(split, b.y));
                     draw_snapshot(*after, compare_after_textures, a, scale, t.compare_camera,
                                   ImVec2(split, a.y), b);
                     draw->AddLine(ImVec2(split, a.y), ImVec2(split, b.y), selection_color, 2);
                     ImGui::TextDisabled("Original on left | Proposed on right");
+                } else if (t.compare.mode == CompareMode::Overlay) {
+                    // Flatten the proposal first so its own layers do not show through each other.
+                    Point camera{std::round(t.compare_camera.x), std::round(t.compare_camera.y)};
+                    draw_snapshot(*before, compare_before_textures, a, scale, camera, a, b);
+                    auto *texture = compare_overlay.get(
+                        {(uint64_t)(uintptr_t)after, (uint64_t)(uintptr_t)after->assets.get(),
+                         after->revision, (uint64_t)(int64_t)camera.x, (uint64_t)(int64_t)camera.y},
+                        [&] {
+                            ViewDifference view;
+                            static_cast<RgbaView &>(view) = render_camera_view(*after, camera);
+                            return view;
+                        });
+                    if (texture)
+                        draw->AddImage((ImTextureID)(intptr_t)texture, a, b, {0, 0}, {1, 1},
+                                       IM_COL32(255, 255, 255, (int)std::lround(255 * t.compare.opacity)));
+                    ImGui::TextDisabled("Proposed drawn over original at %.0f%% opacity",
+                                        100 * t.compare.opacity);
+                } else if (t.compare.mode == CompareMode::Difference) {
+                    Point camera{std::round(t.compare_camera.x), std::round(t.compare_camera.y)};
+                    auto *texture = compare_diff.get(
+                        {(uint64_t)(uintptr_t)before, (uint64_t)(uintptr_t)after,
+                         (uint64_t)(uintptr_t)before->assets.get(),
+                         (uint64_t)(uintptr_t)after->assets.get(), before->revision,
+                         after->revision, (uint64_t)(int64_t)camera.x, (uint64_t)(int64_t)camera.y},
+                        [&] {
+                            return diff_views(render_camera_view(*before, camera),
+                                              render_camera_view(*after, camera));
+                        });
+                    if (texture) draw->AddImage((ImTextureID)(intptr_t)texture, a, b);
+                    outline_changes(compare_diff.diff, a, scale);
+                    difference_summary(compare_diff.diff);
                 } else {
-                    draw_snapshot(t.compare_after ? *after : *before,
-                                  t.compare_after ? compare_after_textures
-                                                  : compare_before_textures,
+                    draw_snapshot(show_after ? *after : *before,
+                                  show_after ? compare_after_textures : compare_before_textures,
                                   a, scale, t.compare_camera, a, b);
-                    ImGui::TextDisabled("%s", t.compare_after ? "Proposed" : "Original");
+                    ImGui::TextDisabled("%s", show_after ? "Proposed" : "Original");
                 }
             }
         }
@@ -4502,6 +4616,7 @@ int run(int argc, char **argv) {
     app.textures.renderer = app.renderer;
     app.block_textures.renderer = app.renderer;
     app.replace_textures.renderer = app.renderer;
+    app.compare_diff.renderer = app.compare_overlay.renderer = app.replace_diff.renderer = app.renderer;
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     auto &io = ImGui::GetIO();
@@ -4595,7 +4710,8 @@ int run(int argc, char **argv) {
     bool test_animation_analysis = test_animation_library ||
         (smoke && argc >= 5 && std::string(argv[4]) == "--animation-analysis");
     bool test_visibility = smoke && argc >= 5 && std::string(argv[4]) == "--visibility";
-    bool test_optimize = test_review || test_shared || test_palette_reuse || test_subframes ||
+    bool test_compare = smoke && argc >= 5 && std::string(argv[4]) == "--compare";
+    bool test_optimize = test_review || test_shared || test_palette_reuse || test_subframes || test_compare ||
                          (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
     bool test_pattern_suggest = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-suggest";
     bool test_pattern_discover = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-discover";
@@ -4766,11 +4882,11 @@ int run(int argc, char **argv) {
         if (smoke && (frames == 3 || frames == 7 || frames == 11 || frames == 31 ||
                       (test_floor_library && frames == 27) ||
                       ((test_animation || test_review) && frames == 23) ||
-                      ((test_asset_tools || test_batch_import || test_help_share) && (frames == 13 || frames == 19 || frames == 23)))) {
+                      ((test_asset_tools || test_batch_import || test_help_share || test_compare) && (frames == 13 || frames == 19 || frames == 23)))) {
             int w, h;
             SDL_GetRendererOutputSize(app.renderer, &w, &h);
             std::vector<uint8_t> rgba((size_t)w * h * 4);
-            std::string name = test_batch_import ? ("batch-" + std::to_string(frames) + ".png") : test_asset_tools ? ("asset-tools-" + std::to_string(frames) + ".png") : test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
+            std::string name = test_batch_import ? ("batch-" + std::to_string(frames) + ".png") : test_asset_tools ? ("asset-tools-" + std::to_string(frames) + ".png") : test_compare ? ("compare-" + std::to_string(frames) + ".png") : test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
                                : frames == 3     ? "stage.png"
                                : frames == 7   ? "compact.png"
                                : frames == 11  ? "assets.png"
@@ -4889,11 +5005,52 @@ int run(int argc, char **argv) {
                 app.running = false;
             }
             frames++;
+            if (test_compare && app.tab()) {
+                auto &t = *app.tab();
+                if (frames == 6) {
+                    t.compare_open = true; t.compare_pattern = false; t.compare_camera = t.camera;
+                    t.compare.mode = CompareMode::Overlay;
+                }
+                if (frames == 9) t.compare.mode = CompareMode::Difference;
+                if (frames == 12 && (app.compare_diff.key.empty() || app.compare_diff.diff.width != kViewWidth ||
+                                     app.compare_diff.diff.compared != uint64_t(kViewWidth) * kViewHeight)) {
+                    std::fprintf(stderr, "Stage comparison did not build a camera-view difference.\n");
+                    rc = 1; app.running = false;
+                }
+                if (frames == 14) {
+                    // Recolor one opaque pixel of the first artwork and review it as a replacement.
+                    t.compare_open = false; t.asset = 0;
+                    const auto &bank = *t.document.state().assets;
+                    const auto &im = bank.data.images[0];
+                    int palette = app.asset_palette(t, 0);
+                    ReplacementPixels next; next.ready = true; next.width = im.w; next.height = im.h; next.pixels = im.pix;
+                    auto opaque = std::find_if(next.pixels.begin(), next.pixels.end(), [](uint8_t v) { return v != 0; });
+                    int count = palette >= 0 ? bank.data.palettes[palette].count : 0;
+                    if (opaque == next.pixels.end() || count < 3) {
+                        std::fprintf(stderr, "Comparison fixture needs opaque artwork and three colors.\n");
+                        rc = 1; app.running = false;
+                    } else {
+                        *opaque = uint8_t(*opaque % (count - 1) + 1);
+                        app.begin_replace_review(t, palette, std::move(next), "smoke-replacement");
+                        t.replace_compare.mode = CompareMode::Difference;
+                    }
+                }
+                if (frames == 20) {
+                    if (app.replace_diff.diff.changed != 1 || !app.error.empty()) {
+                        std::fprintf(stderr, "Replacement difference reported %llu pixels: %s\n",
+                                     (unsigned long long)app.replace_diff.diff.changed, app.error.c_str());
+                        rc = 1; app.running = false;
+                    }
+                    t.replace_compare.mode = CompareMode::Wipe;
+                }
+                if (frames == 24 && rc == 0)
+                    std::fprintf(stderr, "Comparison UI: overlay, stage difference and replacement difference passed.\n");
+            }
             if (test_review && app.tab()) {
                 auto &t = *app.tab();
                 if (frames == 5) t.optimize_mode = 2;
                 if (frames == 8) { t.optimize_mode = 0; t.compare_open = true; t.compare_camera = t.camera; }
-                if (frames == 12) { t.compare_camera.x += 200; t.compare_split = .7f; }
+                if (frames == 12) { t.compare_camera.x += 200; t.compare.split = .7f; }
                 if (frames == 18) {
                     t.compare_open = false; t.optimize_mode = 3;
                     std::snprintf(t.rom_slot_filter.InputBuf, sizeof t.rom_slot_filter.InputBuf, "MK3CV");
@@ -4934,6 +5091,9 @@ int run(int argc, char **argv) {
     app.optimize_after_textures.clear();
     app.compare_before_textures.clear();
     app.compare_after_textures.clear();
+    app.compare_diff.clear();
+    app.compare_overlay.clear();
+    app.replace_diff.clear();
     app.visibility_textures.clear();
     app.visibility_before_textures.clear();
     editor_project_storage_shutdown();

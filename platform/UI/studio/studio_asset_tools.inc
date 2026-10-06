@@ -86,19 +86,23 @@ void open_replace_artwork(Tab &t) {
         else { replacement = prepare_rgba_replacement(w, h, rgba, bank->data.palettes[palette]); stbi_image_free(rgba); }
     }
     if (!replacement.ready) { error = replacement.error; return; }
+    begin_replace_review(t, palette, std::move(replacement), path);
+}
+void begin_replace_review(Tab &t, int palette, ReplacementPixels replacement, const std::string &source) {
+    const auto bank = t.document.state().assets;
     t.replace_draft = t.document.state();
     auto draft = std::make_shared<AssetBank>(*bank);
     auto &image = draft->data.images[t.asset];
     t.replace_image_id = image.idx; image.w = replacement.width; image.h = replacement.height;
     image.pix = std::move(replacement.pixels); t.replace_draft.assets = draft;
     t.replace_original = bank; t.replace_revision = t.document.state().revision;
-    t.replace_palette = palette; t.replace_source = path; t.replace_requested = true;
-    replace_textures.clear();
+    t.replace_palette = palette; t.replace_source = source; t.replace_requested = true;
+    replace_textures.clear(); replace_diff.clear();
 }
 
 void replace_artwork_dialog(Tab &t) {
     if (t.replace_requested) { ImGui::OpenPopup("Replace artwork in place"); t.replace_requested = false; }
-    asset_modal_size(720, 520);
+    asset_modal_size(720, 640);
     if (!ImGui::BeginPopupModal("Replace artwork in place", nullptr, ImGuiWindowFlags_NoResize)) return;
     size_t old_slot = 0; const auto *old_image = t.document.image(t.replace_image_id, &old_slot);
     bool current = old_image && t.document.state().revision == t.replace_revision && t.document.state().assets == t.replace_original;
@@ -112,24 +116,71 @@ void replace_artwork_dialog(Tab &t) {
         if (old_image->w != next.w || old_image->h != next.h)
             ImGui::TextColored(ImVec4(1, .72f, .25f, 1), "Dimensions change from %d x %d to %d x %d. Placement origins stay fixed.", old_image->w, old_image->h, next.w, next.h);
         else ImGui::Text("Dimensions remain %d x %d.", old_image->w, old_image->h);
-        ImGui::Columns(2, "replacement-preview", false);
-        auto preview = [&](const char *label, const State &state, TextureCache &cache, const BddCoreImage &im) {
-            ImGui::TextUnformatted(label); auto *texture = cache.get(state, (int)old_slot, t.replace_palette);
-            float scale = std::min({1.0f, 280.0f / std::max(1, im.w), 280.0f / std::max(1, im.h)});
-            if (texture) ImGui::Image((ImTextureID)texture, {im.w * scale, im.h * scale});
-        };
-        preview("Current", t.document.state(), textures, *old_image); ImGui::NextColumn();
-        preview("Replacement", t.replace_draft, replace_textures, next); ImGui::Columns(1);
+        auto &view = t.replace_compare;
+        bool show_after = compare_controls(view, true, "Current", "Replacement");
+        // Keep the explanation and Apply/Cancel row visible below the preview.
+        float footer = 2 * ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing() +
+                       ImGui::GetStyle().ItemSpacing.y * 2 + (error.empty() ? 0 : ImGui::GetTextLineHeightWithSpacing());
+        auto room = ImGui::GetContentRegionAvail(); room.y = std::max(80.f, room.y - footer);
+        auto *old_texture = textures.get(t.document.state(), (int)old_slot, t.replace_palette);
+        auto *new_texture = replace_textures.get(t.replace_draft, (int)old_slot, t.replace_palette);
+        if (view.mode == CompareMode::SideBySide) {
+            ImGui::Columns(2, "replacement-preview", false);
+            auto preview = [&](const char *label, SDL_Texture *texture, const BddCoreImage &im) {
+                ImGui::TextUnformatted(label);
+                float scale = std::min({1.0f, 280.0f / std::max(1, im.w), (room.y - 24) / std::max(1, im.h)});
+                if (texture) ImGui::Image((ImTextureID)texture, {im.w * scale, im.h * scale});
+            };
+            preview("Current", old_texture, *old_image); ImGui::NextColumn();
+            preview("Replacement", new_texture, next); ImGui::Columns(1);
+        } else {
+            // Both images share the top-left origin, matching how placements keep their origin.
+            int w = std::max(old_image->w, next.w), h = std::max(old_image->h, next.h);
+            float scale = std::min({8.0f, room.x / std::max(1, w), (room.y - 24) / std::max(1, h)});
+            if (scale >= 1) scale = std::floor(scale); // Whole-pixel zoom keeps edges crisp.
+            auto a = ImGui::GetCursorScreenPos();
+            ImVec2 b(a.x + w * scale, a.y + h * scale);
+            ImGui::Dummy({w * scale, h * scale});
+            auto *draw = ImGui::GetWindowDrawList();
+            draw->AddRectFilled(a, b, IM_COL32(10, 12, 16, 255));
+            auto image = [&](SDL_Texture *texture, const BddCoreImage &im, ImU32 tint = IM_COL32_WHITE) {
+                if (texture) draw->AddImage((ImTextureID)texture, a, {a.x + im.w * scale, a.y + im.h * scale}, {0, 0}, {1, 1}, tint);
+            };
+            if (view.mode == CompareMode::Wipe) {
+                float split = a.x + w * scale * view.split;
+                draw->PushClipRect(a, {split, b.y}, true); image(old_texture, *old_image); draw->PopClipRect();
+                draw->PushClipRect({split, a.y}, b, true); image(new_texture, next); draw->PopClipRect();
+                draw->AddLine({split, a.y}, {split, b.y}, selection_color, 2);
+                ImGui::TextDisabled("Current on left | Replacement on right");
+            } else if (view.mode == CompareMode::Overlay) {
+                image(old_texture, *old_image);
+                image(new_texture, next, IM_COL32(255, 255, 255, (int)std::lround(255 * view.opacity)));
+                ImGui::TextDisabled("Replacement drawn over current at %.0f%% opacity", 100 * view.opacity);
+            } else if (view.mode == CompareMode::Difference) {
+                const auto &before_pal = t.document.state().assets->data.palettes[t.replace_palette];
+                const auto &after_pal = t.replace_draft.assets->data.palettes[t.replace_palette];
+                auto *texture = replace_diff.get(
+                    {(uint64_t)(uintptr_t)t.replace_original.get(), (uint64_t)(uintptr_t)t.replace_draft.assets.get(),
+                     (uint64_t)old_slot, (uint64_t)t.replace_palette},
+                    [&] { return diff_views(render_indexed_image(*old_image, before_pal), render_indexed_image(next, after_pal)); });
+                if (texture) draw->AddImage((ImTextureID)texture, a, b);
+                outline_changes(replace_diff.diff, a, scale);
+                difference_summary(replace_diff.diff);
+            } else {
+                image(show_after ? new_texture : old_texture, show_after ? next : *old_image);
+                ImGui::TextDisabled("%s", show_after ? "Replacement" : "Current");
+            }
+        }
         ImGui::Separator();
         ImGui::TextWrapped("Image ID, placement coordinates, palette assignments and metadata remain unchanged. Apply is one undoable document edit.");
         if (ImGui::Button("Apply replacement", {150, 0})) {
             if (t.document.replace_image(t.replace_image_id, next.w, next.h, next.pix, error)) {
-                replace_textures.clear(); toast("Replaced artwork in place"); ImGui::CloseCurrentPopup();
+                replace_textures.clear(); replace_diff.clear(); toast("Replaced artwork in place"); ImGui::CloseCurrentPopup();
             }
         }
         ImGui::SameLine();
     }
-    if (ImGui::Button("Cancel", {100, 0})) { replace_textures.clear(); ImGui::CloseCurrentPopup(); }
+    if (ImGui::Button("Cancel", {100, 0})) { replace_textures.clear(); replace_diff.clear(); ImGui::CloseCurrentPopup(); }
     if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
     ImGui::EndPopup();
 }

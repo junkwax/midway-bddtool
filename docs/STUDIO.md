@@ -120,8 +120,19 @@ the selected palette.
 placements, metadata or palette assignments. Indexed TGA retains its indices and
 must carry the selected RGB555 colors. PNG/BMP pixels are mapped exactly into the
 selected palette; opaque colors outside that palette are rejected. The review
-shows current and replacement art side by side. Dimension changes keep placement
-origins fixed and are called out before the single undoable Apply action.
+shows current and replacement art side by side, or in any comparison view
+described below. Dimension changes keep placement origins fixed and are called
+out before the single undoable Apply action.
+
+**Comparison views.** Stage comparison and the replacement review share one
+**View** picker: **Wipe** (drag a split), **Toggle**, **Blink** (adjustable
+interval), **Overlay** (the flattened proposal at adjustable opacity) and
+**Difference**. Difference renders both versions pixel for pixel, dims unchanged
+pixels to gray, marks added pixels green, removed pixels red and recolored
+pixels magenta, outlines the changed region and reports the exact count. In
+stage comparison it covers the current 400×254 camera view, so a lossless
+optimizer proposal reads "No pixel differences" at every camera position you
+check.
 
 **Trim / pad canvas** uses signed edge values: positive values add transparent
 space and negative values remove it. **Trim all transparent borders** calculates

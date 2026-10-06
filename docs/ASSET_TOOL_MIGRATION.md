@@ -655,3 +655,15 @@ history. PNG/BMP colors must map exactly into the selected RGB555 palette;
 indexed TGA retains byte indices and must match that palette. A side-by-side
 review reports dimension changes and placement count. Apply is one undoable edit,
 and a changed document invalidates the draft rather than applying stale pixels.
+
+## Before/after comparison views
+
+Stage comparison and the replacement review share Wipe, Toggle, Blink, Overlay
+and Difference views; the replacement review also keeps Side by side.
+`studio_view_compare` renders the resolved 400×254 camera view on the CPU with
+the editor's layer parallax and compares two RGBA views aligned at the top-left,
+so replacements with new dimensions report gained and lost area. Difference
+counts and bounds are exact; transparent pixels compare equal regardless of
+stored color. Overlay blends the flattened proposal so its own layers never show
+through each other. Covered by `studio_view_compare` tests and the
+`--compare` UI smoke.
