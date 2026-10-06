@@ -667,3 +667,16 @@ counts and bounds are exact; transparent pixels compare equal regardless of
 stored color. Overlay blends the flattened proposal so its own layers never show
 through each other. Covered by `studio_view_compare` tests and the
 `--compare` UI smoke.
+
+## Reusable artwork groups
+
+A group stores each item's image ID, palette, layer, flips, remaining BDB object
+attribute bits (which affect draw order) and offset from the group's top-left in
+resolved stage pixels, in back-to-front order. Placing at the captured origin
+reproduces the source footprint exactly. Mirroring reflects offsets inside the
+group box and toggles each flip; runs step by group width or height plus gap.
+Groups live in `State`, so saving and deleting are undoable, and persist as
+`group` records in `.bddstudio` version 4. That version is written only when a
+stage has groups, so existing layouts stay byte-identical. Loading validates
+image IDs, palettes, layers and limits (64 groups, 256 items, 64 copies). Covered
+by `studio_groups` tests and the `--groups` UI smoke.

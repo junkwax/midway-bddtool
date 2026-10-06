@@ -53,6 +53,25 @@ struct Placement {
     bool hidden = false, locked = false;
     int runtime_dx = 0; // Source-coordinate move supplied by a custom stage generator.
 };
+// A saved arrangement of placements, stored relative to its own top-left in stage pixels.
+struct GroupItem {
+    int image = 0, palette = 0, plane = -1, x = 0, y = 0;
+    int attributes = 0x4000; // BDB object word without the flip bits; its high byte affects draw order.
+    bool flip_x = false, flip_y = false;
+};
+struct ArtworkGroup {
+    std::string name;
+    int width = 0, height = 0;
+    std::vector<GroupItem> items; // Back-to-front draw order.
+};
+struct GroupPlacement {
+    Point origin;              // Stage top-left of the first copy.
+    int target_plane = -1;     // -1 keeps each item's saved layer.
+    bool mirror_x = false, mirror_y = false;
+    int copies = 1, gap = 0;   // Copies run left to right, or top to bottom when vertical.
+    bool vertical = false, alternate = false; // Alternate mirrors every other copy along the run.
+};
+constexpr int kMaxGroups = 64, kMaxGroupItems = 256, kMaxGroupCopies = 64;
 struct State {
     std::shared_ptr<const AssetBank> assets;
     std::vector<Plane> planes;
@@ -63,6 +82,7 @@ struct State {
     int backdrop = -1; // RGB555; -1 leaves the runtime color unspecified.
     bool has_bdb = true;
     std::string runtime_profile;
+    std::vector<ArtworkGroup> groups;
     uint64_t revision = 0;
 };
 // Read-only preparation used by folder import and its review UI.
@@ -128,6 +148,11 @@ class Document {
     bool set_object(ObjectId id, int local_x, int local_y, int palette, bool flip_x, bool flip_y);
     bool assign_plane(const std::vector<ObjectId> &ids, int plane);
     std::vector<ObjectId> duplicate(const std::vector<ObjectId> &ids, int dx = 16, int dy = 0);
+    // Saves visible selected placements as a named group; one undoable edit.
+    bool add_group(const std::vector<ObjectId> &ids, const std::string &name, std::string &error);
+    bool remove_group(size_t index);
+    // Places every copy in one undoable edit and returns the new placements.
+    std::vector<ObjectId> place_group(size_t index, const GroupPlacement &options, std::string &error);
     bool erase(const std::vector<ObjectId> &ids);
     ObjectId place(int image_id, int palette, int plane, Point stage_position);
     bool set_plane(int index, const std::string &name, int x, int y, double scroll);

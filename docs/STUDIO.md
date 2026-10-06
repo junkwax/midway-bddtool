@@ -272,6 +272,20 @@ three or more selections, **Space X** and **Space Y** keep the outer artwork
 fixed and equalize gaps between image edges. The operation spans layer offsets,
 rejects locked selections as a whole, and creates one undo step.
 
+**Artwork groups.** Select placements and choose **Save as group...** in the
+inspector to keep an arrangement, such as a pillar with its capital and base, for
+reuse. Groups appear under **Groups** in Assets with a thumbnail; drag one onto
+the stage to place it centered under the cursor. Placement options apply to
+every drop: **Mirror X/Y** reflects the arrangement and flips its pixels,
+**Copies** and **Gap** lay out a run left to right (or top to bottom with
+**Vertical**), and **Alternate mirror** flips every other copy for paired sides.
+Items return to their saved layers unless **Use selected layer** is on. Each
+drop is one undo step and is rejected as a whole if a target layer is locked.
+Groups save with the stage's `.bddstudio` layout and belong to that stage, since
+they reference its image IDs; delete one from its context menu. If artwork a
+group uses is later removed or split by an optimization, the group reports it
+instead of placing partial art.
+
 This is an authoring preview. Forest tree faces are supported as described below.
 Other runtime actors, animated palette effects, game-specific floor deformation,
 and compiled ROM output are not reproduced or emulator-verified.

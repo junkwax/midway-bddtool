@@ -189,7 +189,7 @@ bool Document::load(const std::string &path, std::string &error) {
             int version = 0;
             uint64_t bh = 0, dh = 0;
             in >> tag >> version >> bh >> dh;
-            if (tag != "BDDSTUDIO" || (version != 1 && version != 2 && version != 3)) {
+            if (tag != "BDDSTUDIO" || version < 1 || version > 4) {
                 error = "Unsupported or damaged studio layout: " + layout.u8string();
                 return false;
             }
@@ -254,6 +254,32 @@ bool Document::load(const std::string &path, std::string &error) {
                         }
                         d.state_.objects[i].hidden = hidden;
                         d.state_.objects[i].locked = locked;
+                    } else if (tag == "group" && version >= 4) {
+                        ArtworkGroup g;
+                        size_t count = 0;
+                        in >> std::quoted(g.name) >> g.width >> g.height >> count;
+                        if (!in || g.name.empty() || g.name.size() > 48 || g.width <= 0 || g.height <= 0 ||
+                            g.width > 100000 || g.height > 100000 || count == 0 ||
+                            count > (size_t)kMaxGroupItems || d.state_.groups.size() >= (size_t)kMaxGroups) {
+                            error = "Invalid artwork group in studio layout.";
+                            return false;
+                        }
+                        for (size_t k = 0; k < count; ++k) {
+                            GroupItem item;
+                            in >> item.image >> item.palette >> item.plane >> item.x >> item.y >>
+                                item.flip_x >> item.flip_y >> item.attributes;
+                            bool known = std::any_of(bank->data.images.begin(), bank->data.images.end(),
+                                                     [&](const BddCoreImage &im) { return im.idx == item.image; });
+                            if (!in || !known || item.palette < 0 ||
+                                item.palette >= (int)bank->data.palettes.size() || item.plane < -1 ||
+                                item.plane >= (int)d.state_.planes.size() || item.attributes < 0 ||
+                                item.attributes > 0xffff) {
+                                error = "Invalid artwork group item in studio layout.";
+                                return false;
+                            }
+                            g.items.push_back(item);
+                        }
+                        d.state_.groups.push_back(std::move(g));
                     } else {
                         error = "Unknown record in studio layout: " + tag;
                         return false;
@@ -1070,7 +1096,8 @@ bool Document::save(const std::string &path, std::string &error, bool recovery) 
         }
         {
             std::ofstream out(files[index++].temp, std::ios::trunc);
-            out << "BDDSTUDIO " << (state_.backdrop >= 0 ? 3 : state_.runtime_profile.empty() ? 1 : 2) << ' '
+            out << "BDDSTUDIO "
+                << (!state_.groups.empty() ? 4 : state_.backdrop >= 0 ? 3 : state_.runtime_profile.empty() ? 1 : 2) << ' '
                 << (output.has_bdb ? file_hash(files[0].temp) : 0) << ' '
                 << file_hash(temp_bdd) << '\n';
             if (!state_.runtime_profile.empty()) {
@@ -1093,6 +1120,15 @@ bool Document::save(const std::string &path, std::string &error, bool recovery) 
             for (size_t i = 0; i < state_.objects.size(); i++)
                 out << "object " << i << ' ' << state_.objects[i].hidden << ' '
                     << state_.objects[i].locked << '\n';
+            for (const auto &g : state_.groups) {
+                out << "group " << std::quoted(g.name) << ' ' << g.width << ' ' << g.height << ' '
+                    << g.items.size();
+                for (const auto &item : g.items)
+                    out << ' ' << item.image << ' ' << item.palette << ' ' << item.plane << ' '
+                        << item.x << ' ' << item.y << ' ' << item.flip_x << ' ' << item.flip_y << ' '
+                        << item.attributes;
+                out << '\n';
+            }
             out.close();
             if (!out) {
                 error = "Could not write studio layout.";

@@ -122,6 +122,9 @@ struct Tab {
     uint64_t replace_revision = 0;
     int replace_image_id = -1, replace_palette = -1;
     CompareView replace_compare{CompareMode::SideBySide};
+    bool group_requested = false, group_on_layer = false;
+    char group_name[49] = {};
+    GroupPlacement group_options;
     std::string replace_source;
     int edit_palette = 0, edit_color = 1, edit_image = -1, block_zoom = 8;
     bool block_grid = true, block_painting = false, block_dirty = false;
@@ -1163,6 +1166,10 @@ class App {
             ImGui::Spacing();
             if (ImGui::Button("Duplicate", ImVec2(-1, 0)))
                 t.selected = doc.duplicate(t.selected);
+            if (ImGui::Button("Save as group...", ImVec2(-1, 0)))
+                open_save_group(t);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Save this arrangement so it can be dragged from Assets as mirrored or repeated copies.");
             if (ImGui::Button("Delete artwork", ImVec2(-1, 0))) {
                 doc.erase(t.selected);
                 t.selected.clear();
@@ -1354,6 +1361,15 @@ class App {
                     else
                         toast("Unlock the selected layer to place artwork.");
                 }
+            }
+            if (const auto *payload = ImGui::AcceptDragDropPayload("STUDIO_GROUP")) {
+                const auto &group = *static_cast<const AssetPayload *>(payload->Data);
+                if (group.tab != t.id)
+                    toast("Groups belong to the stage they were saved in.");
+                else if (t.source)
+                    toast("Switch to Stage composition to place artwork.");
+                else
+                    drop_group(t, (size_t)group.slot, world, cam);
             }
             ImGui::EndDragDropTarget();
         }
@@ -1637,6 +1653,7 @@ class App {
             ImGui::EndDisabled();
             ImGui::SameLine(); ImGui::TextDisabled("Double-click artwork to edit its pixels");
         }
+        groups_strip(t, full);
         const auto bank = t.document.state().assets;
         int cols = std::max(1, (int)(ImGui::GetContentRegionAvail().x / 124));
         if (ImGui::BeginTable("assetgrid", cols, ImGuiTableFlags_SizingStretchSame)) {
@@ -1701,6 +1718,7 @@ class App {
         }
     }
     #include "studio_asset_tools.inc"
+    #include "studio_groups.inc"
     #include "studio_composite.inc"
     #include "studio_floor.inc"
     #include "studio_background.inc"
@@ -4304,7 +4322,7 @@ class App {
             ImGui::TextDisabled("Local files  /  Indexed artwork  /  Stage composition");
         ImGui::End();
         help_share_dialogs();
-        if (auto *t = tab()) { asset_dialogs(*t); composite_dialog(*t); sprite_sheet_dialog(*t); floor_dialog(*t); mk3_layout_dialog(*t); floor_library_window(*t); }
+        if (auto *t = tab()) { asset_dialogs(*t); save_group_dialog(*t); composite_dialog(*t); sprite_sheet_dialog(*t); floor_dialog(*t); mk3_layout_dialog(*t); floor_library_window(*t); }
         prompts();
         recover();
     }
@@ -4711,6 +4729,7 @@ int run(int argc, char **argv) {
         (smoke && argc >= 5 && std::string(argv[4]) == "--animation-analysis");
     bool test_visibility = smoke && argc >= 5 && std::string(argv[4]) == "--visibility";
     bool test_compare = smoke && argc >= 5 && std::string(argv[4]) == "--compare";
+    bool test_groups = smoke && argc >= 5 && std::string(argv[4]) == "--groups";
     bool test_optimize = test_review || test_shared || test_palette_reuse || test_subframes || test_compare ||
                          (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
     bool test_pattern_suggest = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-suggest";
@@ -4886,7 +4905,7 @@ int run(int argc, char **argv) {
             int w, h;
             SDL_GetRendererOutputSize(app.renderer, &w, &h);
             std::vector<uint8_t> rgba((size_t)w * h * 4);
-            std::string name = test_batch_import ? ("batch-" + std::to_string(frames) + ".png") : test_asset_tools ? ("asset-tools-" + std::to_string(frames) + ".png") : test_compare ? ("compare-" + std::to_string(frames) + ".png") : test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
+            std::string name = test_batch_import ? ("batch-" + std::to_string(frames) + ".png") : test_asset_tools ? ("asset-tools-" + std::to_string(frames) + ".png") : test_compare ? ("compare-" + std::to_string(frames) + ".png") : test_groups ? ("groups-" + std::to_string(frames) + ".png") : test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
                                : frames == 3     ? "stage.png"
                                : frames == 7   ? "compact.png"
                                : frames == 11  ? "assets.png"
@@ -5005,6 +5024,34 @@ int run(int argc, char **argv) {
                 app.running = false;
             }
             frames++;
+            if (test_groups && app.tab()) {
+                auto &t = *app.tab(); auto &io = ImGui::GetIO();
+                io.ConfigInputTrickleEventQueue = false;
+                if (frames == 2) {
+                    auto scene = t.document.scene();
+                    t.selected = {scene[0].id, scene[1].id};
+                    app.open_save_group(t);
+                }
+                if (frames == 4 || frames == 5) io.AddKeyEvent(ImGuiKey_Enter, frames == 4);
+                if (frames == 7) {
+                    const auto &groups = t.document.state().groups;
+                    if (groups.size() != 1 || groups[0].name != "Group 1" || groups[0].items.size() != 2 || ImGui::IsPopupOpen("Save artwork group", ImGuiPopupFlags_AnyPopupId)) {
+                        std::fprintf(stderr, "Save group dialog did not save through Enter: %s\n", app.error.c_str());
+                        rc = 1; app.running = false;
+                    }
+                }
+                if (frames == 9) { t.group_options.copies = 3; t.group_options.alternate = true; t.group_options.gap = 8; }
+                if (frames == 12) {
+                    size_t before = t.document.state().objects.size();
+                    if (!app.drop_group(t, 0, {300, 160}, t.camera) || t.selected.size() != 6 ||
+                        t.document.state().objects.size() != before + 6) {
+                        std::fprintf(stderr, "Group drop placed %zu items.\n", t.selected.size());
+                        rc = 1; app.running = false;
+                    }
+                }
+                if (frames == 16 && rc == 0)
+                    std::fprintf(stderr, "Groups UI: save dialog, groups strip and alternating drop passed.\n");
+            }
             if (test_compare && app.tab()) {
                 auto &t = *app.tab();
                 if (frames == 6) {
