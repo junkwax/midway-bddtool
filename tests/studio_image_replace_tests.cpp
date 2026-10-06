@@ -1,6 +1,7 @@
 #include "Core/studio_image_replace.h"
 #include "Core/studio_tga_export.h"
 #include "Core/studio_document.h"
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
@@ -32,6 +33,19 @@ int main() {
         require(document.state().revision != revision && document.undo(), "Replacement was not undoable");
         auto *restored = document.image(id); require(restored && (restored->w != 2 || restored->h != 2), "Undo did not restore artwork");
         require(document.redo() && document.image(id)->w == 2, "Redo did not restore replacement");
+        // Padding must compensate normal and flipped placements differently.
+        auto before_canvas = document.scene();
+        require(document.resize_image_canvas(id, 2, 4, 3, 5, error), error.c_str());
+        auto after_canvas = document.scene();
+        for (const auto &before : before_canvas) if (before.id && document.object(before.id)->object.ii == id) {
+            auto after = std::find_if(after_canvas.begin(), after_canvas.end(), [&](const SceneItem &i) { return i.id == before.id; });
+            require(after != after_canvas.end(), "Canvas resize lost placement");
+            require(after->rect.x == before.rect.x - (before.hflip ? 3 : 2), "Horizontal flip compensation failed");
+            require(after->rect.y == before.rect.y - (before.vflip ? 5 : 4), "Vertical flip compensation failed");
+        }
+        require(document.resize_image_canvas(id, -2, -4, -3, -5, error), error.c_str());
+        require(document.image(id)->w == 2 && document.image(id)->h == 2, "Transparent trim did not restore canvas");
+        require(!document.resize_image_canvas(id, -1, 0, 0, 0, error), "Visible pixel trim was accepted");
         std::cout << "PNG mapping, indexed TGA round trip, in-place identity and undo/redo passed\n";
     } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }
 }

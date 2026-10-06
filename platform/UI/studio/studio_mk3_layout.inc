@@ -1,6 +1,7 @@
 bool apply_layout_review(Tab &t) {
     if (!t.document.apply_mk3_layout(t.mk3_layout, error)) return false;
     t.camera = {double(t.document.state().start_x), double(t.document.state().start_y)};
+    t.camera_ground = t.document.state().ground;
     t.camera_preview = true; t.source = false; t.solo = -1; t.fit = true;
     t.selected.clear(); t.focus_object = 0;
     t.camera_check_options.min_x = t.document.state().start_x;
@@ -17,6 +18,7 @@ void mk3_layout_dialog(Tab &t) {
     asset_modal_size(780, 550);
     if (!ImGui::BeginPopupModal("Game layout", nullptr, ImGuiWindowFlags_NoResize)) return;
     ImGui::TextWrapped("BDB/BDD module rectangles describe the source sheet. MK3's MKBT.ASM supplies the game camera, layer offsets, centering, parallax and draw order.");
+    ImGui::TextWrapped("MKBT.ASM is optional for editing the start camera and ground. Close this dialog and use the camera controls below the stage; without runtime definitions the preview uses editable 1:1 layer positions.");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 95);
     if (ImGui::InputTextWithHint("##layout-source", "MK3 source file: MKBT.ASM", t.layout_source, sizeof t.layout_source)) t.mk3_layout = {};
     ImGui::SameLine();

@@ -95,6 +95,14 @@ loads a review draft and updates the swatches, but does not modify the document
 until **Apply palette**. Unsupported formats, malformed words, extra data and
 files over 16 KiB are rejected.
 
+The palette editor also reports usage for the selected artwork: opaque color
+count, highest index, current minimum LOAD2 BPP, the dense-index BPP opportunity,
+and the exact indices blocking 4 or 2 BPP. LOAD2 uses every integer width from
+1 through 8 BPP. Unused swatches are crossed out
+and every swatch reports its pixel count on hover. This is analysis only; index
+remapping remains a separate reviewed optimization because other palette variants
+and runtime cycling can depend on index identity.
+
 **Assets → Export artwork sheet** creates a transparent PNG containing either
 the full BDD artwork library or only images used by visible placements. Choose
 the column count and cell padding; images are centered without resampling. A
@@ -114,6 +122,13 @@ must carry the selected RGB555 colors. PNG/BMP pixels are mapped exactly into th
 selected palette; opaque colors outside that palette are rejected. The review
 shows current and replacement art side by side. Dimension changes keep placement
 origins fixed and are called out before the single undoable Apply action.
+
+**Trim / pad canvas** uses signed edge values: positive values add transparent
+space and negative values remove it. **Trim all transparent borders** calculates
+the tight lossless crop automatically. Every placement is compensated according
+to its X/Y flip state, keeping visible pixels fixed on the stage. Crops touching
+visible pixels and artwork carrying animation/LOD anchors are rejected. The
+dialog also warns when the resulting width violates LOAD2's four-pixel alignment.
 
 ## Background color
 
@@ -233,6 +248,18 @@ Stages with runtime bindings open in camera preview automatically. The camera
 frame is 400×254; areas outside it are shaded. Scrub the camera horizontally or
 change its Y coordinate, return to **Start**, or choose **Set start**. Layer
 editing remains available in camera preview.
+
+Camera editing does not require `MKBT.ASM`. Standalone and unfinished BDB maps
+open with an editable 1:1 camera fallback. Enter unrestricted X/Y values below
+the stage, edit Ground, and use **Set start**; these values save with the editor
+layout. A runtime layout improves layer offsets, parallax and draw order, but its
+absence no longer disables camera controls or limits X to current artwork bounds.
+
+When two or more placements are selected, the inspector provides left, center,
+right, top, middle and bottom alignment in resolved stage coordinates. With
+three or more selections, **Space X** and **Space Y** keep the outer artwork
+fixed and equalize gaps between image edges. The operation spans layer offsets,
+rejects locked selections as a whole, and creates one undo step.
 
 This is an authoring preview. Forest tree faces are supported as described below.
 Other runtime actors, animated palette effects, game-specific floor deformation,

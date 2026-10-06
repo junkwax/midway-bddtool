@@ -133,7 +133,67 @@ void replace_artwork_dialog(Tab &t) {
     if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
     ImGui::EndPopup();
 }
-void palette_swatches(const BddCorePalette &pal, int &selected) {
+
+void open_canvas_resize(Tab &t) {
+    cancel_gesture(); error.clear();
+    const auto bank = t.document.state().assets;
+    if (t.asset < 0 || t.asset >= (int)bank->data.images.size()) return;
+    t.canvas_image_id = bank->data.images[t.asset].idx;
+    std::fill(std::begin(t.canvas_edges), std::end(t.canvas_edges), 0);
+    t.canvas_requested = true;
+}
+
+void canvas_resize_dialog(Tab &t) {
+    if (t.canvas_requested) { ImGui::OpenPopup("Trim or pad artwork canvas"); t.canvas_requested = false; }
+    asset_modal_size(590, 470);
+    if (!ImGui::BeginPopupModal("Trim or pad artwork canvas", nullptr, ImGuiWindowFlags_NoResize)) return;
+    size_t slot = 0; const auto *im = t.document.image(t.canvas_image_id, &slot);
+    if (!im) { ImGui::TextUnformatted("Artwork is no longer available."); }
+    else {
+        ImGui::Text("Image %d  |  Current canvas %d x %d", im->idx, im->w, im->h);
+        ImGui::TextWrapped("Positive values add transparent pixels. Negative values trim transparent pixels. Every placement is compensated so visible artwork stays fixed, including flipped uses.");
+        if (ImGui::Button("Trim all transparent borders")) {
+            int minx = im->w, miny = im->h, maxx = -1, maxy = -1;
+            for (int y = 0; y < im->h; ++y) for (int x = 0; x < im->w; ++x)
+                if (im->pix[size_t(y) * im->w + x]) {
+                    minx = std::min(minx, x); miny = std::min(miny, y);
+                    maxx = std::max(maxx, x); maxy = std::max(maxy, y);
+                }
+            if (maxx < 0) error = "Completely transparent artwork cannot be auto-trimmed.";
+            else {
+                t.canvas_edges[0] = -minx; t.canvas_edges[1] = -miny;
+                t.canvas_edges[2] = -(im->w - 1 - maxx); t.canvas_edges[3] = -(im->h - 1 - maxy);
+            }
+        }
+        ImGui::Spacing();
+        ImGui::SetNextItemWidth(110); ImGui::InputInt("Left", &t.canvas_edges[0]);
+        ImGui::SameLine(); ImGui::SetNextItemWidth(110); ImGui::InputInt("Top", &t.canvas_edges[1]);
+        ImGui::SetNextItemWidth(110); ImGui::InputInt("Right", &t.canvas_edges[2]);
+        ImGui::SameLine(); ImGui::SetNextItemWidth(110); ImGui::InputInt("Bottom", &t.canvas_edges[3]);
+        int width = im->w + t.canvas_edges[0] + t.canvas_edges[2];
+        int height = im->h + t.canvas_edges[1] + t.canvas_edges[3];
+        bool valid_size = width > 0 && height > 0 && width <= 4096 && height <= 4096 && uint64_t(width) * height <= 16000000;
+        ImGui::Text("Result: %d x %d", width, height);
+        if (valid_size && width % BDD_CORE_MK2_BG_WIDTH_ALIGN)
+            ImGui::TextColored(ImVec4(1, .72f, .25f, 1), "Width is not divisible by 4 and may shear in LOAD2.");
+        if (!valid_size) ImGui::TextColored(ImVec4(1, .45f, .35f, 1), "Resulting dimensions are invalid or exceed safe limits.");
+        ImGui::TextDisabled("Visible pixels, IDs, palettes, metadata, layer ownership and draw order remain unchanged.");
+        ImGui::Separator();
+        ImGui::BeginDisabled(!valid_size || !(t.canvas_edges[0] || t.canvas_edges[1] || t.canvas_edges[2] || t.canvas_edges[3]));
+        if (ImGui::Button("Apply canvas change", {155, 0})) {
+            if (t.document.resize_image_canvas(t.canvas_image_id, t.canvas_edges[0], t.canvas_edges[1],
+                                               t.canvas_edges[2], t.canvas_edges[3], error)) {
+                toast("Resized artwork canvas without moving visible pixels"); ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndDisabled(); ImGui::SameLine();
+    }
+    if (ImGui::Button("Cancel", {100, 0})) ImGui::CloseCurrentPopup();
+    if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
+    ImGui::EndPopup();
+}
+void palette_swatches(const BddCorePalette &pal, int &selected,
+                      const std::array<uint64_t, 256> *usage = nullptr) {
     int cols = std::max(1, std::min(16, (int)(ImGui::GetContentRegionAvail().x / 28)));
     for (int i = 0; i < pal.count; ++i) {
         ImGui::PushID(i);
@@ -143,7 +203,15 @@ void palette_swatches(const BddCorePalette &pal, int &selected) {
                  (color & 255) / 255.f, i ? 1.f : 0.f);
         if (ImGui::ColorButton("##color", c, ImGuiColorEditFlags_NoTooltip, {24, 24})) selected = i;
         if (i == selected) ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), selection_color, 0, 0, 2);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Index %d%s\nRGB555: %04X", i, i ? "" : " (transparent)", pal.rgb555[i]);
+        if (usage && !(*usage)[i]) {
+            auto a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddLine(a, b, IM_COL32(190, 200, 212, 150), 1);
+            ImGui::GetWindowDrawList()->AddLine({a.x, b.y}, {b.x, a.y}, IM_COL32(190, 200, 212, 150), 1);
+        }
+        if (ImGui::IsItemHovered()) {
+            if (usage) ImGui::SetTooltip("Index %d%s\nRGB555: %04X\n%llu pixels", i, i ? "" : " (transparent)", pal.rgb555[i], (unsigned long long)(*usage)[i]);
+            else ImGui::SetTooltip("Index %d%s\nRGB555: %04X", i, i ? "" : " (transparent)", pal.rgb555[i]);
+        }
         ImGui::PopID();
     }
 }
@@ -155,6 +223,7 @@ void asset_modal_size(float w, float h) {
 void asset_dialogs(Tab &t) {
     batch_import_dialog(t);
     replace_artwork_dialog(t);
+    canvas_resize_dialog(t);
     if (t.import_requested) { ImGui::OpenPopup("Import IMG artwork"); t.import_requested = false; }
     if (t.palette_requested) { ImGui::OpenPopup("Palette editor"); t.palette_requested = false; }
     if (t.block_requested) { ImGui::OpenPopup("Block editor"); t.block_requested = false; }
@@ -214,9 +283,13 @@ void asset_dialogs(Tab &t) {
         if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
         ImGui::EndPopup();
     }
-    asset_modal_size(590, 660);
+    asset_modal_size(590, 820);
     if (ImGui::BeginPopupModal("Palette editor", nullptr, ImGuiWindowFlags_NoResize)) {
         const auto bank = t.document.state().assets;
+        // The color picker and Apply/Close stay pinned below; everything above scrolls.
+        float footer = 2 * ImGui::GetTextLineHeightWithSpacing() + 2 * ImGui::GetFrameHeightWithSpacing() +
+                       (error.empty() ? 0 : 2 * ImGui::GetTextLineHeightWithSpacing());
+        ImGui::BeginChild("palette-body", {0, -footer});
         ImGui::TextWrapped("Editing this palette changes every artwork placement that uses it.");
         ImGui::SetNextItemWidth(350);
         std::string title = std::to_string(t.edit_palette) + ": " + t.palette_draft.name;
@@ -325,8 +398,34 @@ void asset_dialogs(Tab &t) {
             }
         }
         t.edit_color = std::clamp(t.edit_color, 0, t.palette_draft.count - 1);
-        ImGui::BeginChild("swatches", {0, std::max(90.f, ImGui::GetContentRegionAvail().y - 155)}, true);
-        palette_swatches(t.palette_draft, t.edit_color);
+        PaletteUsage usage;
+        const auto *usage_image = t.document.image(t.edit_image);
+        if (usage_image) usage = analyze_palette_usage(*usage_image);
+        // Collapsed by default so Apply stays visible at compact window sizes.
+        std::string usage_title = usage_image ? "Selected artwork usage: " + std::to_string(usage.used_colors) +
+            " colors, " + std::to_string(usage.current_bpp) + " BPP###palette-usage" : "";
+        if (usage_image && ImGui::CollapsingHeader(usage_title.c_str())) {
+            ImGui::Text("%d opaque colors | highest index %d | %d BPP", usage.used_colors,
+                        usage.max_index, usage.current_bpp);
+            if (usage.compact_bpp < usage.current_bpp)
+                ImGui::TextColored(accent, "Dense indices could reach %d BPP (about %llu raw bytes less)",
+                                   usage.compact_bpp, (unsigned long long)usage.raw_saving_bytes);
+            else ImGui::TextDisabled("Indices are already within the smallest BPP tier for this color count.");
+            const auto &blockers = usage.current_bpp > 4 ? usage.blocks_4bpp : usage.blocks_2bpp;
+            if (!blockers.empty()) {
+                std::string text = usage.current_bpp > 4 ? "Indices keeping this above 4 BPP: " :
+                                                          "Indices keeping this above 2 BPP: ";
+                for (size_t i = 0; i < blockers.size() && i < 16; ++i) {
+                    if (i) text += ", "; text += std::to_string(blockers[i]);
+                }
+                if (blockers.size() > 16) text += ", ...";
+                ImGui::TextWrapped("%s", text.c_str());
+            }
+            ImGui::TextDisabled("Crossed swatches are unused by this artwork. Counts are shown on hover.");
+        }
+        ImGui::BeginChild("swatches", {0, std::max(120.f, ImGui::GetContentRegionAvail().y)}, true);
+        palette_swatches(t.palette_draft, t.edit_color, usage_image ? &usage.pixels : nullptr);
+        ImGui::EndChild();
         ImGui::EndChild();
         ImGui::Text("Color %d%s", t.edit_color, t.edit_color ? "" : " (transparent)");
         auto word = t.palette_draft.rgb555[t.edit_color];

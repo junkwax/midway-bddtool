@@ -479,7 +479,7 @@ undo/redo, optimizer/export regressions, and the 900×640 `--palettes` UI smoke.
 | Palette unions, near-color grouping and delete-unused | Exact duplicate consolidation is now in Optimize; keep broader transformations deferred until consumer/reference checks can prove their scope |
 | Palette brightness/contrast, tone matching and blending | Brightness, contrast, saturation and index-preserving blend are now in the palette editor; automatic semantic tone matching remains deferred |
 | Palette export/import and palette-animation tooling | RGB555 palette exchange is migrated; runtime palette animation remains a separate workflow |
-| Manual crop/split/merge controls | Add only when the verified focused Subframes search cannot express a real stage edit; preserve placement/metadata and reuse the same review/apply path |
+| Manual crop/split/merge controls | Lossless transparent trim/pad is migrated with flipped-placement compensation; verified Subframes handles splitting; arbitrary destructive crop/merge remains deferred |
 | Sprite-sheet/composite/TGA export | Migrated: resolved composites, metadata-backed artwork sheets, and lossless selected-image RGB555 indexed TGA |
 
 Folder import scans one directory, up to 2,048 raster filenames, and reviews up
@@ -635,6 +635,16 @@ final document edit remains undoable. The parser rejects foreign headers,
 invalid counts or hex words, missing and trailing data, oversized files and
 overlong names. Palette animation remains separate because a static color list
 cannot describe timing, slot ownership or runtime cycling behavior.
+
+## Palette usage inspector
+
+The palette editor analyzes the selected image's index histogram and displays
+opaque color count, highest index, current LOAD2 BPP, dense-index potential and
+the exact indices preventing 4 or 2 BPP. LOAD2's exact 1-8 bit width is retained
+rather than presented as desktop-style 2/4/8 tiers. Crossed swatches are unused and
+tooltips show pixel counts. The raw-byte figure is explicitly an uncompressed
+estimate. Analysis does not silently compact indices because alternate palette
+variants, animation and runtime cycling can give those indices external meaning.
 
 ## Replace artwork in place
 

@@ -78,6 +78,7 @@ struct SceneItem {
     bool hflip = false, vflip = false, locked = false;
 };
 enum class IssueGroup { References, Artwork, Load2, Layers, Camera, Export };
+enum class ArrangeMode { Left, CenterX, Right, Top, CenterY, Bottom, DistributeX, DistributeY };
 struct Issue {
     std::string message;
     ObjectId object = 0;
@@ -123,6 +124,7 @@ class Document {
     const char *undo_label() const;
     const char *redo_label() const;
     bool move(const std::vector<ObjectId> &ids, int dx, int dy);
+    bool arrange(const std::vector<ObjectId> &ids, ArrangeMode mode, std::string &error);
     bool set_object(ObjectId id, int local_x, int local_y, int palette, bool flip_x, bool flip_y);
     bool assign_plane(const std::vector<ObjectId> &ids, int plane);
     std::vector<ObjectId> duplicate(const std::vector<ObjectId> &ids, int dx = 16, int dy = 0);
@@ -149,6 +151,9 @@ class Document {
     bool set_image_pixels(int image_id, const std::vector<uint8_t> &pixels, std::string &error);
     bool replace_image(int image_id, int width, int height, const std::vector<uint8_t> &pixels,
                        std::string &error);
+    // Signed edge changes: positive pads transparency, negative trims it.
+    bool resize_image_canvas(int image_id, int left, int top, int right, int bottom,
+                             std::string &error);
     bool apply_optimization(const OptimizationPlan &plan, std::string &error);
     bool apply_palette_consolidation(const PaletteConsolidation &plan,
                                      bool runtime_slots_reviewed, std::string &error);

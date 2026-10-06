@@ -21,6 +21,7 @@
 #include "Core/studio_tga_export.h"
 #include "Core/studio_palette_file.h"
 #include "Core/studio_image_replace.h"
+#include "Core/studio_palette_usage.h"
 #include "Core/app_version.h"
 #include <future>
 #include <fstream>
@@ -106,6 +107,8 @@ struct Tab {
     ImGuiTextFilter import_filter;
     bool import_requested = false, palette_requested = false, block_requested = false;
     bool replace_requested = false;
+    bool canvas_requested = false;
+    int canvas_image_id = -1, canvas_edges[4] = {};
     State replace_draft;
     std::shared_ptr<const AssetBank> replace_original;
     uint64_t replace_revision = 0;
@@ -124,6 +127,7 @@ struct Tab {
     std::vector<std::vector<uint8_t>> block_undo, block_redo;
     bool fit = true, source = false, camera_preview = false, move_layer = false, hand_tool = false;
     Point camera;
+    int camera_ground = 230;
     double next_recovery = 0;
     uint64_t recovered_revision = 0;
     char game_root[1024] = {}, game_label[96] = {};
@@ -361,6 +365,7 @@ class App {
             t->optimize_options.max_added_objects = 24;
         }
         t->camera = {(double)t->document.state().start_x, (double)t->document.state().start_y};
+        t->camera_ground = t->document.state().ground;
         t->camera_check_options.min_x = t->document.state().start_x;
         t->camera_check_options.max_x = std::max(t->document.state().start_x, t->document.state().world_w - 400);
         t->camera_check_options.min_y = t->camera_check_options.max_y = t->document.state().start_y;
@@ -368,9 +373,9 @@ class App {
             std::max(t->document.state().start_x, t->document.state().world_w - 400),
             t->document.state().start_y, t->document.state().start_y};
         t->visibility_camera = t->camera;
-        t->camera_preview =
-            std::any_of(t->document.state().planes.begin(), t->document.state().planes.end(),
-                        [](const Plane &p) { return p.bound; });
+        // Runtime bindings improve fidelity, but standalone/unfinished maps still get an
+        // editable 1:1 camera instead of losing camera authoring entirely.
+        t->camera_preview = t->document.state().has_bdb && !t->document.state().objects.empty();
         t->next_recovery = ImGui::GetTime() + 60;
         if (!t->document.path().empty()) {
             auto root = fs::u8path(t->document.path()).parent_path().parent_path();
@@ -824,6 +829,7 @@ class App {
                 if (ImGui::MenuItem("Edit block pixels...", nullptr, false, available)) open_block_editor(*t);
                 if (ImGui::MenuItem("Edit palette...", nullptr, false, available)) open_palette_editor(*t);
                 if (ImGui::MenuItem("Replace selected artwork...", nullptr, false, available)) open_replace_artwork(*t);
+                if (ImGui::MenuItem("Trim or pad selected canvas...", nullptr, false, available)) open_canvas_resize(*t);
                 if (ImGui::MenuItem("Export selected artwork as PNG...", nullptr, false, available)) export_asset_png(*t);
                 if (ImGui::MenuItem("Export selected artwork as indexed TGA...", nullptr, false, available)) export_asset_tga(*t);
                 if (ImGui::MenuItem("Export artwork sheet...", nullptr, false, available)) t->sheet_requested = true;
@@ -1049,12 +1055,42 @@ class App {
                 }
                 if (ImGui::Button("Find subframes...", ImVec2(-1, 0)))
                     open_subframe_workshop(t, im->idx);
+                if (ImGui::Button("Trim / pad canvas...", ImVec2(-1, 0))) {
+                    t.asset = (int)slot; open_canvas_resize(t);
+                }
             }
             const Plane *plane = p.plane >= 0 ? &s.planes[p.plane] : nullptr;
-            bool locked = p.locked || (plane && plane->locked);
+            bool locked = false;
+            for (auto id : t.selected) if (const auto *selected = doc.object(id)) {
+                const Plane *selected_plane = selected->plane >= 0 && selected->plane < (int)s.planes.size()
+                    ? &s.planes[selected->plane] : nullptr;
+                locked |= selected->locked || (selected_plane && selected_plane->locked);
+            }
             if (locked)
-                ImGui::TextColored(accent, "Layer is locked");
+                ImGui::TextColored(accent, "A selected placement or layer is locked");
             ImGui::BeginDisabled(locked);
+            if (t.selected.size() >= 2) {
+                ImGui::SeparatorText("Arrange selection");
+                auto arrange = [&](const char *label, ArrangeMode mode) {
+                    if (ImGui::Button(label, {64, 0})) {
+                        std::string why;
+                        if (doc.arrange(t.selected, mode, why)) toast("Arranged selected artwork");
+                        else toast(why);
+                    }
+                };
+                arrange("Left", ArrangeMode::Left); ImGui::SameLine();
+                arrange("Center X", ArrangeMode::CenterX); ImGui::SameLine();
+                arrange("Right", ArrangeMode::Right);
+                arrange("Top", ArrangeMode::Top); ImGui::SameLine();
+                arrange("Center Y", ArrangeMode::CenterY); ImGui::SameLine();
+                arrange("Bottom", ArrangeMode::Bottom);
+                if (t.selected.size() >= 3) {
+                    arrange("Space X", ArrangeMode::DistributeX); ImGui::SameLine();
+                    arrange("Space Y", ArrangeMode::DistributeY);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Keep the outer items fixed and equalize the gaps between artwork edges.");
+                }
+                ImGui::Spacing();
+            }
             int xy[] = {p.object.depth - (plane ? plane->source.x1 : 0),
                         p.object.sy - (plane ? plane->source.y1 : 0)};
             bool fx = (p.object.wx & 16) != 0, fy = (p.object.wx & 32) != 0;
@@ -1559,6 +1595,7 @@ class App {
             ImGui::SameLine();
             if (ImGui::Button("Palette...")) open_palette_editor(t);
             ImGui::SameLine(); if (ImGui::Button("Replace...")) open_replace_artwork(t);
+            ImGui::SameLine(); if (ImGui::Button("Canvas...")) open_canvas_resize(t);
             ImGui::SameLine();
             if (ImGui::Button("Export PNG...")) export_asset_png(t);
             ImGui::SameLine(); if (ImGui::Button("Export TGA...")) export_asset_tga(t);
@@ -1601,6 +1638,7 @@ class App {
                     if (ImGui::MenuItem("Edit block pixels...")) open_block_editor(t);
                     if (ImGui::MenuItem("Edit palette...")) open_palette_editor(t);
                     if (ImGui::MenuItem("Replace artwork...")) open_replace_artwork(t);
+                    if (ImGui::MenuItem("Trim or pad canvas...")) open_canvas_resize(t);
                     if (ImGui::MenuItem("Export PNG...")) export_asset_png(t);
                     if (ImGui::MenuItem("Export indexed TGA...")) export_asset_tga(t);
                     if (ImGui::MenuItem("Find lossless subframes..."))
@@ -3716,7 +3754,7 @@ class App {
         layout_open_point = item_center();
         ImGui::SameLine(); background_controls(t);
         if (std::none_of(t.document.state().planes.begin(), t.document.state().planes.end(), [](const Plane &p) { return p.bound; })) {
-            ImGui::SameLine(); ImGui::TextDisabled("Source-sheet positions; load a game layout to align the frame.");
+            ImGui::SameLine(); ImGui::TextDisabled("Editable 1:1 camera fallback; game layout improves layer alignment.");
         }
         if (active_floor(t).ready() && floor_context_current(t)) {
             ImGui::SameLine(); ImGui::Checkbox("Floor reference", &t.show_floor);
@@ -3792,26 +3830,29 @@ class App {
         ImGui::BeginChild("inspector", ImVec2(0, body_h), ImGuiChildFlags_Border);
         inspector(t);
         ImGui::EndChild();
-        ImGui::BeginDisabled(!t.camera_preview);
         if (ImGui::Button("Start")) {
             t.camera = {(double)t.document.state().start_x, (double)t.document.state().start_y};
+            t.camera_ground = t.document.state().ground;
+            t.source = false; t.camera_preview = true; t.fit = true;
         }
         ImGui::SameLine();
         float cx = (float)t.camera.x;
-        Rect b = t.document.bounds();
-        ImGui::SetNextItemWidth(std::max(120.0f, width - 450));
-        if (ImGui::SliderFloat("##camera", &cx, (float)b.x, (float)std::max(b.x, b.x + b.w - 400),
-                               "Camera X %.0f"))
-            t.camera.x = std::round(cx);
+        ImGui::SetNextItemWidth(std::max(120.0f, width - 600));
+        if (ImGui::DragFloat("X##camera", &cx, 1, -32768, 32767, "Camera X %.0f")) {
+            t.camera.x = std::round(cx); t.source = false; t.camera_preview = true;
+        }
         ImGui::SameLine();
         int cy = (int)t.camera.y;
-        ImGui::SetNextItemWidth(100);
-        if (ImGui::InputInt("Y", &cy))
-            t.camera.y = cy;
+        ImGui::SetNextItemWidth(76);
+        if (ImGui::DragInt("Y", &cy, 1, -32768, 32767)) { t.camera.y = cy; t.source = false; t.camera_preview = true; }
         ImGui::SameLine();
-        if (ImGui::Button("Set start"))
-            t.document.set_start((int)t.camera.x, (int)t.camera.y, t.document.state().ground);
-        ImGui::EndDisabled();
+        ImGui::SetNextItemWidth(76);
+        ImGui::DragInt("Ground", &t.camera_ground, 1, -32768, 32767);
+        ImGui::SameLine();
+        if (ImGui::Button("Set start")) {
+            t.document.set_start((int)t.camera.x, (int)t.camera.y, t.camera_ground);
+            t.source = false; t.camera_preview = true;
+        }
         if (tray) {
             ImGui::BeginChild("assettray", ImVec2(0, tray_h), ImGuiChildFlags_Border);
             assets(t, false);

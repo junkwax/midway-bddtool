@@ -675,6 +675,68 @@ bool Document::set_start(int x, int y, int ground) {
     commit();
     return true;
 }
+bool Document::arrange(const std::vector<ObjectId> &ids, ArrangeMode mode, std::string &error) {
+    error.clear();
+    if (active_) { error = "Finish the current edit before arranging artwork."; return false; }
+    std::vector<SceneItem> items;
+    for (const auto &item : scene()) if (selected(ids, item.id)) items.push_back(item);
+    const bool distribute = mode == ArrangeMode::DistributeX || mode == ArrangeMode::DistributeY;
+    if (items.size() < (distribute ? 3u : 2u)) {
+        error = distribute ? "Select at least three visible placements to distribute." :
+                             "Select at least two visible placements to align.";
+        return false;
+    }
+    for (const auto &item : items) {
+        const auto *p = object(item.id);
+        if (!p || !editable(*p)) { error = "Unlock every selected placement and layer before arranging."; return false; }
+    }
+    std::map<ObjectId, std::pair<int, int>> delta;
+    if (!distribute) {
+        double left = items.front().rect.x, top = items.front().rect.y;
+        double right = left + items.front().rect.w, bottom = top + items.front().rect.h;
+        for (const auto &item : items) {
+            left = std::min(left, item.rect.x); top = std::min(top, item.rect.y);
+            right = std::max(right, item.rect.x + item.rect.w);
+            bottom = std::max(bottom, item.rect.y + item.rect.h);
+        }
+        for (const auto &item : items) {
+            double x = item.rect.x, y = item.rect.y;
+            if (mode == ArrangeMode::Left) x = left;
+            else if (mode == ArrangeMode::CenterX) x = (left + right - item.rect.w) * .5;
+            else if (mode == ArrangeMode::Right) x = right - item.rect.w;
+            else if (mode == ArrangeMode::Top) y = top;
+            else if (mode == ArrangeMode::CenterY) y = (top + bottom - item.rect.h) * .5;
+            else if (mode == ArrangeMode::Bottom) y = bottom - item.rect.h;
+            delta[item.id] = {(int)std::llround(x - item.rect.x), (int)std::llround(y - item.rect.y)};
+        }
+    } else {
+        bool horizontal = mode == ArrangeMode::DistributeX;
+        std::stable_sort(items.begin(), items.end(), [&](const SceneItem &a, const SceneItem &b) {
+            return horizontal ? std::tie(a.rect.x, a.id) < std::tie(b.rect.x, b.id) :
+                                std::tie(a.rect.y, a.id) < std::tie(b.rect.y, b.id);
+        });
+        double first = horizontal ? items.front().rect.x : items.front().rect.y;
+        double end = horizontal ? items.back().rect.x + items.back().rect.w : items.back().rect.y + items.back().rect.h;
+        double occupied = 0;
+        for (const auto &item : items) occupied += horizontal ? item.rect.w : item.rect.h;
+        double gap = (end - first - occupied) / double(items.size() - 1), cursor = first;
+        for (const auto &item : items) {
+            int dx = 0, dy = 0;
+            if (horizontal) { dx = (int)std::llround(cursor - item.rect.x); cursor += item.rect.w + gap; }
+            else { dy = (int)std::llround(cursor - item.rect.y); cursor += item.rect.h + gap; }
+            delta[item.id] = {dx, dy};
+        }
+    }
+    begin(distribute ? "Distribute artwork" : "Align artwork");
+    for (auto &p : state_.objects) if (auto found = delta.find(p.id); found != delta.end()) {
+        p.object.depth = std::clamp(p.object.depth + found->second.first, -100000, 100000);
+        p.object.sy = std::clamp(p.object.sy + found->second.second, -100000, 100000);
+        if (found->second.first || found->second.second) touch();
+    }
+    bool changed = changed_; commit();
+    if (!changed) error = "The selected placements are already arranged that way.";
+    return changed;
+}
 bool Document::set_backdrop(int rgb555) {
     if (active_ || rgb555 < -1 || rgb555 > 32767) return false;
     if (state_.backdrop == rgb555) return true;

@@ -297,4 +297,41 @@ bool Document::replace_image(int id, int width, int height, const std::vector<ui
     auto &next = bank->data.images[slot]; next.w = width; next.h = height; next.pix = pixels;
     begin("Replace artwork in place"); state_.assets = bank; touch(); commit(); error.clear(); return true;
 }
+
+bool Document::resize_image_canvas(int id, int left, int top, int right, int bottom,
+                                   std::string &error) {
+    error.clear(); size_t slot = 0; const auto *im = image(id, &slot);
+    if (active_ || !im) { error = "Artwork is unavailable or another edit is unfinished."; return false; }
+    if (!left && !top && !right && !bottom) { error = "Canvas edges are unchanged."; return false; }
+    int width = im->w + left + right, height = im->h + top + bottom;
+    if (width <= 0 || height <= 0 || width > 4096 || height > 4096 || uint64_t(width) * height > 16000000) {
+        error = "Resulting canvas exceeds 4096 pixels or 16 million pixels."; return false;
+    }
+    if (slot < state_.assets->metadata.size()) {
+        const auto &m = state_.assets->metadata[slot];
+        if (m.anix || m.aniy || m.anix2 || m.aniy2 || m.aniz2 || m.frm || m.opals || m.pttblnum || m.lod_ref) {
+            error = "Artwork carries animation or LOD anchors; canvas resizing is disabled to preserve them."; return false;
+        }
+    }
+    for (int y = 0; y < im->h; ++y) for (int x = 0; x < im->w; ++x) if (im->pix[size_t(y) * im->w + x]) {
+        int nx = x + left, ny = y + top;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+            error = "Canvas trim would remove visible pixels. Only transparent borders can be trimmed."; return false;
+        }
+    }
+    std::vector<uint8_t> pixels(size_t(width) * height, 0);
+    for (int y = 0; y < im->h; ++y) for (int x = 0; x < im->w; ++x) {
+        int nx = x + left, ny = y + top;
+        if (nx >= 0 && ny >= 0 && nx < width && ny < height)
+            pixels[size_t(ny) * width + nx] = im->pix[size_t(y) * im->w + x];
+    }
+    auto bank = std::make_shared<AssetBank>(*state_.assets);
+    auto &next = bank->data.images[slot]; next.w = width; next.h = height; next.pix = std::move(pixels);
+    begin(left < 0 || top < 0 || right < 0 || bottom < 0 ? "Trim transparent canvas" : "Pad artwork canvas");
+    for (auto &p : state_.objects) if (p.object.ii == id) {
+        p.object.depth += (p.object.wx & 0x10) ? -right : -left;
+        p.object.sy += (p.object.wx & 0x20) ? -bottom : -top;
+    }
+    state_.assets = bank; touch(); commit(); error.clear(); return true;
+}
 } // namespace studio
