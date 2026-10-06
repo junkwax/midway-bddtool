@@ -147,6 +147,8 @@ class Document {
     bool set_palette(int palette, const BddCorePalette &colors, std::string &error);
     bool copy_palette_for_image(int image_id, int palette, std::string &error, int &new_palette);
     bool set_image_pixels(int image_id, const std::vector<uint8_t> &pixels, std::string &error);
+    bool replace_image(int image_id, int width, int height, const std::vector<uint8_t> &pixels,
+                       std::string &error);
     bool apply_optimization(const OptimizationPlan &plan, std::string &error);
     bool apply_palette_consolidation(const PaletteConsolidation &plan,
                                      bool runtime_slots_reviewed, std::string &error);

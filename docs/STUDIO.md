@@ -108,6 +108,13 @@ high flag bit, so external indexed-pixel edits can round-trip without flattening
 the image into RGBA. The exporter refuses incomplete pixels and indices outside
 the selected palette.
 
+**Replace** updates the selected artwork without changing its image ID,
+placements, metadata or palette assignments. Indexed TGA retains its indices and
+must carry the selected RGB555 colors. PNG/BMP pixels are mapped exactly into the
+selected palette; opaque colors outside that palette are rejected. The review
+shows current and replacement art side by side. Dimension changes keep placement
+origins fixed and are called out before the single undoable Apply action.
+
 ## Background color
 
 Open **Stage → Background...** to choose colors with the picker or enter a hex value.

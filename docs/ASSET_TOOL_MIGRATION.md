@@ -635,3 +635,13 @@ final document edit remains undoable. The parser rejects foreign headers,
 invalid counts or hex words, missing and trailing data, oversized files and
 overlong names. Palette animation remains separate because a static color list
 cannot describe timing, slot ownership or runtime cycling behavior.
+
+## Replace artwork in place
+
+The Assets toolbar, menu and artwork context menu can replace the selected image
+from PNG, BMP or indexed TGA. Replacement preserves the BDD image ID, flags,
+metadata, default and placement palette bindings, every placement and document
+history. PNG/BMP colors must map exactly into the selected RGB555 palette;
+indexed TGA retains byte indices and must match that palette. A side-by-side
+review reports dimension changes and placement count. Apply is one undoable edit,
+and a changed document invalidates the draft rather than applying stale pixels.

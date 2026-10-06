@@ -61,6 +61,78 @@ void export_asset_tga(Tab &t) {
     if (!output) error = "Could not export indexed TGA artwork.";
     else toast("Exported lossless indexed TGA");
 }
+void open_replace_artwork(Tab &t) {
+    cancel_gesture(); error.clear();
+    const auto bank = t.document.state().assets;
+    if (t.asset < 0 || t.asset >= (int)bank->data.images.size()) return;
+    int palette = asset_palette(t, t.asset);
+    if (palette < 0 || palette >= (int)bank->data.palettes.size()) return;
+    char path[1024] = {};
+    if (!file_dialog_open("Replace artwork in place", "Indexed or raster artwork\0*.tga;*.TGA;*.png;*.PNG;*.bmp;*.BMP\0All files\0*.*\0", path, sizeof path)) return;
+    ReplacementPixels replacement;
+    std::string extension = fs::u8path(path).extension().u8string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    if (extension == ".tga") {
+        std::ifstream input(fs::u8path(path), std::ios::binary);
+        std::vector<uint8_t> bytes;
+        if (input) { input.seekg(0, std::ios::end); auto size = input.tellg(); input.seekg(0);
+            if (size >= 0 && size <= 32 * 1024 * 1024) bytes.assign(std::istreambuf_iterator<char>(input), {}); }
+        if (bytes.empty()) replacement.error = "Could not read the indexed TGA, or it exceeds 32 MiB.";
+        else replacement = prepare_indexed_tga_replacement(bytes, bank->data.palettes[palette]);
+    } else {
+        int w = 0, h = 0, channels = 0;
+        auto *rgba = stbi_load(path, &w, &h, &channels, 4);
+        if (!rgba) replacement.error = "Could not decode the replacement image.";
+        else { replacement = prepare_rgba_replacement(w, h, rgba, bank->data.palettes[palette]); stbi_image_free(rgba); }
+    }
+    if (!replacement.ready) { error = replacement.error; return; }
+    t.replace_draft = t.document.state();
+    auto draft = std::make_shared<AssetBank>(*bank);
+    auto &image = draft->data.images[t.asset];
+    t.replace_image_id = image.idx; image.w = replacement.width; image.h = replacement.height;
+    image.pix = std::move(replacement.pixels); t.replace_draft.assets = draft;
+    t.replace_original = bank; t.replace_revision = t.document.state().revision;
+    t.replace_palette = palette; t.replace_source = path; t.replace_requested = true;
+    replace_textures.clear();
+}
+
+void replace_artwork_dialog(Tab &t) {
+    if (t.replace_requested) { ImGui::OpenPopup("Replace artwork in place"); t.replace_requested = false; }
+    asset_modal_size(720, 520);
+    if (!ImGui::BeginPopupModal("Replace artwork in place", nullptr, ImGuiWindowFlags_NoResize)) return;
+    size_t old_slot = 0; const auto *old_image = t.document.image(t.replace_image_id, &old_slot);
+    bool current = old_image && t.document.state().revision == t.replace_revision && t.document.state().assets == t.replace_original;
+    if (!current || old_slot >= t.replace_draft.assets->data.images.size()) {
+        ImGui::TextWrapped("The document changed. Close this review and choose the replacement again.");
+    } else {
+        const auto &next = t.replace_draft.assets->data.images[old_slot];
+        int uses = 0; for (const auto &p : t.document.state().objects) if (p.object.ii == t.replace_image_id) ++uses;
+        ImGui::Text("Image %d  |  %d placement%s", t.replace_image_id, uses, uses == 1 ? "" : "s");
+        ImGui::TextWrapped("%s", t.replace_source.c_str());
+        if (old_image->w != next.w || old_image->h != next.h)
+            ImGui::TextColored(ImVec4(1, .72f, .25f, 1), "Dimensions change from %d x %d to %d x %d. Placement origins stay fixed.", old_image->w, old_image->h, next.w, next.h);
+        else ImGui::Text("Dimensions remain %d x %d.", old_image->w, old_image->h);
+        ImGui::Columns(2, "replacement-preview", false);
+        auto preview = [&](const char *label, const State &state, TextureCache &cache, const BddCoreImage &im) {
+            ImGui::TextUnformatted(label); auto *texture = cache.get(state, (int)old_slot, t.replace_palette);
+            float scale = std::min({1.0f, 280.0f / std::max(1, im.w), 280.0f / std::max(1, im.h)});
+            if (texture) ImGui::Image((ImTextureID)texture, {im.w * scale, im.h * scale});
+        };
+        preview("Current", t.document.state(), textures, *old_image); ImGui::NextColumn();
+        preview("Replacement", t.replace_draft, replace_textures, next); ImGui::Columns(1);
+        ImGui::Separator();
+        ImGui::TextWrapped("Image ID, placement coordinates, palette assignments and metadata remain unchanged. Apply is one undoable document edit.");
+        if (ImGui::Button("Apply replacement", {150, 0})) {
+            if (t.document.replace_image(t.replace_image_id, next.w, next.h, next.pix, error)) {
+                replace_textures.clear(); toast("Replaced artwork in place"); ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+    }
+    if (ImGui::Button("Cancel", {100, 0})) { replace_textures.clear(); ImGui::CloseCurrentPopup(); }
+    if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
+    ImGui::EndPopup();
+}
 void palette_swatches(const BddCorePalette &pal, int &selected) {
     int cols = std::max(1, std::min(16, (int)(ImGui::GetContentRegionAvail().x / 28)));
     for (int i = 0; i < pal.count; ++i) {
@@ -82,6 +154,7 @@ void asset_modal_size(float w, float h) {
 }
 void asset_dialogs(Tab &t) {
     batch_import_dialog(t);
+    replace_artwork_dialog(t);
     if (t.import_requested) { ImGui::OpenPopup("Import IMG artwork"); t.import_requested = false; }
     if (t.palette_requested) { ImGui::OpenPopup("Palette editor"); t.palette_requested = false; }
     if (t.block_requested) { ImGui::OpenPopup("Block editor"); t.block_requested = false; }

@@ -276,4 +276,25 @@ bool Document::set_image_pixels(int id, const std::vector<uint8_t> &pixels, std:
     bank->data.images[slot].pix = pixels;
     begin("Edit block pixels"); state_.assets = bank; touch(); commit(); error.clear(); return true;
 }
+
+bool Document::replace_image(int id, int width, int height, const std::vector<uint8_t> &pixels,
+                             std::string &error) {
+    error.clear(); size_t slot = 0; const auto *im = image(id, &slot);
+    if (active_ || !im || width <= 0 || height <= 0 || width > 4096 || height > 4096 ||
+        uint64_t(width) * height > 16000000 || pixels.size() != size_t(width) * height) {
+        error = "Replacement dimensions or pixel storage are invalid, or another edit is unfinished."; return false;
+    }
+    std::set<int> palettes;
+    if (slot < state_.assets->default_palettes.size()) palettes.insert(state_.assets->default_palettes[slot]);
+    for (const auto &p : state_.objects) if (p.object.ii == id) palettes.insert(p.object.fl);
+    for (int i : palettes)
+        if (i < 0 || i >= (int)state_.assets->data.palettes.size() ||
+            std::any_of(pixels.begin(), pixels.end(), [&](uint8_t p) { return p >= state_.assets->data.palettes[i].count; })) {
+            error = "A replacement index exceeds a palette used by this artwork."; return false;
+        }
+    if (width == im->w && height == im->h && pixels == im->pix) return true;
+    auto bank = std::make_shared<AssetBank>(*state_.assets);
+    auto &next = bank->data.images[slot]; next.w = width; next.h = height; next.pix = pixels;
+    begin("Replace artwork in place"); state_.assets = bank; touch(); commit(); error.clear(); return true;
+}
 } // namespace studio

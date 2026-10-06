@@ -20,6 +20,7 @@
 #include "Core/studio_sprite_sheet.h"
 #include "Core/studio_tga_export.h"
 #include "Core/studio_palette_file.h"
+#include "Core/studio_image_replace.h"
 #include "Core/app_version.h"
 #include <future>
 #include <fstream>
@@ -104,6 +105,12 @@ struct Tab {
     std::vector<uint8_t> import_selected;
     ImGuiTextFilter import_filter;
     bool import_requested = false, palette_requested = false, block_requested = false;
+    bool replace_requested = false;
+    State replace_draft;
+    std::shared_ptr<const AssetBank> replace_original;
+    uint64_t replace_revision = 0;
+    int replace_image_id = -1, replace_palette = -1;
+    std::string replace_source;
     int edit_palette = 0, edit_color = 1, edit_image = -1, block_zoom = 8;
     bool block_grid = true, block_painting = false, block_dirty = false;
     int block_last_x = 0, block_last_y = 0;
@@ -279,6 +286,7 @@ class App {
     float canvas_rgb[3] = {20.f / 255, 25.f / 255, 31.f / 255};
     TextureCache textures;
     TextureCache block_textures;
+    TextureCache replace_textures;
     TextureCache animation_textures;
     TextureCache floor_textures, floor_draft_textures;
     struct FloorThumbnail {
@@ -815,6 +823,7 @@ class App {
                 bool available = t && !t->document.state().assets->data.images.empty();
                 if (ImGui::MenuItem("Edit block pixels...", nullptr, false, available)) open_block_editor(*t);
                 if (ImGui::MenuItem("Edit palette...", nullptr, false, available)) open_palette_editor(*t);
+                if (ImGui::MenuItem("Replace selected artwork...", nullptr, false, available)) open_replace_artwork(*t);
                 if (ImGui::MenuItem("Export selected artwork as PNG...", nullptr, false, available)) export_asset_png(*t);
                 if (ImGui::MenuItem("Export selected artwork as indexed TGA...", nullptr, false, available)) export_asset_tga(*t);
                 if (ImGui::MenuItem("Export artwork sheet...", nullptr, false, available)) t->sheet_requested = true;
@@ -1549,6 +1558,7 @@ class App {
             if (ImGui::Button("Edit block...")) open_block_editor(t);
             ImGui::SameLine();
             if (ImGui::Button("Palette...")) open_palette_editor(t);
+            ImGui::SameLine(); if (ImGui::Button("Replace...")) open_replace_artwork(t);
             ImGui::SameLine();
             if (ImGui::Button("Export PNG...")) export_asset_png(t);
             ImGui::SameLine(); if (ImGui::Button("Export TGA...")) export_asset_tga(t);
@@ -1590,6 +1600,7 @@ class App {
                     t.asset = (int)i;
                     if (ImGui::MenuItem("Edit block pixels...")) open_block_editor(t);
                     if (ImGui::MenuItem("Edit palette...")) open_palette_editor(t);
+                    if (ImGui::MenuItem("Replace artwork...")) open_replace_artwork(t);
                     if (ImGui::MenuItem("Export PNG...")) export_asset_png(t);
                     if (ImGui::MenuItem("Export indexed TGA...")) export_asset_tga(t);
                     if (ImGui::MenuItem("Find lossless subframes..."))
@@ -4449,6 +4460,7 @@ int run(int argc, char **argv) {
     }
     app.textures.renderer = app.renderer;
     app.block_textures.renderer = app.renderer;
+    app.replace_textures.renderer = app.renderer;
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     auto &io = ImGui::GetIO();
