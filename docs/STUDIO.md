@@ -354,6 +354,40 @@ unsupported data instead of substituting guessed frames. The selected
 checkout's assembly is authoritative for animation; adjacent draft assembly
 used by the legacy plane importer is not used for actor preview.
 
+## Runtime actors
+
+**Actors...** above the canvas opens the stage's runtime actor sidecar,
+`<STAGE>.runtime.json` beside the BDB, the same version 3 file the legacy
+bddview runtime actor tool reads and writes. Each actor is a list of IMG frame
+labels with ticks, a position, layer, scroll, loop and flips, plus optional
+triggers, delays and sync groups, such as NUPOOL's hanging bodies and the
+skeletons that appear when they drop. The game never reads this file: actors
+run from hand-written assembly. The sidecar drives this preview and the copied
+**BGND skeleton**, a starting point for hand integration, not a verified
+driver.
+
+Frame labels resolve against every IMG file in the stage's folder (headers only;
+about 20 ms for 300 files). Labels that no longer exist draw as red labeled
+placeholders and are listed under **Missing or unreadable frames**, so a sidecar
+that predates re-cut art is obvious rather than silently incomplete. Playback
+runs at 53 ticks per second like the legacy preview, with play, pause, a tick
+scrubber and speed. By default every actor loops from tick zero plus its phase,
+exactly as the legacy tool showed it. **Simulate triggers** delays actors by
+`delay_min_ticks` and holds `always_static` actors on their first frame; the
+game's random lineups and drop logic are not reproduced. Frames are drawn at
+their top-left without IMG anchor offsets, matching how the legacy tool authored
+positions. While sidecar actors are shown, the built-in Forest preview is
+hidden so faces are not drawn twice.
+
+Edit actors and frames in the window: add, duplicate, delete and reorder actors;
+set position, timing, delays, loop, flips, sync group and role; and edit each
+frame's label, offset, ticks and flip mode. A label field suggests matches from
+the IMG index. Integration fields (code label, driver, insert list and so on)
+are kept for the skeleton and the legacy tool. Actor edits have their own
+undo/redo and **Save sidecar**; they never enter the stage's undo history or its
+BDB/BDD save. Closing a stage or quitting with unsaved actor edits prompts like
+unsaved stage edits, and **Save** writes both.
+
 ## Save and recovery
 
 The **Optimize** workspace adds background analysis, cut/reuse previews,

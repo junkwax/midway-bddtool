@@ -680,3 +680,24 @@ Groups live in `State`, so saving and deleting are undoable, and persist as
 stage has groups, so existing layouts stay byte-identical. Loading validates
 image IDs, palettes, layers and limits (64 groups, 256 items, 64 copies). Covered
 by `studio_groups` tests and the `--groups` UI smoke.
+
+## Runtime actor sidecars
+
+The legacy runtime actor tool's sidecar is migrated without changing its
+format: `studio_runtime_actors` parses version 3 with the legacy loader's
+defaults for absent keys (older sidecars such as NUPOOL's omit several) and
+writes the legacy key order and number formatting, so either tool can open the
+other's output. Timing reproduces the legacy preview (53 ticks/s, leader-locked
+phase, per-frame ticks, loop or hold, 16.16 motion). Trigger simulation is an
+explicit, documented opt-in. Not migrated: inferring actors from level
+animations, onion skinning, the isolation window, and hiding a `replace_source`
+placement in the preview (the flag is preserved).
+
+October 6 check against the local checkout: FOREST2's three tree faces resolve
+all 7 frames. NUPOOL's 17 actors resolve 45 frames and miss 168, because
+`ACIDHANG.IMG`/`MKHANG.IMG` were re-cut to fewer strips (for example Ed's body
+A-F) while the sidecar still lists 12-14 frames per actor. The sidecar needs
+updating to the current art before its preview is complete. Covered by
+`studio_runtime_actors` tests (pass the data folder to include the real
+sidecars) and the `--actors` UI smoke on the demo and on NUPOOL.BDB, which
+verified the real sidecar, BDB and BDD were left byte-identical.

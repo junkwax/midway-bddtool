@@ -23,6 +23,7 @@
 #include "Core/studio_image_replace.h"
 #include "Core/studio_palette_usage.h"
 #include "Core/studio_view_compare.h"
+#include "Core/studio_runtime_actors.h"
 #include "Core/app_version.h"
 #include <future>
 #include <fstream>
@@ -40,6 +41,8 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -125,6 +128,19 @@ struct Tab {
     bool group_requested = false, group_on_layer = false;
     char group_name[49] = {};
     GroupPlacement group_options;
+    // Runtime actor sidecar: editor-side only, never part of the document or its save.
+    RuntimeActorSet actors, actors_pending_base;
+    std::vector<RuntimeActorSet> actors_undo, actors_redo;
+    std::shared_ptr<RuntimeArtIndex> actor_index;
+    std::shared_ptr<RuntimeArt> actor_art;
+    std::set<std::string> actor_art_labels;
+    std::string actors_path, actors_status, actor_index_dir;
+    bool actors_loaded = false, actors_dirty = false, actors_open = false, actors_pending = false;
+    bool actors_show = true, actors_simulate = false, actors_labels = true, actors_playing = true;
+    int actor_selected = -1;
+    double actor_ticks = 0;
+    float actor_speed = 1;
+    char actor_frame_label[64] = {};
     std::string replace_source;
     int edit_palette = 0, edit_color = 1, edit_image = -1, block_zoom = 8;
     bool block_grid = true, block_painting = false, block_dirty = false;
@@ -339,6 +355,7 @@ class App {
     TextureCache optimize_before_textures, optimize_after_textures;
     TextureCache compare_before_textures, compare_after_textures;
     DiffTexture compare_diff, compare_overlay, replace_diff;
+    std::vector<TextureCache> actor_textures; // One per runtime actor art source.
     TextureCache visibility_textures, visibility_before_textures;
     std::vector<std::unique_ptr<Tab>> tabs;
     int active = -1, page = 0, select_tab = -1;
@@ -422,6 +439,7 @@ class App {
             t->plane = -1;
         t->animation = load_animation_preview(t->document, t->game_root);
         t->animation_root = t->game_root;
+        load_runtime_actors(*t);
         if (!t->layout_source[0] && !t->document.path().empty()) {
             auto parent = fs::u8path(t->document.path()).parent_path();
             for (const auto &candidate : {parent / "MKBT.ASM", parent.parent_path() / "src" / "MKBT.ASM"})
@@ -1526,8 +1544,9 @@ class App {
         };
         auto draw_animation = [&]() {
             animation_drawn = true;
+            // Sidecar actors replace the built-in Forest overlay so faces are not drawn twice.
             if (t.source || t.solo >= 0 || !t.show_animation || !t.animation.ready() ||
-                t.animation_root != t.game_root)
+                t.animation_root != t.game_root || actors_visible(t))
                 return;
             animation_textures.renderer = renderer;
             auto step = t.animation.frame_at(t.animation_seconds);
@@ -1563,6 +1582,7 @@ class App {
         if (!animation_drawn)
             draw_animation();
         if (!floor_drawn) draw_floor();
+        draw_runtime_actors(t, draw, origin, cam);
         if (t.selected.empty() && t.plane >= 0) {
             bool first = true;
             Rect bounds;
@@ -1719,6 +1739,7 @@ class App {
     }
     #include "studio_asset_tools.inc"
     #include "studio_groups.inc"
+    #include "studio_runtime_actors.inc"
     #include "studio_composite.inc"
     #include "studio_floor.inc"
     #include "studio_background.inc"
@@ -3941,6 +3962,7 @@ class App {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", t.animation.notice.c_str());
         }
+        actor_toolbar(t);
         ImGui::TextDisabled("Drag empty space to pan | Shift-drag to select | Wheel to zoom");
         float avail = ImGui::GetContentRegionAvail().y;
         float tray_h = tray ? std::min(164.0f, avail * .28f) : 0;
@@ -4091,9 +4113,9 @@ class App {
             bool dirty = false;
             if (quit_pending) {
                 for (auto &t : tabs)
-                    dirty |= t->document.dirty();
+                    dirty |= t->document.dirty() || t->actors_dirty;
             } else if (close_pending < (int)tabs.size())
-                dirty = tabs[close_pending]->document.dirty();
+                dirty = tabs[close_pending]->document.dirty() || tabs[close_pending]->actors_dirty;
             if (!dirty) {
                 if (quit_pending)
                     running = false;
@@ -4110,12 +4132,12 @@ class App {
                 bool ok = true;
                 if (quit_pending) {
                     for (auto &t : tabs)
-                        if (t->document.dirty() && !save(*t)) {
+                        if (!save_stage_and_actors(*t)) {
                             ok = false;
                             break;
                         }
                 } else if (close_pending >= 0)
-                    ok = save(*tabs[close_pending]);
+                    ok = save_stage_and_actors(*tabs[close_pending]);
                 if (ok) {
                     ImGui::CloseCurrentPopup();
                     if (quit_pending)
@@ -4285,6 +4307,9 @@ class App {
             if (page == 0 && !t->source && t->show_animation && t->play_animation &&
                 t->animation.ready() && t->animation_root == t->game_root)
                 t->animation_seconds += ImGui::GetIO().DeltaTime;
+        if (auto *t = tab())
+            if (t->actors_playing && (page == 0 || t->actors_open) && !t->actors.actors.empty())
+                t->actor_ticks += ImGui::GetIO().DeltaTime * kRuntimeTicksPerSecond * t->actor_speed;
         shortcuts();
         clean_selection();
         ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -4322,7 +4347,7 @@ class App {
             ImGui::TextDisabled("Local files  /  Indexed artwork  /  Stage composition");
         ImGui::End();
         help_share_dialogs();
-        if (auto *t = tab()) { asset_dialogs(*t); save_group_dialog(*t); composite_dialog(*t); sprite_sheet_dialog(*t); floor_dialog(*t); mk3_layout_dialog(*t); floor_library_window(*t); }
+        if (auto *t = tab()) { asset_dialogs(*t); save_group_dialog(*t); runtime_actors_window(*t); composite_dialog(*t); sprite_sheet_dialog(*t); floor_dialog(*t); mk3_layout_dialog(*t); floor_library_window(*t); }
         prompts();
         recover();
     }
@@ -4730,6 +4755,8 @@ int run(int argc, char **argv) {
     bool test_visibility = smoke && argc >= 5 && std::string(argv[4]) == "--visibility";
     bool test_compare = smoke && argc >= 5 && std::string(argv[4]) == "--compare";
     bool test_groups = smoke && argc >= 5 && std::string(argv[4]) == "--groups";
+    bool test_actors = smoke && argc >= 5 && std::string(argv[4]) == "--actors";
+    bool actors_real = false; // Set once: a real stage sidecar is never written by the smoke.
     bool test_optimize = test_review || test_shared || test_palette_reuse || test_subframes || test_compare ||
                          (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
     bool test_pattern_suggest = smoke && argc >= 5 && std::string(argv[4]) == "--pattern-suggest";
@@ -4905,7 +4932,7 @@ int run(int argc, char **argv) {
             int w, h;
             SDL_GetRendererOutputSize(app.renderer, &w, &h);
             std::vector<uint8_t> rgba((size_t)w * h * 4);
-            std::string name = test_batch_import ? ("batch-" + std::to_string(frames) + ".png") : test_asset_tools ? ("asset-tools-" + std::to_string(frames) + ".png") : test_compare ? ("compare-" + std::to_string(frames) + ".png") : test_groups ? ("groups-" + std::to_string(frames) + ".png") : test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
+            std::string name = test_batch_import ? ("batch-" + std::to_string(frames) + ".png") : test_asset_tools ? ("asset-tools-" + std::to_string(frames) + ".png") : test_compare ? ("compare-" + std::to_string(frames) + ".png") : test_groups ? ("groups-" + std::to_string(frames) + ".png") : test_actors ? ("actors-" + std::to_string(frames) + ".png") : test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
                                : frames == 3     ? "stage.png"
                                : frames == 7   ? "compact.png"
                                : frames == 11  ? "assets.png"
@@ -5024,6 +5051,55 @@ int run(int argc, char **argv) {
                 app.running = false;
             }
             frames++;
+            if (test_actors && app.tab()) {
+                auto &t = *app.tab();
+                if (frames == 2) actors_real = t.actors_loaded;
+                bool real = actors_real;
+                if (frames == 2) {
+                    if (!real) {
+                        // Demo: a free actor with unresolvable art exercises placeholders and save.
+                        t.actors_path = (fs::u8path(app.smoke_dir) / "DEMO.runtime.json").u8string();
+                        RuntimeActor a; a.name = "smoke_actor"; a.x = 120; a.y = 60; a.delay_min_ticks = 300;
+                        a.frames = {{"NOSUCH1"}, {"NOSUCH2"}};
+                        t.actors.actors = {a}; t.actor_selected = 0; t.actors_dirty = true;
+                    }
+                    t.actors_open = true;
+                }
+                if (frames == 5) { t.actors_simulate = true; t.actor_ticks = 600; t.actors_playing = false; }
+                if (frames == 8) {
+                    bool ok = !t.actors.actors.empty() && t.actor_art;
+                    if (ok && real) ok = !t.actor_art->frames.empty();
+                    if (ok && !real) ok = t.actor_art->missing.size() == 2;
+                    size_t visible = 0;
+                    for (size_t i = 0; i < t.actors.actors.size(); ++i)
+                        visible += actor_pose(t.actors, i, 600, true).visible;
+                    if (!ok || !visible) {
+                        std::fprintf(stderr, "Runtime actors did not load art or pose (%zu visible): %s\n", visible, t.actors_status.c_str());
+                        rc = 1; app.running = false;
+                    }
+                    // Edit, undo and redo through the window's history.
+                    int x = t.actors.actors[0].x;
+                    auto before = t.actors; t.actors.actors[0].x += 10;
+                    app.actors_changed(t, before); app.actors_settle(t, true);
+                    app.actors_step(t, false); bool undone = t.actors.actors[0].x == x;
+                    app.actors_step(t, true); bool redone = t.actors.actors[0].x == x + 10;
+                    if (!undone || !redone || !t.actors_dirty) {
+                        std::fprintf(stderr, "Runtime actor undo/redo failed.\n"); rc = 1; app.running = false;
+                    }
+                    if (!real) {
+                        auto expected = write_runtime_actors(t.actors);
+                        if (!app.save_runtime_actors(t)) { std::fprintf(stderr, "%s\n", t.actors_status.c_str()); rc = 1; app.running = false; }
+                        std::ifstream in(fs::u8path(t.actors_path), std::ios::binary); std::stringstream saved; saved << in.rdbuf();
+                        if (saved.str() != expected || t.actors_dirty) { std::fprintf(stderr, "Sidecar save did not match.\n"); rc = 1; app.running = false; }
+                    } else {
+                        app.actors_step(t, false); t.actors_dirty = false; // Leave the real sidecar untouched.
+                    }
+                }
+                if (frames == 10) t.actors_open = false;
+                if (frames == 14 && rc == 0)
+                    std::fprintf(stderr, "Runtime actors UI: %s sidecar, art, trigger simulation, undo/redo%s passed.\n",
+                                 real ? "real" : "demo", real ? "" : " and save");
+            }
             if (test_groups && app.tab()) {
                 auto &t = *app.tab(); auto &io = ImGui::GetIO();
                 io.ConfigInputTrickleEventQueue = false;
@@ -5115,9 +5191,9 @@ int run(int argc, char **argv) {
                 if (app.tab() && !test_navigation)
                     app.tab()->fit = true;
             }
-            if (frames == 8 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout && !test_background && !test_palettes)
+            if (frames == 8 && !test_actors && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout && !test_background && !test_palettes)
                 app.page = 1;
-            if (frames == 29 && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout && !test_background && !test_palettes) {
+            if (frames == 29 && !test_actors && !test_optimize && !test_pattern && !test_art_audit && !test_visibility && !test_animation_analysis && !test_navigation && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout && !test_background && !test_palettes) {
                 app.page = 2;
                 if (argc >= 5 && std::string(argv[4]) == "--prepare" && app.tab())
                     app.prepare_game(*app.tab());
@@ -5139,6 +5215,7 @@ int run(int argc, char **argv) {
     app.compare_before_textures.clear();
     app.compare_after_textures.clear();
     app.compare_diff.clear();
+    for (auto &cache : app.actor_textures) cache.clear();
     app.compare_overlay.clear();
     app.replace_diff.clear();
     app.visibility_textures.clear();
