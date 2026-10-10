@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <signal.h>
 #endif
 namespace studio {
 GameBuild::~GameBuild() {
@@ -63,6 +64,37 @@ bool GameBuild::start_reviewed(const std::string &root, const std::string &log_p
         error = e.what();
         return false;
     }
+}
+bool GameBuild::start_library_audit(const std::string &script_path, const std::string &game_path,
+                                    const std::string &analyzer_path, const std::string &output_path,
+                                    const std::string &log_path, std::string &error) {
+    if (running_) { error = "A library audit is already running."; return false; }
+    try {
+        namespace fs = std::filesystem;
+        auto script = fs::canonical(fs::u8path(script_path));
+        auto game = fs::canonical(fs::u8path(game_path));
+        auto analyzer = fs::canonical(fs::u8path(analyzer_path));
+        auto output = fs::absolute(fs::u8path(output_path));
+        if (script.filename() != "audit_bdd_library.py" ||
+            (analyzer.filename() != "studio_savings_audit" && analyzer.filename() != "studio_savings_audit.exe")) {
+            error = "Unsupported library audit tools."; return false;
+        }
+        if (!fs::is_regular_file(script) || !fs::is_regular_file(analyzer) || !fs::is_directory(game)) {
+            error = "The audit script, analyzer, or game checkout is missing."; return false;
+        }
+        if (fs::exists(output)) { error = "Choose a new audit output folder."; return false; }
+        return launch(script.parent_path().parent_path().u8string(), log_path, script.u8string(),
+                      {game.u8string(), analyzer.u8string(), output.u8string()}, error);
+    } catch (const std::exception &e) { error = e.what(); return false; }
+}
+void GameBuild::cancel() {
+    if (!running_) return;
+#ifdef _WIN32
+    TerminateProcess((HANDLE)process_, 125);
+#else
+    kill(pid_, SIGTERM);
+#endif
+    poll();
 }
 bool GameBuild::launch(const std::string &root_path, const std::string &log_path,
                        const std::string &script_path, const std::vector<std::string> &arguments,

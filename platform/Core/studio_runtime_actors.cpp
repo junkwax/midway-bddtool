@@ -343,6 +343,53 @@ ActorPose actor_pose(const RuntimeActorSet &set, size_t index, int64_t ticks, bo
     return pose;
 }
 
+int64_t actor_tick_for_frame(const RuntimeActorSet &set, size_t index, size_t frame, bool simulate) {
+    if (index >= set.actors.size()) return -1;
+    const auto &a = set.actors[index];
+    if (!a.enabled || frame >= a.frames.size() || (simulate && a.trigger == "always_static" && frame != 0))
+        return -1;
+    const RuntimeActor *basis = &a;
+    if (a.sync_group_timing && !a.sync_group.empty()) {
+        long best = 0x7fffffff;
+        for (const auto &candidate : set.actors) {
+            if (!candidate.enabled || candidate.sync_group != a.sync_group) continue;
+            long score = candidate.group_index - (candidate.group_role == "leader" ? 1000000 : 0);
+            if (score < best) { best = score; basis = &candidate; }
+        }
+    }
+    int64_t first_visible_tick = simulate ? a.delay_min_ticks : 0;
+    auto first_pose = actor_pose(set, index, first_visible_tick, simulate);
+    if (first_pose.visible && first_pose.frame == frame) return first_visible_tick;
+    int64_t local = 0;
+    for (size_t i = 0; i < frame; ++i) local += actor_frame_ticks(a, i);
+    if (a.loop) {
+        int64_t total = actor_cycle_ticks(a);
+        if (local < basis->phase_ticks) {
+            int64_t difference = basis->phase_ticks - local;
+            local += ((difference + total - 1) / total) * total;
+        }
+    } else if (local < basis->phase_ticks) return -1;
+    int64_t tick = local - basis->phase_ticks + (simulate ? a.delay_min_ticks : 0);
+    if (tick < 0) return -1;
+    auto pose = actor_pose(set, index, tick, simulate);
+    return pose.visible && pose.frame == frame ? tick : -1;
+}
+
+std::vector<size_t> actor_replaced_sources(const RuntimeActorSet &set, int64_t ticks,
+                                           bool simulate, size_t object_count) {
+    std::vector<size_t> out;
+    for (size_t i = 0; i < set.actors.size(); ++i) {
+        const auto &actor = set.actors[i];
+        if (!actor.replace_source || actor.source_object < 0 ||
+            (size_t)actor.source_object >= object_count || !actor_pose(set, i, ticks, simulate).visible)
+            continue;
+        out.push_back((size_t)actor.source_object);
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
 std::string actor_bgnd_skeleton(const RuntimeActor &a) {
     std::string label = make_actor_code_label(a.code_label.empty() ? a.name : a.code_label);
     const std::string &list = a.insert_list.empty() ? std::string("baklst4") : a.insert_list;

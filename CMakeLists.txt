@@ -35,6 +35,7 @@ target_sources(bdd_studio_document PRIVATE platform/Core/studio_palette_usage.cp
 target_sources(bdd_studio_document PRIVATE platform/Core/studio_view_compare.cpp)
 target_sources(bdd_studio_document PRIVATE platform/Core/studio_groups.cpp)
 target_sources(bdd_studio_document PRIVATE platform/Core/studio_runtime_actors.cpp)
+target_sources(bdd_studio_document PRIVATE platform/Core/studio_library_audit.cpp)
 target_sources(bdd_studio_document PRIVATE platform/Core/studio_image_replace.cpp)
 target_sources(bdd_studio_document PRIVATE platform/Core/studio_asset_edit.cpp platform/Core/studio_validation.cpp platform/Core/studio_camera_checks.cpp platform/Core/studio_share.cpp platform/Core/studio_floor.cpp)
 if(MSVC)
@@ -345,10 +346,22 @@ add_custom_target(studio_build_adapter ALL
         "$<TARGET_FILE_DIR:bdd_rom_verify>/verified_build"
 )
 add_dependencies(bddview studio_build_adapter)
+add_executable(studio_savings_audit tools/studio_savings_audit.cpp)
+target_link_libraries(studio_savings_audit PRIVATE bdd_studio_document)
+add_custom_target(studio_library_audit_adapter ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:studio_savings_audit>/tools"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/audit_bdd_library.py"
+        "$<TARGET_FILE_DIR:studio_savings_audit>/tools/audit_bdd_library.py"
+)
+add_dependencies(bddview studio_savings_audit studio_library_audit_adapter)
 if(BUILD_TESTING)
     add_executable(studio_runtime_actors_tests tests/studio_runtime_actors_tests.cpp)
     target_link_libraries(studio_runtime_actors_tests PRIVATE bdd_studio_document)
     add_test(NAME studio_runtime_actors COMMAND studio_runtime_actors_tests)
+    add_executable(studio_library_audit_tests tests/studio_library_audit_tests.cpp)
+    target_link_libraries(studio_library_audit_tests PRIVATE bdd_studio_document)
+    add_test(NAME studio_library_audit COMMAND studio_library_audit_tests "${CMAKE_CURRENT_BINARY_DIR}/studio-library-audit-data")
     add_executable(studio_groups_tests tests/studio_groups_tests.cpp)
     target_link_libraries(studio_groups_tests PRIVATE bdd_studio_document)
     add_test(NAME studio_groups COMMAND studio_groups_tests)
@@ -407,8 +420,6 @@ if(BUILD_TESTING)
     # Manual game integration check: needs private MK3CAVE assets and actual LOAD2 builds.
     add_executable(studio_stage_validation tests/studio_stage_validation.cpp)
     target_link_libraries(studio_stage_validation PRIVATE bdd_studio_document)
-    add_executable(studio_savings_audit tools/studio_savings_audit.cpp)
-    target_link_libraries(studio_savings_audit PRIVATE bdd_studio_document)
     add_executable(studio_validation_candidate tools/studio_validation_candidate.cpp)
     target_link_libraries(studio_validation_candidate PRIVATE bdd_studio_document)
     add_executable(studio_validation_checks_tests tests/studio_validation_checks_tests.cpp)

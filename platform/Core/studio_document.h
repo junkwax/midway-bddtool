@@ -98,7 +98,10 @@ struct SceneItem {
     bool hflip = false, vflip = false, locked = false;
 };
 enum class IssueGroup { References, Artwork, Load2, Layers, Camera, Export };
-enum class ArrangeMode { Left, CenterX, Right, Top, CenterY, Bottom, DistributeX, DistributeY };
+enum class ArrangeMode {
+    Left, CenterX, Right, Top, CenterY, Bottom, DistributeX, DistributeY,
+    MirrorX, MirrorY
+};
 struct Issue {
     std::string message;
     ObjectId object = 0;

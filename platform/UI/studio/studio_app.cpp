@@ -24,6 +24,7 @@
 #include "Core/studio_palette_usage.h"
 #include "Core/studio_view_compare.h"
 #include "Core/studio_runtime_actors.h"
+#include "Core/studio_library_audit.h"
 #include "Core/app_version.h"
 #include <future>
 #include <fstream>
@@ -137,9 +138,10 @@ struct Tab {
     std::string actors_path, actors_status, actor_index_dir;
     bool actors_loaded = false, actors_dirty = false, actors_open = false, actors_pending = false;
     bool actors_show = true, actors_simulate = false, actors_labels = true, actors_playing = true;
+    bool actors_onion = false, actors_isolate = false;
     int actor_selected = -1;
     double actor_ticks = 0;
-    float actor_speed = 1;
+    float actor_speed = 1, actor_onion_alpha = .28f;
     char actor_frame_label[64] = {};
     std::string replace_source;
     int edit_palette = 0, edit_color = 1, edit_image = -1, block_zoom = 8;
@@ -205,6 +207,9 @@ struct Tab {
     bool show_animation = true, play_animation = true;
     double animation_seconds = 0;
     OptimizeOptions optimize_options;
+    bool audit_review = false;
+    std::string audit_review_file, audit_review_mode;
+    int64_t audit_review_saved = -1, audit_review_preserve_saved = -1;
     std::shared_ptr<OptimizeProgress> optimize_progress;
     std::future<OptimizationPlan> optimize_job;
     std::unique_ptr<OptimizationPlan> optimize_plan;
@@ -363,6 +368,14 @@ class App {
     bool running = true, grid = false, snap = true, tray = true, quit_pending = false;
     int close_pending = -1;
     bool show_recovery = false;
+    bool library_audit_open = false, library_audit_incomplete = false, library_audit_active = false;
+    bool library_audit_runner_open = false, library_audit_completion_handled = false;
+    LibraryAuditReport library_audit;
+    GameBuild library_audit_job;
+    std::string library_audit_output, library_audit_log;
+    char library_audit_game[1024] = {}, library_audit_parent[1024] = {};
+    int library_audit_selected = -1;
+    char library_audit_filter[96] = {};
     std::string error, message, smoke_dir;
     char search[96] = {};
     double message_until = 0;
@@ -841,6 +854,8 @@ class App {
                 if (ImGui::MenuItem("Share stage...", nullptr, false, tab() && tab()->document.state().has_bdb)) tab()->share_requested = true;
                 if (ImGui::MenuItem("Recovery copies..."))
                     show_recovery = true;
+                if (ImGui::MenuItem("Open library savings audit...")) open_library_audit_dialog();
+                if (ImGui::MenuItem("Run library savings audit...")) library_audit_runner_open = true;
                 ImGui::Separator();
                 if (ImGui::MenuItem("Explore sample stage"))
                     add(Document::demo());
@@ -1122,15 +1137,15 @@ class App {
             if (locked)
                 ImGui::TextColored(accent, "A selected placement or layer is locked");
             ImGui::BeginDisabled(locked);
+            ImGui::SeparatorText("Arrange selection");
+            auto arrange = [&](const char *label, ArrangeMode mode) {
+                if (ImGui::Button(label, {64, 0})) {
+                    std::string why;
+                    if (doc.arrange(t.selected, mode, why)) toast("Arranged selected artwork");
+                    else toast(why);
+                }
+            };
             if (t.selected.size() >= 2) {
-                ImGui::SeparatorText("Arrange selection");
-                auto arrange = [&](const char *label, ArrangeMode mode) {
-                    if (ImGui::Button(label, {64, 0})) {
-                        std::string why;
-                        if (doc.arrange(t.selected, mode, why)) toast("Arranged selected artwork");
-                        else toast(why);
-                    }
-                };
                 arrange("Left", ArrangeMode::Left); ImGui::SameLine();
                 arrange("Center X", ArrangeMode::CenterX); ImGui::SameLine();
                 arrange("Right", ArrangeMode::Right);
@@ -1142,8 +1157,11 @@ class App {
                     arrange("Space Y", ArrangeMode::DistributeY);
                     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Keep the outer items fixed and equalize the gaps between artwork edges.");
                 }
-                ImGui::Spacing();
             }
+            arrange("Mirror X", ArrangeMode::MirrorX); ImGui::SameLine();
+            arrange("Mirror Y", ArrangeMode::MirrorY);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reflect the whole selection and toggle each artwork flip so the composition mirrors exactly.");
+            ImGui::Spacing();
             int xy[] = {p.object.depth - (plane ? plane->source.x1 : 0),
                         p.object.sy - (plane ? plane->source.y1 : 0)};
             bool fx = (p.object.wx & 16) != 0, fy = (p.object.wx & 32) != 0;
@@ -1529,6 +1547,18 @@ class App {
             }
         }
         auto items = t.document.scene(cam, t.source, t.solo);
+        std::vector<size_t> replaced_sources;
+        if (actors_visible(t)) {
+            if (t.actors_isolate && t.actor_selected >= 0 && t.actor_selected < (int)t.actors.actors.size()) {
+                auto isolated = t.actors;
+                for (size_t i = 0; i < isolated.actors.size(); ++i)
+                    if ((int)i != t.actor_selected) isolated.actors[i].enabled = false;
+                replaced_sources = actor_replaced_sources(isolated, actor_preview_ticks(t), t.actors_simulate,
+                                                          t.document.state().objects.size());
+            } else
+                replaced_sources = actor_replaced_sources(t.actors, actor_preview_ticks(t), t.actors_simulate,
+                                                          t.document.state().objects.size());
+        }
         bool animation_drawn = false, floor_drawn = false;
         auto draw_floor = [&]() {
             floor_drawn = true;
@@ -1568,6 +1598,8 @@ class App {
             if (!animation_drawn && p.rank > animation_rank)
                 draw_animation();
             if (!floor_drawn && p.rank > floor_rank) draw_floor();
+            if (std::binary_search(replaced_sources.begin(), replaced_sources.end(), p.object_index))
+                continue;
             ImVec2 a = vec(t.view.to_screen({p.rect.x, p.rect.y}, point(origin))),
                    b = vec(
                        t.view.to_screen({p.rect.x + p.rect.w, p.rect.y + p.rect.h}, point(origin)));
@@ -1740,12 +1772,14 @@ class App {
     #include "studio_asset_tools.inc"
     #include "studio_groups.inc"
     #include "studio_runtime_actors.inc"
+    #include "studio_library_audit.inc"
     #include "studio_composite.inc"
     #include "studio_floor.inc"
     #include "studio_background.inc"
     #include "studio_mk3_layout.inc"
     #include "studio_batch_import.inc"
     bool game_build_running() const {
+        if (library_audit_job.running()) return true;
         for (const auto &t : tabs)
             if (t->game_build.running())
                 return true;
@@ -2109,6 +2143,21 @@ class App {
     void lossless_optimizer(Tab &t) {
         heading("Subframes & lossless savings",
                 "Trim blank space and split artwork into an exact, smaller reconstruction.");
+        if (t.audit_review) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, accent_surface(.16f));
+            ImGui::BeginChild("audit-review-baseline", {0, t.optimize_plan ? 82.f : 64.f}, true);
+            ImGui::TextColored(accent, "Library audit review: %s", t.audit_review_file.c_str());
+            ImGui::Text("Reported %s estimate: %.1f KiB saved", t.audit_review_mode.c_str(),
+                        t.audit_review_saved / 1024.0);
+            if (t.optimize_plan && t.optimize_plan->verified) {
+                const auto &p = *t.optimize_plan;
+                int64_t fresh = (int64_t(p.baseline.video_bits) - int64_t(p.proposed.video_bits)) / 8;
+                ImGui::Text("Fresh scratch scan: %.1f KiB saved  |  difference: %+.0f bytes",
+                            fresh / 1024.0, double(fresh - t.audit_review_saved));
+            } else ImGui::TextDisabled("Running the same bounded settings on the frozen scratch copy...");
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+        }
         bool busy = t.optimize_job.valid();
         int source = t.optimize_options.source_image;
         if (source >= 0) {
@@ -4103,7 +4152,7 @@ class App {
                 (close_pending >= 0 && close_pending < (int)tabs.size() &&
                  tabs[close_pending]->game_build.running())) {
                 error =
-                    "Wait for the game build to finish before closing its tab or the application.";
+                    "Wait for the background build or library audit to finish before closing its tab or the application.";
                 quit_pending = false;
                 close_pending = -1;
                 return;
@@ -4348,6 +4397,8 @@ class App {
         ImGui::End();
         help_share_dialogs();
         if (auto *t = tab()) { asset_dialogs(*t); save_group_dialog(*t); runtime_actors_window(*t); composite_dialog(*t); sprite_sheet_dialog(*t); floor_dialog(*t); mk3_layout_dialog(*t); floor_library_window(*t); }
+        library_audit_window();
+        library_audit_runner_window();
         prompts();
         recover();
     }
@@ -4756,6 +4807,19 @@ int run(int argc, char **argv) {
     bool test_compare = smoke && argc >= 5 && std::string(argv[4]) == "--compare";
     bool test_groups = smoke && argc >= 5 && std::string(argv[4]) == "--groups";
     bool test_actors = smoke && argc >= 5 && std::string(argv[4]) == "--actors";
+    bool test_library_audit = smoke && argc >= 6 && std::string(argv[4]) == "--library-audit";
+    bool test_library_runner = smoke && argc >= 5 && std::string(argv[4]) == "--library-audit-runner";
+    if (test_library_runner) {
+        app.library_audit_runner_open = true;
+        std::snprintf(app.library_audit_game, sizeof app.library_audit_game, "%s", fs::current_path().u8string().c_str());
+        std::snprintf(app.library_audit_parent, sizeof app.library_audit_parent, "%s", app.smoke_dir.c_str());
+    }
+    if (test_library_audit) {
+        std::string why;
+        if (!load_library_audit(argv[5], app.library_audit, why)) {
+            std::fprintf(stderr, "Library audit UI fixture failed: %s\n", why.c_str()); rc = 1; app.running = false;
+        } else app.library_audit_open = true;
+    }
     bool actors_real = false; // Set once: a real stage sidecar is never written by the smoke.
     bool test_optimize = test_review || test_shared || test_palette_reuse || test_subframes || test_compare ||
                          (smoke && argc >= 5 && std::string(argv[4]) == "--optimize");
@@ -4932,7 +4996,7 @@ int run(int argc, char **argv) {
             int w, h;
             SDL_GetRendererOutputSize(app.renderer, &w, &h);
             std::vector<uint8_t> rgba((size_t)w * h * 4);
-            std::string name = test_batch_import ? ("batch-" + std::to_string(frames) + ".png") : test_asset_tools ? ("asset-tools-" + std::to_string(frames) + ".png") : test_compare ? ("compare-" + std::to_string(frames) + ".png") : test_groups ? ("groups-" + std::to_string(frames) + ".png") : test_actors ? ("actors-" + std::to_string(frames) + ".png") : test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
+            std::string name = test_library_runner ? ("library-runner-" + std::to_string(frames) + ".png") : test_library_audit ? ("library-audit-" + std::to_string(frames) + ".png") : test_batch_import ? ("batch-" + std::to_string(frames) + ".png") : test_asset_tools ? ("asset-tools-" + std::to_string(frames) + ".png") : test_compare ? ("compare-" + std::to_string(frames) + ".png") : test_groups ? ("groups-" + std::to_string(frames) + ".png") : test_actors ? ("actors-" + std::to_string(frames) + ".png") : test_review ? (frames == 7 ? "savings-map.png" : frames == 11 ? "stage-comparison.png" : frames == 23 ? "rom-receipt.png" : frames == 31 ? "rom-comparison.png" : "review.png")
                                : frames == 3     ? "stage.png"
                                : frames == 7   ? "compact.png"
                                : frames == 11  ? "assets.png"
@@ -5051,6 +5115,14 @@ int run(int argc, char **argv) {
                 app.running = false;
             }
             frames++;
+            if (test_library_audit) {
+                if (frames == 5) app.library_audit_selected = 0;
+                if (frames == 8 && (app.library_audit.rows.empty() || app.library_audit_selected != 0 ||
+                                    !app.library_audit_open || app.library_audit.best_total <= 0)) {
+                    std::fprintf(stderr, "Library audit UI did not retain its report and selected evidence row.\n");
+                    rc = 1; app.running = false;
+                }
+            }
             if (test_actors && app.tab()) {
                 auto &t = *app.tab();
                 if (frames == 2) actors_real = t.actors_loaded;
@@ -5060,12 +5132,14 @@ int run(int argc, char **argv) {
                         // Demo: a free actor with unresolvable art exercises placeholders and save.
                         t.actors_path = (fs::u8path(app.smoke_dir) / "DEMO.runtime.json").u8string();
                         RuntimeActor a; a.name = "smoke_actor"; a.x = 120; a.y = 60; a.delay_min_ticks = 300;
+                        a.source_object = 0; a.replace_source = true;
                         a.frames = {{"NOSUCH1"}, {"NOSUCH2"}};
                         t.actors.actors = {a}; t.actor_selected = 0; t.actors_dirty = true;
                     }
                     t.actors_open = true;
                 }
                 if (frames == 5) { t.actors_simulate = true; t.actor_ticks = 600; t.actors_playing = false; }
+                if (frames == 6) { t.actors_onion = true; t.actors_isolate = true; t.actor_onion_alpha = .35f; }
                 if (frames == 8) {
                     bool ok = !t.actors.actors.empty() && t.actor_art;
                     if (ok && real) ok = !t.actor_art->frames.empty();
@@ -5073,7 +5147,9 @@ int run(int argc, char **argv) {
                     size_t visible = 0;
                     for (size_t i = 0; i < t.actors.actors.size(); ++i)
                         visible += actor_pose(t.actors, i, 600, true).visible;
-                    if (!ok || !visible) {
+                    auto replaced = actor_replaced_sources(t.actors, 600, true, t.document.state().objects.size());
+                    if (!ok || !visible || !app.actors_visible(t) ||
+                        (!real && (replaced.size() != 1 || replaced[0] != 0))) {
                         std::fprintf(stderr, "Runtime actors did not load art or pose (%zu visible): %s\n", visible, t.actors_status.c_str());
                         rc = 1; app.running = false;
                     }

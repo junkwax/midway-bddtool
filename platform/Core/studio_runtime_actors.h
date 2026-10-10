@@ -56,6 +56,14 @@ struct ActorPose {
 // With simulate_triggers, delayed actors appear after delay_min_ticks and always_static holds
 // its first frame; the game's own randomness and drop logic are not reproduced.
 ActorPose actor_pose(const RuntimeActorSet &set, size_t index, int64_t ticks, bool simulate_triggers);
+// Earliest preview tick displaying a requested frame, or -1 when current
+// trigger/phase rules make that frame unreachable.
+int64_t actor_tick_for_frame(const RuntimeActorSet &set, size_t index, size_t frame,
+                             bool simulate_triggers);
+// BDB object indexes suppressed by visible actors explicitly marked as replacements.
+// Invalid source indexes and currently hidden actors are ignored.
+std::vector<size_t> actor_replaced_sources(const RuntimeActorSet &set, int64_t ticks,
+                                           bool simulate_triggers, size_t object_count);
 
 // Copies the legacy hand-integration skeleton; it is not a verified game driver.
 std::string actor_bgnd_skeleton(const RuntimeActor &actor);

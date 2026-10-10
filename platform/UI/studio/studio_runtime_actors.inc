@@ -132,8 +132,11 @@ Rect actor_rect(const Tab &t, const RuntimeActor &a, const ActorPose &pose, Poin
     return {x, y, (double)w, (double)h};
 }
 bool actors_visible(const Tab &t) {
-    return t.actors_show && !t.source && t.solo < 0 &&
-           std::any_of(t.actors.actors.begin(), t.actors.actors.end(), [](const RuntimeActor &a) { return a.enabled; });
+    if (!t.actors_show || t.source || t.solo >= 0) return false;
+    if (t.actors_isolate)
+        return t.actor_selected >= 0 && t.actor_selected < (int)t.actors.actors.size() &&
+               t.actors.actors[t.actor_selected].enabled;
+    return std::any_of(t.actors.actors.begin(), t.actors.actors.end(), [](const RuntimeActor &a) { return a.enabled; });
 }
 void draw_runtime_actors(Tab &t, ImDrawList *draw, ImVec2 origin, Point cam) {
     if (!actors_visible(t)) return;
@@ -144,6 +147,7 @@ void draw_runtime_actors(Tab &t, ImDrawList *draw, ImVec2 origin, Point cam) {
     for (size_t i = 0; i < order.size(); ++i) order[i] = i;
     std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return t.actors.actors[a].layer < t.actors.actors[b].layer; });
     for (size_t i : order) {
+        if (t.actors_isolate && (int)i != t.actor_selected) continue;
         const auto &a = t.actors.actors[i];
         auto pose = actor_pose(t.actors, i, actor_preview_ticks(t), t.actors_simulate);
         if (!pose.visible) continue;
@@ -153,6 +157,34 @@ void draw_runtime_actors(Tab &t, ImDrawList *draw, ImVec2 origin, Point cam) {
         auto r = actor_rect(t, a, pose, cam, im ? im->w : 24, im ? im->h : 24);
         ImVec2 p0 = vec(t.view.to_screen({r.x, r.y}, point(origin)));
         ImVec2 p1 = vec(t.view.to_screen({r.x + r.w, r.y + r.h}, point(origin)));
+        bool selected = (int)i == t.actor_selected && t.actors_open;
+        if (selected && t.actors_onion && a.frames.size() > 1 && t.actor_art) {
+            auto ghost = [&](size_t ghost_frame, ImU32 tint) {
+                size_t ghost_source = 0;
+                const auto *ghost_art = t.actor_art->find(a.frames[ghost_frame].label, &ghost_source);
+                if (!ghost_art || ghost_source >= t.actor_art->sources.size()) return;
+                const auto &ghost_image = t.actor_art->sources[ghost_source].artwork.assets->data.images[ghost_art->image];
+                ActorPose ghost_pose = pose;
+                ghost_pose.frame = ghost_frame;
+                ghost_pose.x += a.frames[ghost_frame].dx - a.frames[pose.frame].dx;
+                ghost_pose.y += a.frames[ghost_frame].dy - a.frames[pose.frame].dy;
+                ghost_pose.hflip = a.frames[ghost_frame].hfl_mode == 0 ? a.hfl : a.frames[ghost_frame].hfl_mode == 2;
+                ghost_pose.vflip = a.frames[ghost_frame].vfl_mode == 0 ? a.vfl : a.frames[ghost_frame].vfl_mode == 2;
+                auto gr = actor_rect(t, a, ghost_pose, cam, ghost_image.w, ghost_image.h);
+                ImVec2 g0 = vec(t.view.to_screen({gr.x, gr.y}, point(origin)));
+                ImVec2 g1 = vec(t.view.to_screen({gr.x + gr.w, gr.y + gr.h}, point(origin)));
+                auto &ghost_cache = actor_textures[ghost_source]; ghost_cache.renderer = renderer;
+                if (auto *tex = ghost_cache.get(t.actor_art->sources[ghost_source].artwork, ghost_art->image, ghost_art->palette))
+                    draw->AddImage((ImTextureID)(intptr_t)tex, g0, g1,
+                                   {ghost_pose.hflip ? 1.f : 0.f, ghost_pose.vflip ? 1.f : 0.f},
+                                   {ghost_pose.hflip ? 0.f : 1.f, ghost_pose.vflip ? 0.f : 1.f}, tint);
+            };
+            int alpha = std::clamp((int)std::lround(t.actor_onion_alpha * 255.f), 16, 192);
+            if (pose.frame > 0) ghost(pose.frame - 1, IM_COL32(100, 190, 255, alpha));
+            else if (a.loop) ghost(a.frames.size() - 1, IM_COL32(100, 190, 255, alpha));
+            if (pose.frame + 1 < a.frames.size()) ghost(pose.frame + 1, IM_COL32(255, 150, 80, alpha));
+            else if (a.loop) ghost(0, IM_COL32(255, 150, 80, alpha));
+        }
         if (im) {
             auto &cache = actor_textures[source];
             cache.renderer = renderer;
@@ -165,7 +197,6 @@ void draw_runtime_actors(Tab &t, ImDrawList *draw, ImVec2 origin, Point cam) {
             draw->AddLine(p0, p1, IM_COL32(255, 120, 140, 200));
             draw->AddLine({p0.x, p1.y}, {p1.x, p0.y}, IM_COL32(255, 120, 140, 200));
         }
-        bool selected = (int)i == t.actor_selected && t.actors_open;
         if (selected || !im) draw->AddRect(p0, p1, selected ? selection_color : IM_COL32(255, 120, 140, 220), 0, 0, 1.5f);
         if (t.actors_labels) {
             char text[160];
@@ -227,12 +258,37 @@ void runtime_actors_window(Tab &t) {
 
     ImGui::Checkbox("Show on stage", &t.actors_show); ImGui::SameLine();
     ImGui::Checkbox("Labels", &t.actors_labels); ImGui::SameLine();
+    ImGui::BeginDisabled(t.actor_selected < 0);
+    ImGui::Checkbox("Solo selected", &t.actors_isolate); ImGui::SameLine();
+    ImGui::Checkbox("Onion skin", &t.actors_onion);
+    ImGui::EndDisabled(); ImGui::SameLine();
     ImGui::Checkbox("Simulate triggers", &t.actors_simulate);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Off matches the legacy preview: every actor loops from tick 0.\nOn: delayed actors appear after delay_min_ticks and always_static holds its first frame.\nThe game's random lineups and drop logic are not reproduced.");
-    ImGui::SameLine();
     if (ImGui::Button(t.actors_playing ? "Pause" : "Play")) t.actors_playing = !t.actors_playing;
-    ImGui::SameLine();
+    auto step_frame = [&](int direction) {
+        if (t.actor_selected < 0 || t.actor_selected >= (int)t.actors.actors.size()) return;
+        const auto &actor = t.actors.actors[t.actor_selected];
+        if (actor.frames.empty()) return;
+        auto pose = actor_pose(t.actors, (size_t)t.actor_selected, actor_preview_ticks(t), t.actors_simulate);
+        int target = (int)pose.frame + direction;
+        if (actor.loop) target = (target + (int)actor.frames.size()) % (int)actor.frames.size();
+        else target = std::clamp(target, 0, (int)actor.frames.size() - 1);
+        auto tick_for_frame = actor_tick_for_frame(t.actors, (size_t)t.actor_selected, (size_t)target, t.actors_simulate);
+        if (tick_for_frame >= 0) { t.actor_ticks = (double)tick_for_frame; t.actors_playing = false; }
+        else toast("That frame is not reachable with the current trigger and phase settings");
+    };
+    ImGui::SameLine(); ImGui::BeginDisabled(t.actor_selected < 0);
+    if (ImGui::Button("Previous frame")) step_frame(-1);
+    ImGui::SameLine(); if (ImGui::Button("Next frame")) step_frame(1);
+    ImGui::EndDisabled();
+    if (t.actors_onion) {
+        ImGui::SameLine(); ImGui::SetNextItemWidth(100);
+        float percent = t.actor_onion_alpha * 100.f;
+        if (ImGui::SliderFloat("Onion opacity", &percent, 8.f, 60.f, "%.0f%%", ImGuiSliderFlags_NoInput))
+            t.actor_onion_alpha = percent / 100.f;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Blue is the previous frame; orange is the next frame. Only the selected actor is ghosted.");
+    }
     int span = 1;
     for (const auto &a : t.actors.actors) span = std::max(span, a.delay_min_ticks + actor_cycle_ticks(a) * 2);
     int tick = (int)std::min<int64_t>(actor_preview_ticks(t), span);
@@ -360,7 +416,7 @@ void runtime_actors_window(Tab &t) {
         ImGui::SetNextItemWidth(100); changed |= ImGui::InputInt("Group index", &a.group_index);
         ImGui::SameLine(); changed |= ImGui::Checkbox("Lock timing to leader", &a.sync_group_timing);
         if (ImGui::TreeNode("Integration fields")) {
-            ImGui::TextDisabled("Used by the copied BGND skeleton and the legacy tool; the preview ignores them.");
+            ImGui::TextDisabled("Assembly hints are preserved; Source object and Replace source also affect the preview.");
             ImGui::SetNextItemWidth(200); changed |= input_string("Code label", a.code_label);
             ImGui::SetNextItemWidth(200); changed |= input_string("Code pattern", a.code_pattern, 31);
             ImGui::SetNextItemWidth(200); changed |= input_string("Frame driver", a.frame_driver, 23);
@@ -370,6 +426,8 @@ void runtime_actors_window(Tab &t) {
             ImGui::SetNextItemWidth(100); changed |= ImGui::InputInt("Source object", &a.source_object);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("-1 for a free actor; otherwise the BDB object index this actor follows.");
             ImGui::SameLine(); changed |= ImGui::Checkbox("Replace source", &a.replace_source);
+            if (a.replace_source && (a.source_object < 0 || a.source_object >= (int)t.document.state().objects.size()))
+                ImGui::TextColored({1.f, .65f, .35f, 1.f}, "Choose a valid source object before its static placement can be hidden.");
             changed |= ImGui::Checkbox("Multipart piece", &a.multipart_piece);
             ImGui::SetNextItemWidth(100); changed |= ImGui::InputInt("Part index", &a.part_index);
             ImGui::SameLine(); ImGui::SetNextItemWidth(100);

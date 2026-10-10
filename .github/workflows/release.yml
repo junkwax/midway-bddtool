@@ -70,11 +70,13 @@ jobs:
 
           cp build/bddview "${root}/bin/"
           cp build/bddtool "${root}/bin/"
+          cp build/studio_savings_audit "${root}/bin/"
+          cp -R build/tools "${root}/bin/"
           cp README.md CHANGELOG.md "${root}/"
           if [ -d build/assets ]; then
             cp -R build/assets "${root}/bin/"
           fi
-          chmod +x "${root}/bin/bddview" "${root}/bin/bddtool"
+          chmod +x "${root}/bin/bddview" "${root}/bin/bddtool" "${root}/bin/studio_savings_audit"
 
           if [ "${RUNNER_OS}" = "macOS" ]; then
             mkdir -p "${root}/Frameworks"
@@ -170,7 +172,8 @@ jobs:
           $root = Join-Path 'dist' $package
           $bin = Join-Path $root 'bin'
           New-Item -ItemType Directory -Force -Path $bin | Out-Null
-          Copy-Item build-win\Release\bddview.exe, build-win\Release\bddtool.exe, build-win\Release\SDL2.dll -Destination $bin -Force
+          Copy-Item build-win\Release\bddview.exe, build-win\Release\bddtool.exe, build-win\Release\studio_savings_audit.exe, build-win\Release\SDL2.dll -Destination $bin -Force
+          Copy-Item build-win\Release\tools -Destination $bin -Recurse -Force
           Copy-Item README.md, CHANGELOG.md -Destination $root -Force
           if (Test-Path build-win\Release\assets) {
             Copy-Item build-win\Release\assets -Destination $bin -Recurse -Force

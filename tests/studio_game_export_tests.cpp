@@ -318,6 +318,45 @@ int main(int argc, char **argv) {
         }
         require(!job.running() && job.exit_code() == 0 && fs::exists(reviewed_output / "ok"),
                 "Reviewed adapter arguments or working directory were incorrect");
+        auto audit_tools = root / "audit tools";
+        fs::create_directories(audit_tools / "tools");
+#ifdef _WIN32
+        auto analyzer = audit_tools / "studio_savings_audit.exe";
+#else
+        auto analyzer = audit_tools / "studio_savings_audit";
+#endif
+        write(analyzer, "analyzer fixture");
+        auto audit_script = audit_tools / "tools/audit_bdd_library.py";
+        write(audit_script,
+              "import pathlib,sys\n"
+              "assert len(sys.argv)==4\n"
+              "assert pathlib.Path(sys.argv[1]).resolve()==pathlib.Path('" + game.generic_string() + "').resolve()\n"
+              "assert pathlib.Path(sys.argv[2]).name.startswith('studio_savings_audit')\n"
+              "p=pathlib.Path(sys.argv[3]);p.mkdir();(p/'summary.csv').write_text('ok')\n"
+              "print('[1/1] TEST.BDD exit=0',flush=True)\n");
+        auto audit_output = root / "new audit output", audit_log = root / "audit.log";
+        require(job.start_library_audit(audit_script.u8string(), game.u8string(), analyzer.u8string(),
+                                        audit_output.u8string(), audit_log.u8string(), error), error);
+        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (job.running() && std::chrono::steady_clock::now() < deadline) {
+            job.poll(); std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        require(!job.running() && job.exit_code() == 0 && fs::exists(audit_output / "summary.csv") &&
+                    read(audit_log).find("[1/1]") != std::string::npos,
+                "Library audit process arguments, output or log are wrong");
+        require(!job.start_library_audit(audit_script.u8string(), game.u8string(), analyzer.u8string(),
+                                         audit_output.u8string(), audit_log.u8string(), error),
+                "Library audit overwrote an existing output");
+        write(audit_script, "import time\nprint('WAITING',flush=True)\ntime.sleep(30)\n");
+        auto cancelled_output = root / "cancelled audit";
+        require(job.start_library_audit(audit_script.u8string(), game.u8string(), analyzer.u8string(),
+                                        cancelled_output.u8string(), audit_log.u8string(), error), error);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); job.cancel();
+        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (job.running() && std::chrono::steady_clock::now() < deadline) {
+            job.poll(); std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        require(!job.running() && job.exit_code() != 0, "Cancelled library audit kept running or reported success");
         if (argc >= 4) {
             Document real;
             require(real.load(argv[2], error), error);

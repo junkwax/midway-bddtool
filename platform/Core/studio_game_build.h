@@ -14,6 +14,10 @@ class GameBuild {
     bool start_reviewed(const std::string &root, const std::string &log_path,
                         const std::string &adapter_folder, const std::string &job,
                         const std::string &output, std::string &error);
+    bool start_library_audit(const std::string &script, const std::string &game,
+                             const std::string &analyzer, const std::string &output,
+                             const std::string &log_path, std::string &error);
+    void cancel();
     void poll();
     bool running() const { return running_; }
     bool started() const { return started_; }

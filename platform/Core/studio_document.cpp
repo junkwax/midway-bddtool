@@ -707,9 +707,11 @@ bool Document::arrange(const std::vector<ObjectId> &ids, ArrangeMode mode, std::
     std::vector<SceneItem> items;
     for (const auto &item : scene()) if (selected(ids, item.id)) items.push_back(item);
     const bool distribute = mode == ArrangeMode::DistributeX || mode == ArrangeMode::DistributeY;
-    if (items.size() < (distribute ? 3u : 2u)) {
+    const bool mirror = mode == ArrangeMode::MirrorX || mode == ArrangeMode::MirrorY;
+    if (items.size() < (distribute ? 3u : mirror ? 1u : 2u)) {
         error = distribute ? "Select at least three visible placements to distribute." :
-                             "Select at least two visible placements to align.";
+                mirror ? "Select at least one visible placement to mirror." :
+                         "Select at least two visible placements to align.";
         return false;
     }
     for (const auto &item : items) {
@@ -733,6 +735,8 @@ bool Document::arrange(const std::vector<ObjectId> &ids, ArrangeMode mode, std::
             else if (mode == ArrangeMode::Top) y = top;
             else if (mode == ArrangeMode::CenterY) y = (top + bottom - item.rect.h) * .5;
             else if (mode == ArrangeMode::Bottom) y = bottom - item.rect.h;
+            else if (mode == ArrangeMode::MirrorX) x = left + right - item.rect.x - item.rect.w;
+            else if (mode == ArrangeMode::MirrorY) y = top + bottom - item.rect.y - item.rect.h;
             delta[item.id] = {(int)std::llround(x - item.rect.x), (int)std::llround(y - item.rect.y)};
         }
     } else {
@@ -753,11 +757,13 @@ bool Document::arrange(const std::vector<ObjectId> &ids, ArrangeMode mode, std::
             delta[item.id] = {dx, dy};
         }
     }
-    begin(distribute ? "Distribute artwork" : "Align artwork");
+    begin(distribute ? "Distribute artwork" : mirror ? "Mirror artwork group" : "Align artwork");
     for (auto &p : state_.objects) if (auto found = delta.find(p.id); found != delta.end()) {
         p.object.depth = std::clamp(p.object.depth + found->second.first, -100000, 100000);
         p.object.sy = std::clamp(p.object.sy + found->second.second, -100000, 100000);
-        if (found->second.first || found->second.second) touch();
+        if (mode == ArrangeMode::MirrorX) p.object.wx ^= 0x10;
+        if (mode == ArrangeMode::MirrorY) p.object.wx ^= 0x20;
+        if (found->second.first || found->second.second || mirror) touch();
     }
     bool changed = changed_; commit();
     if (!changed) error = "The selected placements are already arranged that way.";

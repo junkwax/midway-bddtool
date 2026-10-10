@@ -47,6 +47,9 @@ int main(int argc, char **argv) {
         // Legacy timing: frames advance by frame_ticks and loop.
         require(actor_pose(set, 0, 0, false).frame == 0 && actor_pose(set, 0, 6, false).frame == 1 &&
                 actor_pose(set, 0, 18, false).frame == 0, "Looping frame timing is wrong");
+        require(actor_tick_for_frame(set, 0, 2, false) == 12 &&
+                actor_pose(set, 0, actor_tick_for_frame(set, 0, 2, false), false).frame == 2,
+                "Frame navigation did not resolve loop timing");
         // Without trigger simulation the delayed follower plays immediately (legacy preview).
         auto follower = actor_pose(set, 1, 4, false);
         require(follower.visible && follower.frame == 1 && follower.hflip && follower.x == 95, "Legacy follower pose is wrong");
@@ -55,12 +58,24 @@ int main(int argc, char **argv) {
         require(!actor_pose(set, 1, 575, true).visible, "Delayed actor appeared early");
         auto dropped = actor_pose(set, 1, 576, true);
         require(dropped.visible && dropped.frame == 0, "Delayed actor did not start at its delay");
+        require(actor_tick_for_frame(set, 1, 1, true) == 580, "Frame navigation ignored delay or frame timing");
         // always_static holds its first frame only when simulating; phase and motion still apply.
         require(actor_pose(set, 2, 0, false).frame == 1 && actor_pose(set, 2, 0, true).frame == 0,
                 "always_static or phase handling is wrong");
+        require(actor_tick_for_frame(set, 2, 1, false) == 0, "Frame navigation skipped a frame already selected by phase");
+        require(actor_tick_for_frame(set, 2, 1, true) == -1, "Static simulation exposed an unreachable frame");
         require(actor_pose(set, 2, 3, false).x == 470 + 10, "Motion offset ignores phase");
+        set.actors[0].replace_source = true; set.actors[0].source_object = 4;
+        set.actors[1].replace_source = true; set.actors[1].source_object = 7;
+        auto replaced = actor_replaced_sources(set, 575, true, 8);
+        require(replaced.size() == 1 && replaced[0] == 4, "Delayed replacement hid its source before becoming visible");
+        replaced = actor_replaced_sources(set, 576, true, 8);
+        require(replaced.size() == 2 && replaced[0] == 4 && replaced[1] == 7, "Visible replacement sources are wrong");
+        set.actors[2].replace_source = true; set.actors[2].source_object = 9;
+        require(actor_replaced_sources(set, 576, true, 8).size() == 2, "Invalid replacement source was accepted");
         set.actors[0].enabled = false;
         require(!actor_pose(set, 0, 0, false).visible, "Disabled actor is visible");
+        require(actor_replaced_sources(set, 576, true, 8).size() == 1, "Disabled actor still replaced its source");
 
         auto skeleton = actor_bgnd_skeleton(set.actors[1]);
         require(skeleton.find("skeleton_proc") != std::string::npos && skeleton.find("\t.long\t0\n") != std::string::npos &&

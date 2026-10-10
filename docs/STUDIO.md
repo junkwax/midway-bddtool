@@ -272,6 +272,12 @@ three or more selections, **Space X** and **Space Y** keep the outer artwork
 fixed and equalize gaps between image edges. The operation spans layer offsets,
 rejects locked selections as a whole, and creates one undo step.
 
+**Mirror X** and **Mirror Y** reflect the complete selection around its shared
+bounding box while toggling each placement's matching pixel flip. This keeps a
+multi-piece formation visually exact while reversing its arrangement, and a
+second mirror restores the original positions and flip flags. The command is
+also available for one placement when only its pixel orientation must change.
+
 **Artwork groups.** Select placements and choose **Save as group...** in the
 inspector to keep an arrangement, such as a pillar with its capital and base, for
 reuse. Groups appear under **Groups** in Assets with a thumbnail; drag one onto
@@ -379,6 +385,13 @@ their top-left without IMG anchor offsets, matching how the legacy tool authored
 positions. While sidecar actors are shown, the built-in Forest preview is
 hidden so faces are not drawn twice.
 
+**Previous frame** and **Next frame** jump to exact authored frame boundaries,
+including custom durations, delays, phase and synchronized timing. **Onion
+skin** overlays the neighboring frames with their offsets and flips, and **Solo
+selected** hides other actors while retaining the stage as alignment context.
+When **Replace source** is enabled, the linked static BDB placement remains
+visible until the actor appears and is then suppressed in the preview.
+
 Edit actors and frames in the window: add, duplicate, delete and reorder actors;
 set position, timing, delays, loop, flips, sync group and role; and edit each
 frame's label, offset, ticks and flip mode. A label field suggests matches from
@@ -387,6 +400,36 @@ are kept for the skeleton and the legacy tool. Actor edits have their own
 undo/redo and **Save sidecar**; they never enter the stage's undo history or its
 BDB/BDD save. Closing a stage or quitting with unsaved actor edits prompts like
 unsaved stage edits, and **Save** writes both.
+
+### Library savings reports
+
+Use **File → Open library savings audit...** to open a completed report folder
+from `tools/audit_bdd_library.py`. The read-only table sorts files by their best
+verified modeled saving and shows palette-preserving savings, best mode, added
+placements, palette count and build relationship. Search across file, scope and
+mode, or filter active inputs and incomplete scans. Selecting a row exposes its
+evidence folder and program-table/palette growth. **Open in Optimize** copies
+that row's frozen BDD, BDB, metadata and editor layout into a new application-data
+review folder, restores the audit's bounded search settings and starts a fresh
+scan. The Optimize panel keeps the reported estimate beside its fresh result so
+drift is visible. **Open stage only** creates the same disposable copy without a
+scan. The report input remains unchanged, so inspection and Optimize experiments
+cannot invalidate the captured evidence.
+
+Headline totals include only rows classified as active build relationships.
+Inactive masters and generated relationships remain visible but are not folded
+into those totals. Results are still per-file alternatives: they do not prove
+LOAD2 savings, runtime correctness, DMA headroom or permission to apply a
+candidate. Opening a report never scans or writes the game checkout.
+
+**File → Run library savings audit...** runs the same pipeline without a command
+prompt. Choose the game checkout and an existing parent for the new timestamped
+report. The editor locates its bundled `studio_savings_audit` analyzer, streams
+per-file progress from the unbuffered Python job, supports cancellation, and
+prevents application exit while the process is active. A zero-exit job is still
+parsed and validated before its report opens automatically. Failed or cancelled
+jobs retain their log and any partial output for diagnosis; they are never
+presented as completed evidence.
 
 ## Save and recovery
 
@@ -607,6 +650,9 @@ bddview --studio-smoke tmp/help-share-ui --demo --help-share
 bddview --studio-smoke tmp/background-ui --demo --background
 bddview --studio-smoke tmp/subframe-ui --demo --subframes
 bddview --studio-smoke tmp/palette-ui --demo --palettes
+bddview --studio-smoke tmp/actors-ui --demo --actors
+bddview --studio-smoke tmp/library-audit-ui --demo --library-audit path/to/audit-report
+bddview --studio-smoke tmp/library-runner-ui --demo --library-audit-runner
 studio_document_tests tmp/fixture-test path/to/fixture.BDB
 studio_game_export_tests tmp/export-test [path/to/fixture.BDB path/to/BGND.ASM]
 bddview --studio-export-smoke tmp/runtime-test

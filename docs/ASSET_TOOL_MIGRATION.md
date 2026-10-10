@@ -471,6 +471,14 @@ Verification covers deterministic duplicate detection, placement/default remap,
 pixel equivalence, damaged-plan rejection, required runtime confirmation,
 undo/redo, optimizer/export regressions, and the 900×640 `--palettes` UI smoke.
 
+## Library audit handoff — October 10, 2026
+
+Completed audit rows now open directly in Optimize through a protected scratch
+copy. The handoff reproduces the audit's preserve/palette and shared-base mode,
+deep search and 24-placement bound, then displays the captured estimate beside
+the fresh result. Opening a stage without scanning remains available. Neither
+route changes the report evidence or game checkout.
+
 ## Remaining candidates, subject to the decisions above
 
 | Legacy capability | Current route / next work |
@@ -689,9 +697,33 @@ defaults for absent keys (older sidecars such as NUPOOL's omit several) and
 writes the legacy key order and number formatting, so either tool can open the
 other's output. Timing reproduces the legacy preview (53 ticks/s, leader-locked
 phase, per-frame ticks, loop or hold, 16.16 motion). Trigger simulation is an
-explicit, documented opt-in. Not migrated: inferring actors from level
-animations, onion skinning, the isolation window, and hiding a `replace_source`
-placement in the preview (the flag is preserved).
+explicit, documented opt-in. Automatic inference from level animations remains
+deferred.
+
+The selected actor can display an onion skin while its editor is open. The
+previous frame is blue and the next frame is orange, using each frame's offset,
+dimensions and flip overrides at the current motion position. Opacity is
+adjustable, loop endpoints wrap, and non-loop endpoints show only the available
+neighbor. Onion skins are preview state only and never enter the sidecar, BDB,
+BDD or game export.
+
+**Solo selected** isolates one actor on the main stage canvas while retaining
+the stage, camera and floor as alignment context. Other actors do not draw and
+do not suppress their `replace_source` placements while soloing. This replaces
+the detached legacy isolation window with the same preview coordinates used by
+normal stage editing.
+
+**Previous frame** and **Next frame** jump to the selected actor's exact frame
+boundary and pause playback. Navigation accounts for frame-specific durations,
+delay, phase, synchronized-group leaders, looping and held endpoints. Frames
+made unreachable by static-trigger simulation or phase settings are reported
+instead of displaying a misleading pose.
+
+When a visible actor has **Replace source** enabled and a valid source-object
+index, the stage preview suppresses that static BDB placement for the same tick.
+Delayed or disabled actors leave it visible until their replacement appears;
+invalid indexes are ignored. This prevents a static anchor and its animated
+replacement from drawing on top of one another without changing either file.
 
 October 6 check against the local checkout: FOREST2's three tree faces resolve
 all 7 frames. NUPOOL's 17 actors resolve 45 frames and miss 168, because
