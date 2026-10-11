@@ -90,6 +90,13 @@ broader lossless search. Focused structural scans preserve palette indices by
 default; palette-aware reuse remains a separate reviewed action because runtime
 code can cycle or swap those indices.
 
+Expand **Manual cut lines** in a focused Subframes review to place a vertical,
+horizontal, or two-axis cut at a known artwork seam. Vertical cuts snap to the
+four-pixel LOAD2 alignment. **Preview manual split** rebuilds every normal and
+flipped placement, then runs the same exact-pixel and runtime-order verifier as
+automatic proposals. The normal review reports video-data and placement-table
+cost before **Apply verified proposal** makes one undoable edit.
+
 **Palette** edits the selected shared palette with RGB555 precision. Copy the
 palette for that artwork first when other images should retain their colors.
 The Color adjustments section previews brightness, contrast and saturation for

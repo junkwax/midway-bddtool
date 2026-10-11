@@ -135,6 +135,30 @@ int main(int argc, char **argv) {
                     std::all_of(focused.changes.begin(), focused.changes.end(),
                                 [](const auto &change) { return change.source_image == 7; }),
                 "Focused subframe scan changed artwork outside its selected image");
+        ManualSplitOptions manual_options;
+        manual_options.image = 7;
+        manual_options.x_cuts = {32};
+        manual_options.y_cuts = {16};
+        auto manual = preview_manual_split(doc, manual_options);
+        require(manual.verified && manual.changes.size() == 1 &&
+                    manual.changes[0].pieces.size() == 4,
+                manual.error.empty() ? "Manual cut grid was not created" : manual.error);
+        require(manual.proposed.objects == manual.baseline.objects * 4 &&
+                    manual.proposed.images == manual.baseline.images + 3,
+                "Manual split budget did not include its image and placement table cost");
+        auto manual_doc = doc;
+        require(manual_doc.apply_optimization(manual, error), error);
+        require(manual_doc.undo() && manual_doc.state().objects.size() == doc.state().objects.size() &&
+                    manual_doc.redo() &&
+                    manual_doc.state().objects.size() == manual.proposed.objects,
+                "Manual split undo/redo failed");
+        fs::create_directories(root / "manual-split");
+        check_roundtrip(doc, manual, root / "manual-split");
+        manual_options.x_cuts = {31};
+        auto invalid_manual = preview_manual_split(doc, manual_options);
+        require(!invalid_manual.verified &&
+                    invalid_manual.error.find("four pixels") != std::string::npos,
+                "Unaligned manual cut was accepted");
         check_roundtrip(doc, plan, root);
         auto changed = doc;
         changed.move({doc.state().objects[0].id}, 1, 0);

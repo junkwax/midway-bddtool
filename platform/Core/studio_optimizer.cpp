@@ -881,6 +881,118 @@ OptimizeBudget optimization_budget(const State &state) {
         b.palette_bytes += p.count * 2 + 2;
     return b;
 }
+OptimizationPlan preview_manual_split(const Document &document,
+                                      const ManualSplitOptions &options) {
+    OptimizationPlan plan;
+    plan.before = plan.after = document.state();
+    plan.options.source_image = options.image;
+    plan.options.compact_palettes = false;
+    try {
+        require(plan.before.assets && plan.before.has_bdb,
+                "Open a paired BDB/BDD stage before splitting artwork.");
+        const auto &source = get_image(plan.before, options.image);
+        require(source.w > 0 && source.h > 0 && source.w % 4 == 0 &&
+                    source.pix.size() == (size_t)source.w * source.h,
+                "Selected artwork does not have valid LOAD2-aligned geometry.");
+        for (const auto &m : plan.before.assets->metadata)
+            if (m.idx == options.image)
+                require(!(m.lod_ref || m.anix || m.aniy || m.anix2 || m.aniy2 || m.aniz2 ||
+                          m.frm || m.opals || m.pttblnum),
+                        "Animation/LOD artwork needs a consumer-specific review.");
+        auto xs = options.x_cuts, ys = options.y_cuts;
+        std::sort(xs.begin(), xs.end()); xs.erase(std::unique(xs.begin(), xs.end()), xs.end());
+        std::sort(ys.begin(), ys.end()); ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
+        require(!xs.empty() || !ys.empty(), "Enable at least one cut line.");
+        for (int x : xs) require(x > 0 && x < source.w && x % 4 == 0,
+            "Vertical cuts must be inside the image and aligned to four pixels.");
+        for (int y : ys) require(y > 0 && y < source.h,
+            "Horizontal cuts must be inside the image.");
+        require((xs.size() + 1) * (ys.size() + 1) <= 16,
+                "A manual split may create at most 16 pieces.");
+
+        std::set<int> palettes;
+        int uses = 0;
+        for (const auto &o : plan.before.objects)
+            if (o.object.ii == options.image) {
+                require(o.plane >= 0 && o.plane < (int)plan.before.planes.size() && !o.locked &&
+                            !plan.before.planes[o.plane].locked,
+                        "Unlock and assign every placement of this image before splitting it.");
+                require(o.object.fl >= 0 && o.object.fl < (int)plan.before.assets->data.palettes.size(),
+                        "Artwork uses a missing palette.");
+                palettes.insert(o.object.fl); uses++;
+            }
+        require(uses > 0, "Choose artwork that is placed in this stage.");
+        plan.baseline = optimization_budget(plan.before);
+        auto bank = std::make_shared<AssetBank>(*plan.before.assets);
+        int next_image = 0;
+        for (const auto &im : bank->data.images) next_image = std::max(next_image, im.idx + 1);
+        std::vector<int> x_edges{0}, y_edges{0};
+        x_edges.insert(x_edges.end(), xs.begin(), xs.end()); x_edges.push_back(source.w);
+        y_edges.insert(y_edges.end(), ys.begin(), ys.end()); y_edges.push_back(source.h);
+        OptimizeChange change;
+        change.source_image = options.image; change.uses = uses; change.before_bits = bits(source);
+        for (size_t yi = 1; yi < y_edges.size(); yi++)
+            for (size_t xi = 1; xi < x_edges.size(); xi++) {
+                OptimizePiece piece;
+                piece.x = x_edges[xi - 1]; piece.y = y_edges[yi - 1];
+                piece.w = x_edges[xi] - piece.x; piece.h = y_edges[yi] - piece.y;
+                BddCoreImage image{};
+                image.idx = next_image++; image.w = piece.w; image.h = piece.h;
+                image.flags = source.flags; image.pix.resize((size_t)image.w * image.h);
+                for (int y = 0; y < image.h; y++)
+                    std::copy_n(source.pix.begin() + (size_t)(piece.y + y) * source.w + piece.x,
+                                image.w, image.pix.begin() + (size_t)y * image.w);
+                piece.image = image.idx;
+                for (int palette : palettes) piece.palettes[palette] = palette;
+                change.added_bits += bits(image);
+                bank->data.images.push_back(std::move(image));
+                BddImageMetadata metadata{}; metadata.idx = piece.image;
+                std::snprintf(metadata.label, sizeof metadata.label, "CUT_%d", piece.image);
+                bank->metadata.push_back(metadata);
+                bank->default_palettes.push_back(*palettes.begin());
+                change.pieces.push_back(std::move(piece));
+            }
+        auto image_at = std::find_if(bank->data.images.begin(), bank->data.images.end(),
+                                    [&](const auto &im) { return im.idx == options.image; });
+        require(image_at != bank->data.images.end(), "Selected artwork disappeared during split.");
+        auto image_offset = image_at - bank->data.images.begin();
+        bank->data.images.erase(image_at);
+        if (image_offset < (ptrdiff_t)bank->default_palettes.size())
+            bank->default_palettes.erase(bank->default_palettes.begin() + image_offset);
+        bank->metadata.erase(std::remove_if(bank->metadata.begin(), bank->metadata.end(),
+            [&](const auto &m) { return m.idx == options.image; }), bank->metadata.end());
+        require(bank->data.images.size() <= BDD_CORE_MK2_LOAD2_MAX_IMAGE_HEADERS && next_image <= 65536,
+                "Manual split exceeds the LOAD2 image-header limit.");
+        plan.after.assets = bank; plan.after.objects.clear();
+        ObjectId next_object = 1;
+        for (const auto &o : plan.before.objects) next_object = std::max(next_object, o.id + 1);
+        for (const auto &old : plan.before.objects) {
+            if (old.object.ii != options.image) { plan.after.objects.push_back(old); continue; }
+            bool first = true;
+            for (const auto &piece : change.pieces) {
+                Placement object = old;
+                if (!first) object.id = next_object++;
+                first = false;
+                object.object.depth += (old.object.wx & 0x10) ? source.w-piece.x-piece.w : piece.x;
+                object.object.sy += (old.object.wx & 0x20) ? source.h-piece.y-piece.h : piece.y;
+                object.object.ii = piece.image; object.object.fl = piece.palettes.at(old.object.fl);
+                plan.after.objects.push_back(object);
+            }
+        }
+        std::stable_sort(plan.after.objects.begin(), plan.after.objects.end(),
+                         [](const auto &a, const auto &b) { return a.object.order < b.object.order; });
+        for (size_t i = 0; i < plan.after.objects.size(); i++) plan.after.objects[i].object.order = (int)i;
+        require(plan.after.objects.size() <= BDD_CORE_MAX_OBJECTS &&
+                    plan.after.objects.size() <= BDD_CORE_MK2_LOAD2_MAX_BLOCKS,
+                "Manual split exceeds the LOAD2 block limit.");
+        plan.changes.push_back(std::move(change));
+        plan.proposed = optimization_budget(plan.after);
+        plan.notes.push_back("Manual cut grid; palette indices and transparent pixels preserved.");
+        plan.verified = verify_optimization(plan, plan.error);
+    } catch (const std::exception &e) { plan.error = e.what(); plan.verified = false; }
+    return plan;
+}
+
 OptimizationPlan find_lossless_savings(const Document &document, const OptimizeOptions &options,
                                        OptimizeProgress *progress) {
     OptimizationPlan plan;

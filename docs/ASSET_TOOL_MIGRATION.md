@@ -440,6 +440,12 @@ Focused structural scans preserve palette indices by default. Palette-aware
 reuse remains an explicit action because static BDB/BDD pixels cannot establish
 that game code never cycles or swaps palette entries.
 
+The focused workspace also provides reviewed vertical and horizontal cut lines.
+Manual cuts preserve the complete source rectangle, palette indices and all
+normal/X/Y/XY-flipped placements. They use the same reconstruction and runtime
+ordering proof as automatic splits and show both video-data and added table cost
+before the single undoable apply.
+
 This replaces the useful part of the legacy split-object dialog without carrying
 over its separate global state, automatic palette deletion switches, or direct
 mutation of legacy arrays. Metadata-bearing animation/LOD images, locked and
@@ -494,7 +500,7 @@ smokes do not pollute the user's list.
 | Palette unions, near-color grouping and delete-unused | Exact duplicate consolidation is now in Optimize; keep broader transformations deferred until consumer/reference checks can prove their scope |
 | Palette brightness/contrast, tone matching and blending | Brightness, contrast, saturation and index-preserving blend are now in the palette editor; automatic semantic tone matching remains deferred |
 | Palette export/import and palette-animation tooling | RGB555 exchange and bounded live cycle preview are migrated; inferred or authored runtime cycle integration remains separate |
-| Manual crop/split/merge controls | Lossless transparent trim/pad is migrated with flipped-placement compensation; verified Subframes handles splitting; arbitrary destructive crop/merge remains deferred |
+| Manual crop/split/merge controls | Lossless transparent trim/pad and exact user-placed X/Y cut grids are migrated with flipped-placement compensation and verified Subframes review; arbitrary destructive crop/merge remains deferred |
 | Sprite-sheet/composite/TGA export | Migrated: resolved composites, metadata-backed artwork sheets, and lossless selected-image RGB555 indexed TGA |
 
 Folder import scans one directory, up to 2,048 raster filenames, and reviews up

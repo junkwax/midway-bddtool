@@ -62,6 +62,14 @@ OptimizationPlan find_lossless_savings(const Document &document, const OptimizeO
                                        OptimizeProgress *progress = nullptr);
 OptimizationPlan find_shared_savings(const Document &document, const OptimizeOptions &options,
                                      OptimizeProgress *progress = nullptr);
+struct ManualSplitOptions {
+    int image = -1;
+    std::vector<int> x_cuts, y_cuts;
+};
+// Build an exact grid from user-selected cut lines. X cuts retain LOAD2's
+// four-pixel width alignment; Y cuts may land on any scanline.
+OptimizationPlan preview_manual_split(const Document &document,
+                                      const ManualSplitOptions &options);
 bool verify_optimization(const OptimizationPlan &plan, std::string &error);
 std::string optimization_report(const OptimizationPlan &plan);
 struct OptimizeRegion {

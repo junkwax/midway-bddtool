@@ -224,6 +224,8 @@ struct Tab {
     std::unique_ptr<PaletteConsolidation> palette_plan;
     int optimize_choice = 0, optimize_palette = 0;
     bool optimize_static_palettes = false, palette_slots_reviewed = false, optimize_cuts = true;
+    bool manual_split_x = true, manual_split_y = false;
+    int manual_split_x_at = 4, manual_split_y_at = 1;
     bool compare_open = false, compare_pattern = false;
     CompareView compare;
     Point compare_camera;
@@ -2077,6 +2079,11 @@ class App {
         t.optimize_choice = 0;
         t.optimize_palette = 0;
         t.optimize_plan.reset();
+        if (auto *selected = t.document.image(image)) {
+            t.manual_split_x_at = std::max(4, (selected->w / 8) * 4);
+            if (t.manual_split_x_at >= selected->w) t.manual_split_x_at = selected->w - 4;
+            t.manual_split_y_at = std::max(1, selected->h / 2);
+        }
         page = 3;
         t.optimize_mode = 0;
         start_optimization(t);
@@ -2252,6 +2259,42 @@ class App {
                     t.optimize_plan.reset();
                 }
                 ImGui::TextDisabled("Every placement and palette variant is rebuilt together; palette indices are preserved by default.");
+                if (ImGui::CollapsingHeader("Manual cut lines")) {
+                    ImGui::TextWrapped("Place a precise lossless grid on a visible seam. The proposal "
+                                       "must still pass reconstruction and runtime-order checks.");
+                    ImGui::Checkbox("Vertical cut", &t.manual_split_x); ImGui::SameLine();
+                    ImGui::BeginDisabled(!t.manual_split_x || im->w < 8);
+                    ImGui::SetNextItemWidth(180);
+                    ImGui::SliderInt("X##manual-cut", &t.manual_split_x_at, 4,
+                                     std::max(4, im->w - 4), "%d px");
+                    ImGui::EndDisabled();
+                    t.manual_split_x_at = std::clamp((t.manual_split_x_at / 4) * 4, 4,
+                                                     std::max(4, im->w - 4));
+                    ImGui::Checkbox("Horizontal cut", &t.manual_split_y); ImGui::SameLine();
+                    ImGui::BeginDisabled(!t.manual_split_y || im->h < 2);
+                    ImGui::SetNextItemWidth(180);
+                    ImGui::SliderInt("Y##manual-cut", &t.manual_split_y_at, 1,
+                                     std::max(1, im->h - 1), "%d px");
+                    ImGui::EndDisabled();
+                    t.manual_split_y_at = std::clamp(t.manual_split_y_at, 1,
+                                                     std::max(1, im->h - 1));
+                    ImGui::BeginDisabled(busy || (!t.manual_split_x && !t.manual_split_y) ||
+                                         (t.manual_split_x && im->w < 8) ||
+                                         (t.manual_split_y && im->h < 2));
+                    if (ImGui::Button("Preview manual split")) {
+                        ManualSplitOptions split; split.image = source;
+                        if (t.manual_split_x) split.x_cuts.push_back(t.manual_split_x_at);
+                        if (t.manual_split_y) split.y_cuts.push_back(t.manual_split_y_at);
+                        t.optimize_plan = std::make_unique<OptimizationPlan>(
+                            preview_manual_split(t.document, split));
+                        t.heat_regions = optimization_regions(*t.optimize_plan);
+                        t.optimize_choice = 0;
+                    }
+                    ImGui::EndDisabled(); ImGui::SameLine();
+                    ImGui::TextDisabled("Creates %d exact pieces",
+                                        (t.manual_split_x ? 2 : 1) *
+                                            (t.manual_split_y ? 2 : 1));
+                }
             }
         } else {
             ImGui::TextDisabled("Scope: whole stage. Use Find subframes on artwork for a focused review.");
