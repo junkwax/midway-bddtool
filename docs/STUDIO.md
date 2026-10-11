@@ -102,6 +102,10 @@ reconstruction and budget figures refresh at the new seam.
 Use **+ Vertical guide** or **+ Horizontal guide** to build a grid with several
 seams. Guides can be removed individually; the workspace caps the grid at 16
 pieces so object and image-table growth stays reviewable.
+**Reuse exact or mirrored pieces** is enabled by default. Equal grid cells and
+exact X/Y mirrors share one stored image while each placement receives the flip
+needed to reconstruct the source. Disable it when the pieces must remain separate
+for later painting; the review shows the extra image headers and video data.
 
 **Palette** edits the selected shared palette with RGB555 precision. Copy the
 palette for that artwork first when other images should retain their colors.

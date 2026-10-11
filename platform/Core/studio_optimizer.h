@@ -65,6 +65,7 @@ OptimizationPlan find_shared_savings(const Document &document, const OptimizeOpt
 struct ManualSplitOptions {
     int image = -1;
     std::vector<int> x_cuts, y_cuts;
+    bool reuse_equivalent = true;
 };
 // Build an exact grid from user-selected cut lines. X cuts retain LOAD2's
 // four-pixel width alignment; Y cuts may land on any scanline.

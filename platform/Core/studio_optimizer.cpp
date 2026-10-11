@@ -931,25 +931,47 @@ OptimizationPlan preview_manual_split(const Document &document,
         y_edges.insert(y_edges.end(), ys.begin(), ys.end()); y_edges.push_back(source.h);
         OptimizeChange change;
         change.source_image = options.image; change.uses = uses; change.before_bits = bits(source);
+        std::map<std::string, int> reusable;
         for (size_t yi = 1; yi < y_edges.size(); yi++)
             for (size_t xi = 1; xi < x_edges.size(); xi++) {
                 OptimizePiece piece;
                 piece.x = x_edges[xi - 1]; piece.y = y_edges[yi - 1];
                 piece.w = x_edges[xi] - piece.x; piece.h = y_edges[yi] - piece.y;
-                BddCoreImage image{};
-                image.idx = next_image++; image.w = piece.w; image.h = piece.h;
-                image.flags = source.flags; image.pix.resize((size_t)image.w * image.h);
-                for (int y = 0; y < image.h; y++)
+                BddCoreImage base{};
+                base.w = piece.w; base.h = piece.h;
+                base.flags = source.flags; base.pix.resize((size_t)base.w * base.h);
+                for (int y = 0; y < base.h; y++)
                     std::copy_n(source.pix.begin() + (size_t)(piece.y + y) * source.w + piece.x,
-                                image.w, image.pix.begin() + (size_t)y * image.w);
-                piece.image = image.idx;
+                                base.w, base.pix.begin() + (size_t)y * base.w);
+                BddCoreImage image = base;
+                std::string image_key = key(image);
+                if (options.reuse_equivalent)
+                    for (int flip = 1; flip < 4; flip++) {
+                        BddCoreImage candidate = base;
+                        for (int y = 0; y < base.h; y++)
+                            for (int x = 0; x < base.w; x++)
+                                candidate.pix[(size_t)y * base.w + x] =
+                                    base.pix[(size_t)((flip & 2) ? base.h - 1 - y : y) * base.w +
+                                             ((flip & 1) ? base.w - 1 - x : x)];
+                        auto candidate_key = key(candidate);
+                        if (candidate_key < image_key) {
+                            image = std::move(candidate); image_key = std::move(candidate_key);
+                            piece.flip_x = (flip & 1) != 0; piece.flip_y = (flip & 2) != 0;
+                        }
+                    }
                 for (int palette : palettes) piece.palettes[palette] = palette;
-                change.added_bits += bits(image);
-                bank->data.images.push_back(std::move(image));
-                BddImageMetadata metadata{}; metadata.idx = piece.image;
-                std::snprintf(metadata.label, sizeof metadata.label, "CUT_%d", piece.image);
-                bank->metadata.push_back(metadata);
-                bank->default_palettes.push_back(*palettes.begin());
+                auto reused = options.reuse_equivalent ? reusable.find(image_key) : reusable.end();
+                if (reused != reusable.end()) piece.image = reused->second;
+                else {
+                    image.idx = next_image++; piece.image = image.idx;
+                    reusable.emplace(image_key, image.idx);
+                    change.added_bits += bits(image);
+                    bank->data.images.push_back(std::move(image));
+                    BddImageMetadata metadata{}; metadata.idx = piece.image;
+                    std::snprintf(metadata.label, sizeof metadata.label, "CUT_%d", piece.image);
+                    bank->metadata.push_back(metadata);
+                    bank->default_palettes.push_back(*palettes.begin());
+                }
                 change.pieces.push_back(std::move(piece));
             }
         auto image_at = std::find_if(bank->data.images.begin(), bank->data.images.end(),
@@ -976,6 +998,7 @@ OptimizationPlan preview_manual_split(const Document &document,
                 object.object.depth += (old.object.wx & 0x10) ? source.w-piece.x-piece.w : piece.x;
                 object.object.sy += (old.object.wx & 0x20) ? source.h-piece.y-piece.h : piece.y;
                 object.object.ii = piece.image; object.object.fl = piece.palettes.at(old.object.fl);
+                object.object.wx ^= (piece.flip_x ? 0x10 : 0) | (piece.flip_y ? 0x20 : 0);
                 plan.after.objects.push_back(object);
             }
         }
@@ -987,7 +1010,10 @@ OptimizationPlan preview_manual_split(const Document &document,
                 "Manual split exceeds the LOAD2 block limit.");
         plan.changes.push_back(std::move(change));
         plan.proposed = optimization_budget(plan.after);
-        plan.notes.push_back("Manual cut grid; palette indices and transparent pixels preserved.");
+        plan.notes.push_back(options.reuse_equivalent
+            ? "Manual cut grid; exact and X/Y-mirrored pieces share one payload."
+            : "Manual cut grid; pieces remain independent for later editing.");
+        plan.notes.push_back("Palette indices and transparent pixels preserved.");
         plan.verified = verify_optimization(plan, plan.error);
     } catch (const std::exception &e) { plan.error = e.what(); plan.verified = false; }
     return plan;

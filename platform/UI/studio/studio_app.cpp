@@ -225,6 +225,7 @@ struct Tab {
     int optimize_choice = 0, optimize_palette = 0;
     bool optimize_static_palettes = false, palette_slots_reviewed = false, optimize_cuts = true;
     bool manual_split_plan = false;
+    bool manual_split_reuse = true;
     std::vector<int> manual_split_x_cuts, manual_split_y_cuts;
     bool compare_open = false, compare_pattern = false;
     CompareView compare;
@@ -2267,6 +2268,11 @@ class App {
                     ImGui::TextWrapped("Place a precise lossless grid on a visible seam. The proposal "
                                        "must still pass reconstruction and runtime-order checks.");
                     bool cut_settings_changed = false;
+                    cut_settings_changed |= ImGui::Checkbox(
+                        "Reuse exact or mirrored pieces", &t.manual_split_reuse);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Default: store identical/X/Y-mirrored cells once. Disable "
+                                          "when every resulting piece must be edited independently.");
                     for (size_t i = 0; i < t.manual_split_x_cuts.size();) {
                         ImGui::PushID((int)i + 1000); ImGui::SetNextItemWidth(210);
                         cut_settings_changed |= ImGui::SliderInt(
@@ -2330,6 +2336,7 @@ class App {
                         ManualSplitOptions split; split.image = source;
                         split.x_cuts = t.manual_split_x_cuts;
                         split.y_cuts = t.manual_split_y_cuts;
+                        split.reuse_equivalent = t.manual_split_reuse;
                         t.optimize_plan = std::make_unique<OptimizationPlan>(
                             preview_manual_split(t.document, split));
                         t.manual_split_plan = true;
@@ -2606,6 +2613,7 @@ class App {
             ManualSplitOptions split; split.image = change.source_image;
             split.x_cuts = t.manual_split_x_cuts;
             split.y_cuts = t.manual_split_y_cuts;
+            split.reuse_equivalent = t.manual_split_reuse;
             t.optimize_plan = std::make_unique<OptimizationPlan>(
                 preview_manual_split(t.document, split));
             t.heat_regions = optimization_regions(*t.optimize_plan);

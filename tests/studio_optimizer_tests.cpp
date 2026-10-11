@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <cmath>
+#include <set>
 #include <stdexcept>
 #include <algorithm>
 using namespace studio;
@@ -144,8 +145,16 @@ int main(int argc, char **argv) {
                     manual.changes[0].pieces.size() == 4,
                 manual.error.empty() ? "Manual cut grid was not created" : manual.error);
         require(manual.proposed.objects == manual.baseline.objects * 4 &&
-                    manual.proposed.images == manual.baseline.images + 3,
-                "Manual split budget did not include its image and placement table cost");
+                    manual.proposed.images == manual.baseline.images,
+                "Manual split did not reuse mirrored quadrants or count placement cost");
+        std::set<int> manual_images;
+        bool manual_flip = false;
+        for (const auto &piece : manual.changes[0].pieces) {
+            manual_images.insert(piece.image);
+            manual_flip |= piece.flip_x || piece.flip_y;
+        }
+        require(manual_images.size() == 1 && manual_flip,
+                "Equivalent manual pieces were not shared through exact flips");
         auto manual_doc = doc;
         require(manual_doc.apply_optimization(manual, error), error);
         require(manual_doc.undo() && manual_doc.state().objects.size() == doc.state().objects.size() &&
@@ -160,6 +169,14 @@ int main(int argc, char **argv) {
         require(multi_manual.verified && multi_manual.changes[0].pieces.size() == 4,
                 multi_manual.error.empty() ? "Multiple same-axis cut guides failed"
                                            : multi_manual.error);
+        manual_options.reuse_equivalent = false;
+        auto independent_manual = preview_manual_split(doc, manual_options);
+        require(independent_manual.verified &&
+                    independent_manual.proposed.images == independent_manual.baseline.images + 3 &&
+                    std::all_of(independent_manual.changes[0].pieces.begin(),
+                                independent_manual.changes[0].pieces.end(),
+                                [](const auto &piece) { return !piece.flip_x && !piece.flip_y; }),
+                "Independent manual pieces were unexpectedly shared or flipped");
         manual_options.x_cuts = {31};
         auto invalid_manual = preview_manual_split(doc, manual_options);
         require(!invalid_manual.verified &&
