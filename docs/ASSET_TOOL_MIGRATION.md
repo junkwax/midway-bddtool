@@ -598,6 +598,9 @@ The new Help menu restores **About bddtool / build information**, **GitHub wiki*
 compile timestamp, architecture, compiler, SDL runtime and ImGui versions, with
 a copyable build summary. Editing shortcuts remain in Help. Sharing is also
 available through **File → Share stage**.
+The title, About text and Windows version resource follow the repository's
+`VERSION` even when an existing CMake cache held an older default. An explicit
+packaging `BDDVIEW_RELEASE_VERSION` override remains sticky across reconfigure.
 
 Share Stage prepares a new local folder from a document snapshot, including
 current applied edits without changing the open document's save point, path,

@@ -683,6 +683,11 @@ editing shortcuts. Use **File → Share stage** or **Help → Share a stage** to
 prepare a local ZIP from the current applied edits. Enter a bundle/wiki name,
 author, credits/use terms and testing notes, then review the generated files.
 
+The window title, About dialog and Windows executable metadata use the checked-in
+`VERSION`. Existing CMake build directories follow a changed repository version
+automatically. Packaging can deliberately pin another numeric version with
+`-DBDDVIEW_RELEASE_VERSION=...`; that explicit override remains sticky.
+
 The bundle includes BDB/BDD, editor layout and metadata companions, static
 previews, props and a wiki page. **Open GitHub submission draft** opens the
 browser; attach the ZIP and submit it yourself. Accepted submissions use the

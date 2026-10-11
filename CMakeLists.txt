@@ -6,7 +6,22 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
 endif()
 string(STRIP "${BDDVIEW_DEFAULT_VERSION}" BDDVIEW_DEFAULT_VERSION)
 
-set(BDDVIEW_RELEASE_VERSION "${BDDVIEW_DEFAULT_VERSION}" CACHE STRING "bddview application version")
+# Follow VERSION when this cache entry still contains the previous repository
+# default. A deliberate -DBDDVIEW_RELEASE_VERSION override remains sticky.
+if(NOT DEFINED BDDVIEW_CACHED_DEFAULT_VERSION)
+    set(BDDVIEW_CACHED_DEFAULT_VERSION "1.0.13" CACHE INTERNAL
+        "previous bddtool repository version" FORCE)
+endif()
+if(NOT DEFINED BDDVIEW_RELEASE_VERSION OR
+   BDDVIEW_RELEASE_VERSION STREQUAL BDDVIEW_CACHED_DEFAULT_VERSION)
+    set(BDDVIEW_RELEASE_VERSION "${BDDVIEW_DEFAULT_VERSION}" CACHE STRING
+        "bddview application version" FORCE)
+else()
+    set(BDDVIEW_RELEASE_VERSION "${BDDVIEW_RELEASE_VERSION}" CACHE STRING
+        "bddview application version")
+endif()
+set(BDDVIEW_CACHED_DEFAULT_VERSION "${BDDVIEW_DEFAULT_VERSION}" CACHE INTERNAL
+    "previous bddtool repository version" FORCE)
 string(STRIP "${BDDVIEW_RELEASE_VERSION}" BDDVIEW_RELEASE_VERSION)
 if(NOT BDDVIEW_RELEASE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+(\\.[0-9]+)?$")
     message(FATAL_ERROR "BDDVIEW_RELEASE_VERSION must be numeric semver, for example 1.0.2")
