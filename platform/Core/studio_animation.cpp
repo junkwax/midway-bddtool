@@ -180,11 +180,39 @@ AnimationLibrary inspect_animation_library(const std::string &path) {
                 problem = "Duplicate image label.";
             out.images.push_back({entry.first, problem, r.w, r.h,
                                   (int)r.palnum - IMG_NUM_DEFAULT_PALS, img_s16(r.anix),
-                                  img_s16(r.aniy)});
+                                  img_s16(r.aniy), path});
         }
     } catch (const std::exception &e) {
         out.error = e.what();
         out.images.clear();
+    }
+    return out;
+}
+AnimationLibrary inspect_animation_folder(const std::string &folder) {
+    AnimationLibrary out; out.path = folder;
+    try {
+        std::vector<fs::path> files;
+        for (const auto &entry : fs::directory_iterator(fs::u8path(folder))) {
+            if (!entry.is_regular_file()) continue;
+            auto ext = upper(entry.path().extension().u8string());
+            if (ext == ".IMG") files.push_back(entry.path());
+            require(files.size() <= 256, "IMG folder exceeds the 256-file inspection limit.");
+        }
+        std::sort(files.begin(), files.end());
+        require(!files.empty(), "No IMG files in this folder (subfolders are not scanned).");
+        for (const auto &file : files) {
+            auto library = inspect_animation_library(file.u8string());
+            if (!library.error.empty()) {
+                out.images.push_back({file.filename().u8string(), library.error, 0, 0, 0, 0, 0,
+                                      file.u8string()});
+                continue;
+            }
+            require(out.images.size() + library.images.size() <= 4096,
+                    "IMG folder exceeds the 4,096-entry inspection limit.");
+            for (auto &image : library.images) out.images.push_back(std::move(image));
+        }
+    } catch (const std::exception &e) {
+        out.error = e.what(); out.images.clear();
     }
     return out;
 }

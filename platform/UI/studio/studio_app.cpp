@@ -589,6 +589,17 @@ class App {
                              sizeof path))
             import_image(path);
     }
+    void import_img_folder_dialog() {
+        char path[2048] = {};
+        if (!folder_dialog_open("Import IMG folder", path, sizeof path)) return;
+        if (!tab()) add(Document::empty());
+        auto library = inspect_animation_folder(path);
+        if (!library.error.empty()) { error = library.error; return; }
+        auto &t = *tab();
+        t.import_selected.assign(library.images.size(), 0);
+        t.import_library = std::make_unique<AnimationLibrary>(std::move(library));
+        t.import_filter.Clear(); t.import_requested = true;
+    }
     void cancel_gesture() {
         if (tab())
             tab()->document.cancel();
@@ -868,6 +879,7 @@ class App {
                 if (ImGui::MenuItem("Import PNG / IMG artwork..."))
                     import_dialog();
                 if (ImGui::MenuItem("Import artwork folder...")) import_folder_dialog();
+                if (ImGui::MenuItem("Import IMG folder...")) import_img_folder_dialog();
                 if (ImGui::MenuItem("Save", "Ctrl+S", false, tab() != nullptr))
                     save(*tab());
                 if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S", false, tab() != nullptr))
@@ -916,6 +928,7 @@ class App {
             if (ImGui::BeginMenu("Assets")) {
                 if (ImGui::MenuItem("Import PNG / IMG...")) import_dialog();
                 if (ImGui::MenuItem("Import artwork folder...")) import_folder_dialog();
+                if (ImGui::MenuItem("Import IMG folder...")) import_img_folder_dialog();
                 auto *t = tab();
                 bool available = t && !t->document.state().assets->data.images.empty();
                 if (ImGui::MenuItem("Edit block pixels...", nullptr, false, available)) open_block_editor(*t);
@@ -1708,6 +1721,7 @@ class App {
         if (ImGui::BeginPopup("asset-import-menu")) {
             if (ImGui::MenuItem("PNG / IMG file...")) import_dialog();
             if (ImGui::MenuItem("PNG / TGA / BMP folder...")) import_folder_dialog();
+            if (ImGui::MenuItem("IMG folder...")) import_img_folder_dialog();
             ImGui::EndPopup();
         }
         ImGui::SameLine();
@@ -4743,8 +4757,9 @@ int run(int argc, char **argv) {
     app.session_stamp = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::system_clock::now().time_since_epoch())
                             .count();
+    std::string window_title = std::string("bddtool ") + BDDVIEW_APP_VERSION;
     app.window =
-        SDL_CreateWindow("bddtool", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1440, 900,
+        SDL_CreateWindow(window_title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1440, 900,
                          SDL_WINDOW_RESIZABLE | (smoke ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
     if (!app.window) {
         SDL_Quit();

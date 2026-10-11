@@ -169,6 +169,8 @@ class Document {
                      std::string &error, int &image_id);
     bool import_img(const std::string &path, const std::vector<std::string> &labels,
                     std::string &error, std::vector<int> &image_ids);
+    bool import_img_sources(const std::vector<std::pair<std::string, std::string>> &sources,
+                            std::string &error, std::vector<int> &image_ids);
     bool import_assets(const AssetBank &input, bool reuse_palettes, std::string &error,
                        std::vector<int> &image_ids);
     // One atomic edit: split/repeat one image into LOAD2-width pieces on a new floor layer.

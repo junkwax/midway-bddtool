@@ -18,7 +18,8 @@ bddview --legacy-ui [file.BDB] # original specialist tools
 
 Opening a standalone BDD displays its asset library. Create a layer to begin
 placing its artwork. Several stages can be open simultaneously; each has its
-own selection, camera, undo history, and save point.
+own selection, camera, undo history, and save point. The window title includes
+the configured bddtool build version so screenshots and test builds are identifiable.
 
 ## Arrange a stage
 
@@ -56,6 +57,13 @@ For multiple raster files, choose **Import → PNG / TGA / BMP folder**. Review
 the selection and palette counts before importing the whole batch. Identical
 palette reuse can be disabled. The folder workflow uses the reviewed decoded
 data and never partially imports a failed selection.
+
+For a directory of Midway libraries, choose **Import IMG folder**. The catalog
+shows the source IMG beside each frame and filters by either filename or frame
+label. Select up to 128 entries across the folder; import rereads and validates
+the chosen sources, preserves indexed pixels, palettes, signed anchors and source
+metadata, and commits the complete selection as one undoable edit. Subfolders,
+LOD directives, runtime sequences and placements are not inferred.
 
 Double-click artwork for **Edit block**, or use the thumbnail context menu or
 placement inspector. Paint, erase, pick colors with right-click, flip X/Y and

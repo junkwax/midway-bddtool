@@ -287,8 +287,10 @@ void asset_dialogs(Tab &t) {
             if (ImGui::Button("Select visible")) {
                 size_t count = std::count(t.import_selected.begin(), t.import_selected.end(), uint8_t(1));
                 for (size_t i = 0; i < t.import_selected.size() && count < 128; ++i)
-                    if (!t.import_selected[i] && t.import_library->images[i].problem.empty() &&
-                        t.import_filter.PassFilter(t.import_library->images[i].label.c_str())) {
+                    if (!t.import_selected[i] && t.import_library->images[i].problem.empty() && [&] {
+                        const auto &item = t.import_library->images[i];
+                        auto searchable = fs::u8path(item.source).filename().u8string() + " " + item.label;
+                        return t.import_filter.PassFilter(searchable.c_str()); }()) {
                         t.import_selected[i] = 1; ++count;
                     }
             }
@@ -296,14 +298,17 @@ void asset_dialogs(Tab &t) {
             if (ImGui::Button("Clear selection")) std::fill(t.import_selected.begin(), t.import_selected.end(), 0);
             size_t selected = std::count(t.import_selected.begin(), t.import_selected.end(), uint8_t(1));
             ImGui::SameLine(); ImGui::TextDisabled("%zu selected (up to 128 per import)", selected);
-            if (ImGui::BeginTable("img-import", 3, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH,
+            if (ImGui::BeginTable("img-import", 4, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH,
                                    {0, std::max(100.f, ImGui::GetContentRegionAvail().y - 50)})) {
-                ImGui::TableSetupColumn("Image"); ImGui::TableSetupColumn("Size"); ImGui::TableSetupColumn("Status");
+                ImGui::TableSetupColumn("IMG"); ImGui::TableSetupColumn("Image"); ImGui::TableSetupColumn("Size"); ImGui::TableSetupColumn("Status");
                 ImGui::TableSetupScrollFreeze(0, 1); ImGui::TableHeadersRow();
                 for (size_t i = 0; i < t.import_library->images.size(); ++i) {
                     const auto &im = t.import_library->images[i];
-                    if (!t.import_filter.PassFilter(im.label.c_str())) continue;
+                    auto searchable = fs::u8path(im.source).filename().u8string() + " " + im.label;
+                    if (!t.import_filter.PassFilter(searchable.c_str())) continue;
                     ImGui::PushID((int)i); ImGui::TableNextRow(); ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(fs::u8path(im.source).filename().u8string().c_str());
+                    ImGui::TableNextColumn();
                     bool checked = t.import_selected[i] != 0;
                     ImGui::BeginDisabled(!im.problem.empty() || (!checked && selected >= 128));
                     if (ImGui::Checkbox(im.label.c_str(), &checked)) {
@@ -317,10 +322,11 @@ void asset_dialogs(Tab &t) {
             }
             ImGui::BeginDisabled(selected == 0);
             if (ImGui::Button("Import selected")) {
-                std::vector<std::string> labels; std::vector<int> ids;
+                std::vector<std::pair<std::string, std::string>> sources; std::vector<int> ids;
                 for (size_t i = 0; i < t.import_selected.size(); ++i)
-                    if (t.import_selected[i]) labels.push_back(t.import_library->images[i].label);
-                if (t.document.import_img(t.import_library->path, labels, error, ids)) {
+                    if (t.import_selected[i]) sources.push_back({t.import_library->images[i].source,
+                                                                t.import_library->images[i].label});
+                if (t.document.import_img_sources(sources, error, ids)) {
                     t.asset = (int)t.document.state().assets->data.images.size() - (int)ids.size();
                     search[0] = 0; page = 1; tray = true;
                     toast("Imported " + std::to_string(ids.size()) + " IMG images. Drag artwork into a layer.");

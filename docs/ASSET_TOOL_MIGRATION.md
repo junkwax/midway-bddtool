@@ -490,7 +490,7 @@ smokes do not pollute the user's list.
 
 | Legacy capability | Current route / next work |
 | --- | --- |
-| IMG folders and LOD-driven imports | Defer; extend the existing import flow only when source selection and dependencies are clear |
+| IMG folders and LOD-driven imports | IMG folder catalog/import is migrated with explicit source and frame selection; LOD workspace import remains deferred until directives and runtime consumers can be reviewed |
 | Palette unions, near-color grouping and delete-unused | Exact duplicate consolidation is now in Optimize; keep broader transformations deferred until consumer/reference checks can prove their scope |
 | Palette brightness/contrast, tone matching and blending | Brightness, contrast, saturation and index-preserving blend are now in the palette editor; automatic semantic tone matching remains deferred |
 | Palette export/import and palette-animation tooling | RGB555 palette exchange is migrated; runtime palette animation remains a separate workflow |
@@ -504,6 +504,13 @@ rereading changed files. Any selected decode/color/limit failure blocks the whol
 batch. Selection or palette-policy changes invalidate review; a changed document
 requires a new review. Nothing is placed or saved automatically. Exact palette
 reuse is optional for the incoming artwork and does not merge existing palettes.
+
+IMG folder import scans up to 256 IMG files and 4,096 catalog entries without
+decoding pixels. Import is capped at 128 selected entries and 16 million decoded
+pixels. Each entry retains its source IMG identity; invalid libraries or frames
+remain visible as disabled evidence. The complete selection applies atomically
+and reuses exact palettes. It does not interpret LOD packing commands or create
+runtime animation sequences.
 
 The new Optimize workspace already provides verified subdivision/reuse and
 repeat/mirror proposals. It is not a substitute for every manual legacy block

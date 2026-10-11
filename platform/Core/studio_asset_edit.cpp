@@ -6,8 +6,10 @@
 #include <set>
 #include <map>
 #include <limits>
+#include <filesystem>
 
 namespace studio {
+namespace fs = std::filesystem;
 namespace {
 bool usable(const BddCoreImage &im, int count) {
     return std::all_of(im.pix.begin(), im.pix.end(), [=](uint8_t p) { return p < count; });
@@ -117,6 +119,44 @@ bool Document::import_img(const std::string &path, const std::vector<std::string
     const auto decoded = load_animation_selection(path, labels);
     if (!decoded.ready()) { error = decoded.notice; return false; }
     return import_assets(*decoded.artwork.assets, true, error, ids);
+}
+
+bool Document::import_img_sources(
+    const std::vector<std::pair<std::string, std::string>> &sources,
+    std::string &error, std::vector<int> &ids) {
+    error.clear(); ids.clear();
+    if (active_) { error = "Finish the current edit before importing."; return false; }
+    if (sources.empty() || sources.size() > 128) {
+        error = "Select between 1 and 128 IMG entries."; return false;
+    }
+    AssetBank combined;
+    size_t pixels = 0;
+    for (const auto &[path, label] : sources) {
+        auto decoded = load_animation_selection(path, {label});
+        if (!decoded.ready()) { error = fs::u8path(path).filename().u8string() + ": " + decoded.notice; return false; }
+        const auto &input = *decoded.artwork.assets;
+        if (input.data.images.size() != 1 || input.metadata.size() != 1 ||
+            input.default_palettes.size() != 1) {
+            error = "IMG selection produced an invalid asset bundle."; return false;
+        }
+        const auto &image = input.data.images[0];
+        if (size_t(image.w) * image.h > 16 * 1024 * 1024 - pixels) {
+            error = "Selection exceeds 16 million decoded pixels."; return false;
+        }
+        int palette = input.default_palettes[0];
+        if (palette < 0 || palette >= (int)input.data.palettes.size()) {
+            error = "IMG selection has an invalid default palette."; return false;
+        }
+        int next = (int)combined.data.images.size(), next_palette = (int)combined.data.palettes.size();
+        auto copy = image; copy.idx = next;
+        auto meta = input.metadata[0]; meta.idx = next;
+        combined.data.images.push_back(std::move(copy));
+        combined.data.palettes.push_back(input.data.palettes[palette]);
+        combined.metadata.push_back(meta);
+        combined.default_palettes.push_back(next_palette);
+        pixels += size_t(image.w) * image.h;
+    }
+    return import_assets(combined, true, error, ids);
 }
 
 bool Document::import_assets(const AssetBank &input, bool reuse_palettes,

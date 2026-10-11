@@ -161,8 +161,25 @@ int main(int argc, char **argv) {
         auto library = inspect_animation_library(library_path);
         require(library.error.empty() && library.images.size() == 2 &&
                     library.images[0].label == "TREEANI1" && library.images[0].anchor_x == -2 &&
-                    library.images[1].anchor_y == -5 && library.images[1].problem.empty(),
+                    library.images[1].anchor_y == -5 && library.images[1].problem.empty() &&
+                    library.images[0].source == library_path,
                 "IMG catalog lost labels, palette ownership or signed anchors.");
+        write(root / "data" / "SECOND.IMG", img);
+        auto folder_catalog = inspect_animation_folder((root / "data").u8string());
+        require(folder_catalog.error.empty() && folder_catalog.images.size() == 4 &&
+                    folder_catalog.images[0].source != folder_catalog.images[2].source,
+                "IMG folder catalog did not retain source identity");
+        {
+            auto folder_import = Document::empty(); std::vector<int> ids;
+            require(folder_import.import_img_sources({
+                        {folder_catalog.images[0].source, folder_catalog.images[0].label},
+                        {folder_catalog.images[2].source, folder_catalog.images[2].label}}, error, ids), error);
+            require(ids.size() == 2 && folder_import.state().assets->data.palettes.size() == 1 &&
+                        std::string(folder_import.state().assets->metadata[0].source) !=
+                            std::string(folder_import.state().assets->metadata[1].source) &&
+                        folder_import.undo() && folder_import.redo(),
+                    "Multi-IMG import lost palette reuse, source metadata or atomic history");
+        }
         auto manual =
             load_animation_selection(library_path, {"treeani2", "TREEANI1", "TREEANI2"}, 7);
         require(manual.ready() && manual.manual_sequence && manual.frame_ticks == 7 &&
