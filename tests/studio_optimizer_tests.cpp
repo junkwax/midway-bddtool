@@ -162,8 +162,8 @@ int main(int argc, char **argv) {
         auto suggested_manual = suggest_manual_split(doc, 7);
         require(suggested_manual.plan.verified && suggested_manual.tried > 0 &&
                     suggested_manual.tried <= 128 &&
-                    (!suggested_manual.options.x_cuts.empty() ||
-                     !suggested_manual.options.y_cuts.empty()),
+                    !suggested_manual.options.x_cuts.empty() &&
+                    !suggested_manual.options.y_cuts.empty(),
                 suggested_manual.error.empty() ? "Repeat-grid suggestion failed"
                                                : suggested_manual.error);
         std::set<int> suggested_images;

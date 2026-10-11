@@ -78,7 +78,7 @@ struct ManualSplitSuggestion {
     std::string error;
     bool cancelled = false;
 };
-// Bounded search for a uniform strip grid whose exact/mirrored cells reuse payloads.
+// Bounded search for one- and two-axis grids whose exact/mirrored cells reuse payloads.
 ManualSplitSuggestion suggest_manual_split(const Document &document, int image,
                                            OptimizeProgress *progress = nullptr);
 bool verify_optimization(const OptimizationPlan &plan, std::string &error);

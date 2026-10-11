@@ -2350,7 +2350,7 @@ class App {
                     }
                     ImGui::EndDisabled();
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Try up to 128 uniform X/Y strip grids. Keep only exact or "
+                        ImGui::SetTooltip("Try up to 128 one- and two-axis grids. Keep only exact or "
                                           "mirrored reuse with net modeled savings.");
                     ImGui::SameLine();
                     ImGui::BeginDisabled(busy ||

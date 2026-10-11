@@ -1030,24 +1030,36 @@ ManualSplitSuggestion suggest_manual_split(const Document &document, int image,
         int first = std::max(alignment, (length + 15) / 16);
         first = (first + alignment - 1) / alignment * alignment;
         int last = length / 2;
-        for (int i = 0; i < 64 && first <= last; i++) {
-            int span = first + (last - first) * i / 63;
+        for (int i = 0; i < 32 && first <= last; i++) {
+            int span = first + (last - first) * i / 31;
             span = std::max(first, span / alignment * alignment);
             if (span < length) values.insert(span);
         }
         return std::vector<int>(values.begin(), values.end());
     };
     std::vector<ManualSplitOptions> candidates;
-    for (int axis = 0; axis < 2; axis++) {
-        int length = axis ? source->h : source->w;
-        for (int span : spans(length, axis ? 1 : 4)) {
-            ManualSplitOptions options; options.image = image;
-            auto &cuts = axis ? options.y_cuts : options.x_cuts;
-            for (int cut = span; cut < length; cut += span) cuts.push_back(cut);
-            if (cuts.empty() || cuts.size() + 1 > 16) continue;
-            candidates.push_back(std::move(options));
-        }
+    auto x_spans = spans(source->w, 4), y_spans = spans(source->h, 1);
+    auto candidate = [&](int x_span, int y_span) {
+        ManualSplitOptions options; options.image = image;
+        if (x_span) for (int cut = x_span; cut < source->w; cut += x_span)
+            options.x_cuts.push_back(cut);
+        if (y_span) for (int cut = y_span; cut < source->h; cut += y_span)
+            options.y_cuts.push_back(cut);
+        size_t pieces = (options.x_cuts.size() + 1) * (options.y_cuts.size() + 1);
+        if (pieces >= 2 && pieces <= 16) candidates.push_back(std::move(options));
+    };
+    for (int span : x_spans) candidate(span, 0);
+    for (int span : y_spans) candidate(0, span);
+    // Spend the remaining bounded budget across the full two-axis span space,
+    // including both ends, instead of biasing toward only the smallest cells.
+    size_t combinations = x_spans.size() * y_spans.size();
+    size_t budget = candidates.size() < 128 ? 128 - candidates.size() : 0;
+    for (size_t k = 0; k < budget && combinations; k++) {
+        size_t flat = budget == 1 ? combinations / 2
+                                  : k * (combinations - 1) / (budget - 1);
+        candidate(x_spans[flat / y_spans.size()], y_spans[flat % y_spans.size()]);
     }
+    if (candidates.size() > 128) candidates.resize(128);
     if (progress) { progress->done = 0; progress->total = (int)candidates.size(); }
     int64_t best_score = 0;
     int best_pieces = INT_MAX;
@@ -1076,7 +1088,7 @@ ManualSplitSuggestion suggest_manual_split(const Document &document, int image,
         result.error = "No uniform repeat or mirror grid produced a net modeled saving.";
     else
         result.plan.notes.push_back("Suggested from " + std::to_string(result.tried) +
-                                    " bounded uniform strip grids.");
+                                    " bounded one- and two-axis grids.");
     return result;
 }
 
