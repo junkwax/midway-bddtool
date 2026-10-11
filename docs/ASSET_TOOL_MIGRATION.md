@@ -490,7 +490,7 @@ smokes do not pollute the user's list.
 
 | Legacy capability | Current route / next work |
 | --- | --- |
-| IMG folders and LOD-driven imports | IMG folder catalog/import is migrated with explicit source and frame selection; LOD workspace import remains deferred until directives and runtime consumers can be reviewed |
+| IMG folders and LOD-driven imports | Migrated as explicit catalogs: IMG folders expose every frame; LOD review resolves dependencies and preselects `--->` references. Rewriting LOAD2 packing/runtime consumers remains deferred |
 | Palette unions, near-color grouping and delete-unused | Exact duplicate consolidation is now in Optimize; keep broader transformations deferred until consumer/reference checks can prove their scope |
 | Palette brightness/contrast, tone matching and blending | Brightness, contrast, saturation and index-preserving blend are now in the palette editor; automatic semantic tone matching remains deferred |
 | Palette export/import and palette-animation tooling | RGB555 palette exchange is migrated; runtime palette animation remains a separate workflow |
@@ -511,6 +511,13 @@ pixels. Each entry retains its source IMG identity; invalid libraries or frames
 remain visible as disabled evidence. The complete selection applies atomically
 and reuses exact palettes. It does not interpret LOD packing commands or create
 runtime animation sequences.
+
+LOD review accepts a bounded 1 MiB LOAD2 file, resolves IMG references through
+the LOD folder and its parent, deduplicates repeated libraries, and marks exact
+`--->` frame references. Old absolute source-machine paths can resolve by local
+basename. Missing or malformed inputs stay visible and cannot be selected.
+Review and import never edit the LOD, generated table, IMG source or game code;
+no packing mode, timing or runtime placement is inferred.
 
 The new Optimize workspace already provides verified subdivision/reuse and
 repeat/mirror proposals. It is not a substitute for every manual legacy block

@@ -65,6 +65,15 @@ the chosen sources, preserves indexed pixels, palettes, signed anchors and sourc
 metadata, and commits the complete selection as one undoable edit. Subfolders,
 LOD directives, runtime sequences and placements are not inferred.
 
+Choose **Review IMG dependencies from LOD** to open a LOAD2 file without running
+or modifying it. bddtool resolves each IMG beside the LOD or in its parent
+folder, including local basename matches for obsolete absolute development
+paths. Repeated libraries are cataloged once. Frames listed by `--->` directives
+start selected; unresolved libraries and invalid frames remain visible as
+disabled findings. Import still copies only the explicit selection as one undoable
+document edit. Packing directives, palette modes, timing, generated tables and
+runtime placement remain owned by the original LOD and require build validation.
+
 Double-click artwork for **Edit block**, or use the thumbnail context menu or
 placement inspector. Paint, erase, pick colors with right-click, flip X/Y and
 undo individual strokes in the draft. **Apply block** creates one document

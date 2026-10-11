@@ -281,8 +281,14 @@ void asset_dialogs(Tab &t) {
     asset_modal_size(780, 560);
     if (ImGui::BeginPopupModal("Import IMG artwork", nullptr, ImGuiWindowFlags_NoResize)) {
         if (t.import_library) {
+            auto import_ext = fs::u8path(t.import_library->path).extension().u8string();
+            std::transform(import_ext.begin(), import_ext.end(), import_ext.begin(),
+                           [](unsigned char c) { return (char)std::tolower(c); });
+            bool from_lod = import_ext == ".lod";
             ImGui::TextWrapped("%s", t.import_library->path.c_str());
-            ImGui::TextWrapped("Import selected images and their palettes into Assets. Place them on the stage afterward. Animation sequences are not imported.");
+            ImGui::TextWrapped(from_lod
+                ? "Review resolved IMG dependencies. Frames named by ---> directives are selected initially. Import copies only your explicit selection; LOD packing, timing and placements are unchanged."
+                : "Import selected images and their palettes into Assets. Place them on the stage afterward. Animation sequences are not imported.");
             t.import_filter.Draw("Filter labels", 260);
             if (ImGui::Button("Select visible")) {
                 size_t count = std::count(t.import_selected.begin(), t.import_selected.end(), uint8_t(1));
@@ -298,9 +304,9 @@ void asset_dialogs(Tab &t) {
             if (ImGui::Button("Clear selection")) std::fill(t.import_selected.begin(), t.import_selected.end(), 0);
             size_t selected = std::count(t.import_selected.begin(), t.import_selected.end(), uint8_t(1));
             ImGui::SameLine(); ImGui::TextDisabled("%zu selected (up to 128 per import)", selected);
-            if (ImGui::BeginTable("img-import", 4, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH,
+            if (ImGui::BeginTable("img-import", 5, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH,
                                    {0, std::max(100.f, ImGui::GetContentRegionAvail().y - 50)})) {
-                ImGui::TableSetupColumn("IMG"); ImGui::TableSetupColumn("Image"); ImGui::TableSetupColumn("Size"); ImGui::TableSetupColumn("Status");
+                ImGui::TableSetupColumn("IMG"); ImGui::TableSetupColumn("Image"); ImGui::TableSetupColumn("LOD"); ImGui::TableSetupColumn("Size"); ImGui::TableSetupColumn("Status");
                 ImGui::TableSetupScrollFreeze(0, 1); ImGui::TableHeadersRow();
                 for (size_t i = 0; i < t.import_library->images.size(); ++i) {
                     const auto &im = t.import_library->images[i];
@@ -314,7 +320,8 @@ void asset_dialogs(Tab &t) {
                     if (ImGui::Checkbox(im.label.c_str(), &checked)) {
                         t.import_selected[i] = checked; selected += checked ? 1 : -1;
                     }
-                    ImGui::EndDisabled(); ImGui::TableNextColumn(); ImGui::Text("%d x %d", im.width, im.height);
+                    ImGui::EndDisabled(); ImGui::TableNextColumn(); ImGui::TextUnformatted(im.lod_referenced ? "Referenced" : "Library");
+                    ImGui::TableNextColumn(); ImGui::Text("%d x %d", im.width, im.height);
                     ImGui::TableNextColumn(); ImGui::TextWrapped("%s", im.problem.empty() ? "Ready" : im.problem.c_str());
                     ImGui::PopID();
                 }

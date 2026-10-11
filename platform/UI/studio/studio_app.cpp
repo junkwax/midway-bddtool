@@ -600,6 +600,23 @@ class App {
         t.import_library = std::make_unique<AnimationLibrary>(std::move(library));
         t.import_filter.Clear(); t.import_requested = true;
     }
+    void import_lod_dialog() {
+        char path[2048] = {};
+        if (!file_dialog_open("Review IMG dependencies from LOD",
+                              "LOAD2 LOD files\0*.LOD;*.lod\0All files\0*.*\0",
+                              path, sizeof path)) return;
+        if (!tab()) add(Document::empty());
+        auto library = inspect_animation_lod(path);
+        if (!library.error.empty()) { error = library.error; return; }
+        auto &t = *tab(); t.import_selected.assign(library.images.size(), 0);
+        size_t selected = 0;
+        for (size_t i = 0; i < library.images.size() && selected < 128; ++i)
+            if (library.images[i].lod_referenced && library.images[i].problem.empty()) {
+                t.import_selected[i] = 1; ++selected;
+            }
+        t.import_library = std::make_unique<AnimationLibrary>(std::move(library));
+        t.import_filter.Clear(); t.import_requested = true;
+    }
     void cancel_gesture() {
         if (tab())
             tab()->document.cancel();
@@ -880,6 +897,7 @@ class App {
                     import_dialog();
                 if (ImGui::MenuItem("Import artwork folder...")) import_folder_dialog();
                 if (ImGui::MenuItem("Import IMG folder...")) import_img_folder_dialog();
+                if (ImGui::MenuItem("Review IMG dependencies from LOD...")) import_lod_dialog();
                 if (ImGui::MenuItem("Save", "Ctrl+S", false, tab() != nullptr))
                     save(*tab());
                 if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S", false, tab() != nullptr))
@@ -929,6 +947,7 @@ class App {
                 if (ImGui::MenuItem("Import PNG / IMG...")) import_dialog();
                 if (ImGui::MenuItem("Import artwork folder...")) import_folder_dialog();
                 if (ImGui::MenuItem("Import IMG folder...")) import_img_folder_dialog();
+                if (ImGui::MenuItem("Review IMG dependencies from LOD...")) import_lod_dialog();
                 auto *t = tab();
                 bool available = t && !t->document.state().assets->data.images.empty();
                 if (ImGui::MenuItem("Edit block pixels...", nullptr, false, available)) open_block_editor(*t);
@@ -1722,6 +1741,7 @@ class App {
             if (ImGui::MenuItem("PNG / IMG file...")) import_dialog();
             if (ImGui::MenuItem("PNG / TGA / BMP folder...")) import_folder_dialog();
             if (ImGui::MenuItem("IMG folder...")) import_img_folder_dialog();
+            if (ImGui::MenuItem("IMG dependencies from LOD...")) import_lod_dialog();
             ImGui::EndPopup();
         }
         ImGui::SameLine();

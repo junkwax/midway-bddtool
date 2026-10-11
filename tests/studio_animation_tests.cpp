@@ -180,6 +180,15 @@ int main(int argc, char **argv) {
                         folder_import.undo() && folder_import.redo(),
                     "Multi-IMG import lost palette reuse, source metadata or atomic history");
         }
+        write(root / "data" / "TEST.LOD",
+              "; dependency review\nC:\\OLD\\MKBGANI.IMG\n---> TREEANI2\n"
+              "MKBGANI.IMG\n---> TREEANI1\nMISSING.IMG\n---> ABSENT\n");
+        auto lod_catalog = inspect_animation_lod((root / "data/TEST.LOD").u8string());
+        require(lod_catalog.error.empty() && lod_catalog.images.size() == 3 &&
+                    lod_catalog.images[0].lod_referenced && lod_catalog.images[1].lod_referenced &&
+                    !lod_catalog.images[2].problem.empty() &&
+                    fs::u8path(lod_catalog.images[0].source).filename() == "MKBGANI.IMG",
+                "LOD dependency resolution, duplicate library reuse or frame references changed");
         auto manual =
             load_animation_selection(library_path, {"treeani2", "TREEANI1", "TREEANI2"}, 7);
         require(manual.ready() && manual.manual_sequence && manual.frame_ticks == 7 &&

@@ -30,6 +30,7 @@ struct AnimationLibraryImage {
     std::string label, problem;
     int width = 0, height = 0, palette = 0, anchor_x = 0, anchor_y = 0;
     std::string source; // IMG path; populated for both file and folder catalogs.
+    bool lod_referenced = false;
 };
 struct AnimationLibrary {
     std::string path, error;
@@ -42,6 +43,9 @@ AnimationLibrary inspect_animation_library(const std::string &path);
 // Flattens the IMG files directly inside one folder into a selectable catalog.
 // Subfolders are deliberately excluded and no pixels are decoded during inspection.
 AnimationLibrary inspect_animation_folder(const std::string &folder);
+// Reviews IMG dependencies and ---> frame references in one LOAD2 LOD. Paths
+// resolve only through the LOD folder and its parent; no environment lookup.
+AnimationLibrary inspect_animation_lod(const std::string &path);
 // Floor compositing can preserve stored palette zero as opaque; trimmed margins stay transparent.
 AnimationPreview load_animation_selection(const std::string &path,
                                           const std::vector<std::string> &labels,

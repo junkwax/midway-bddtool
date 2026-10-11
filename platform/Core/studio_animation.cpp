@@ -2,6 +2,7 @@
 #include "Core/studio_assembly.h"
 #include "Core/img_format.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -180,7 +181,7 @@ AnimationLibrary inspect_animation_library(const std::string &path) {
                 problem = "Duplicate image label.";
             out.images.push_back({entry.first, problem, r.w, r.h,
                                   (int)r.palnum - IMG_NUM_DEFAULT_PALS, img_s16(r.anix),
-                                  img_s16(r.aniy), path});
+                                  img_s16(r.aniy), path, false});
         }
     } catch (const std::exception &e) {
         out.error = e.what();
@@ -204,13 +205,101 @@ AnimationLibrary inspect_animation_folder(const std::string &folder) {
             auto library = inspect_animation_library(file.u8string());
             if (!library.error.empty()) {
                 out.images.push_back({file.filename().u8string(), library.error, 0, 0, 0, 0, 0,
-                                      file.u8string()});
+                                      file.u8string(), false});
                 continue;
             }
             require(out.images.size() + library.images.size() <= 4096,
                     "IMG folder exceeds the 4,096-entry inspection limit.");
             for (auto &image : library.images) out.images.push_back(std::move(image));
         }
+    } catch (const std::exception &e) {
+        out.error = e.what(); out.images.clear();
+    }
+    return out;
+}
+AnimationLibrary inspect_animation_lod(const std::string &path_text) {
+    AnimationLibrary out; out.path = path_text;
+    try {
+        auto lod = fs::absolute(fs::u8path(path_text));
+        require(fs::is_regular_file(lod), "Cannot open the selected LOD file.");
+        require(fs::file_size(lod) <= 1024 * 1024, "LOD exceeds the 1 MiB review limit.");
+        std::ifstream input(lod, std::ios::binary);
+        require((bool)input, "Cannot read the selected LOD file.");
+        std::map<std::string, std::vector<size_t>> catalogs;
+        std::vector<size_t> current;
+        auto uppercase = [](std::string value) {
+            for (char &c : value) c = (char)std::toupper((unsigned char)c);
+            return value;
+        };
+        auto clean = [](std::string value) {
+            while (!value.empty() && (std::isspace((unsigned char)value.front()) || value.front() == '"' || value.front() == '\'')) value.erase(value.begin());
+            while (!value.empty() && (std::isspace((unsigned char)value.back()) || value.back() == '"' || value.back() == '\'' || value.back() == ',')) value.pop_back();
+            return value;
+        };
+        auto resolve = [&](const std::string &token) {
+            auto raw = fs::u8path(token), base = raw.filename();
+            std::vector<fs::path> candidates;
+            if (raw.is_absolute()) candidates.push_back(raw);
+            candidates.push_back(lod.parent_path() / (raw.is_absolute() ? base : raw));
+            candidates.push_back(lod.parent_path() / base);
+            candidates.push_back(lod.parent_path().parent_path() / (raw.is_absolute() ? base : raw));
+            candidates.push_back(lod.parent_path().parent_path() / base);
+            for (auto &candidate : candidates) {
+                std::error_code ec;
+                if (fs::is_regular_file(candidate, ec)) return fs::absolute(candidate).lexically_normal();
+            }
+            return fs::path{};
+        };
+        std::string line;
+        while (std::getline(input, line)) {
+            auto comment = line.find_first_of(";#");
+            if (comment != std::string::npos) line.erase(comment);
+            auto first = line.find_first_not_of(" \t\r");
+            if (first == std::string::npos) continue;
+            if (line.compare(first, 4, "--->") == 0) {
+                std::stringstream refs(line.substr(first + 4)); std::string label;
+                while (std::getline(refs, label, ',')) {
+                    auto wanted = uppercase(clean(label));
+                    for (size_t index : current)
+                        if (uppercase(out.images[index].label) == wanted)
+                            out.images[index].lod_referenced = true;
+                }
+                continue;
+            }
+            std::stringstream words(line); std::string token;
+            while (words >> token) {
+                token = clean(token);
+                if (uppercase(fs::u8path(token).extension().u8string()) != ".IMG") continue;
+                auto resolved = resolve(token);
+                auto identity = resolved.empty() ? uppercase(token) : uppercase(resolved.u8string());
+                if (auto found = catalogs.find(identity); found != catalogs.end()) {
+                    current = found->second; continue;
+                }
+                current.clear();
+                if (resolved.empty()) {
+                    out.images.push_back({fs::u8path(token).filename().u8string(),
+                        "Referenced IMG was not found beside the LOD or in its parent folder.",
+                        0, 0, 0, 0, 0, token, false});
+                    catalogs[identity] = {};
+                    continue;
+                }
+                auto library = inspect_animation_library(resolved.u8string());
+                if (!library.error.empty()) {
+                    out.images.push_back({resolved.filename().u8string(), library.error,
+                                          0, 0, 0, 0, 0, resolved.u8string(), false});
+                    catalogs[identity] = {};
+                    continue;
+                }
+                require(out.images.size() + library.images.size() <= 4096,
+                        "LOD dependency catalog exceeds 4,096 entries.");
+                for (auto &image : library.images) {
+                    current.push_back(out.images.size()); out.images.push_back(std::move(image));
+                }
+                catalogs[identity] = current;
+            }
+        }
+        require(input.eof(), "Could not finish reading the LOD file.");
+        require(!out.images.empty(), "The LOD contains no IMG dependencies.");
     } catch (const std::exception &e) {
         out.error = e.what(); out.images.clear();
     }
