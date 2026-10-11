@@ -25,6 +25,7 @@
 #include "Core/studio_view_compare.h"
 #include "Core/studio_runtime_actors.h"
 #include "Core/studio_library_audit.h"
+#include "Core/studio_recent_files.h"
 #include "Core/app_version.h"
 #include <future>
 #include <fstream>
@@ -376,6 +377,8 @@ class App {
     char library_audit_game[1024] = {}, library_audit_parent[1024] = {};
     int library_audit_selected = -1;
     char library_audit_filter[96] = {};
+    RecentStages recent_stages;
+    std::string recent_stages_file;
     std::string error, message, smoke_dir;
     char search[96] = {};
     double message_until = 0;
@@ -485,9 +488,21 @@ class App {
             }
             read_runtime_defaults(d);
             add(std::move(d));
+            remember_stage(path);
         } catch (const std::exception &e) {
             error = e.what();
         }
+    }
+    void remember_stage(const std::string &path) {
+        if (path.empty() || recent_stages_file.empty() || !smoke_dir.empty()) return;
+        recent_stages.add(path);
+        std::string why;
+        if (!recent_stages.save(recent_stages_file, why)) error = why;
+    }
+    void forget_stage(size_t index) {
+        recent_stages.erase(index);
+        std::string why;
+        if (!recent_stages.save(recent_stages_file, why)) error = why;
     }
     void open_dialog() {
         char path[1024] = {};
@@ -528,6 +543,7 @@ class App {
             }
         if (!t.document.save(path, error))
             return false;
+        remember_stage(path);
         toast("Saved background and local layer layout");
         return true;
     }
@@ -841,6 +857,14 @@ class App {
                     add(Document::empty());
                 if (ImGui::MenuItem("Open...", "Ctrl+O"))
                     open_dialog();
+                if (!recent_stages.paths().empty() && ImGui::BeginMenu("Open recent")) {
+                    auto recent_copy = recent_stages.paths();
+                    for (const auto &path : recent_copy) {
+                        std::error_code ec; bool exists = fs::is_regular_file(fs::u8path(path), ec);
+                        if (ImGui::MenuItem(path.c_str(), nullptr, false, exists)) open(path);
+                    }
+                    ImGui::EndMenu();
+                }
                 if (ImGui::MenuItem("Import PNG / IMG artwork..."))
                     import_dialog();
                 if (ImGui::MenuItem("Import artwork folder...")) import_folder_dialog();
@@ -4083,6 +4107,30 @@ class App {
         ImGui::Spacing();
         if (ImGui::Button("Explore sample stage", ImVec2(200, 36)))
             add(Document::demo());
+        if (!recent_stages.paths().empty()) {
+            ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+            ImGui::TextUnformatted("Recent stages");
+            ImGui::BeginChild("welcome-recents", {std::min(620.f, ImGui::GetContentRegionAvail().x), 190.f}, true);
+            for (size_t i = 0; i < recent_stages.paths().size();) {
+                const auto path = recent_stages.paths()[i];
+                std::error_code ec; bool exists = fs::is_regular_file(fs::u8path(path), ec);
+                ImGui::PushID((int)i);
+                ImGui::BeginDisabled(!exists);
+                if (ImGui::Selectable(fs::u8path(path).filename().u8string().c_str(), false, 0,
+                                      {std::max(100.f, ImGui::GetContentRegionAvail().x - 34), 0})) {
+                    open(path);
+                    ImGui::EndDisabled(); ImGui::PopID(); ImGui::EndChild(); ImGui::Unindent(48);
+                    return;
+                }
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s%s", path.c_str(), exists ? "" : "\nFile is missing");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("x")) { forget_stage(i); ImGui::PopID(); continue; }
+                ImGui::PopID(); ++i;
+            }
+            ImGui::EndChild();
+        }
         ImGui::Spacing();
         ImGui::TextDisabled("You can also drop a BDB or BDD file into this window.");
         ImGui::Unindent(48);
@@ -4686,6 +4734,12 @@ int run(int argc, char **argv) {
     }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
     App app;
+    if (char *pref = SDL_GetPrefPath("midway-bddtool", "studio")) {
+        app.recent_stages_file = (fs::u8path(pref) / "recent-stages.txt").u8string();
+        SDL_free(pref);
+        std::string recent_error;
+        if (!app.recent_stages.load(app.recent_stages_file, recent_error)) app.error = recent_error;
+    }
     app.session_stamp = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::system_clock::now().time_since_epoch())
                             .count();

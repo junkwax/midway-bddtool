@@ -433,6 +433,12 @@ presented as completed evidence.
 
 ## Save and recovery
 
+The welcome screen and **File → Open recent** retain the eight most recently
+opened or saved stages in the application's settings folder. Selecting a stage
+moves it to the top. Missing files are disabled and can be removed from the
+welcome list with the adjacent `x`; the list never opens, modifies or scans a
+game checkout by itself. Automated UI smokes do not enter their scratch files.
+
 The **Optimize** workspace adds background analysis, cut/reuse previews,
 palette and placement budgets, exact pixel verification and an undoable Apply.
 Its **Repeat & Mirror** workshop also previews deliberate artwork changes,

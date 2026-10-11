@@ -479,6 +479,13 @@ deep search and 24-placement bound, then displays the captured estimate beside
 the fresh result. Opening a stage without scanning remains available. Neither
 route changes the report evidence or game checkout.
 
+## Recent stages — October 11, 2026
+
+The rebuilt welcome screen and File menu retain up to eight recently opened or
+saved stages in app settings. Duplicate paths move to the top, missing files are
+disabled and removable, writes use a temporary replacement file, and automated
+smokes do not pollute the user's list.
+
 ## Remaining candidates, subject to the decisions above
 
 | Legacy capability | Current route / next work |
