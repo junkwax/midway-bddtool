@@ -71,6 +71,14 @@ struct ManualSplitOptions {
 // four-pixel width alignment; Y cuts may land on any scanline.
 OptimizationPlan preview_manual_split(const Document &document,
                                       const ManualSplitOptions &options);
+struct ManualSplitSuggestion {
+    ManualSplitOptions options;
+    OptimizationPlan plan;
+    int tried = 0;
+    std::string error;
+};
+// Bounded search for a uniform strip grid whose exact/mirrored cells reuse payloads.
+ManualSplitSuggestion suggest_manual_split(const Document &document, int image);
 bool verify_optimization(const OptimizationPlan &plan, std::string &error);
 std::string optimization_report(const OptimizationPlan &plan);
 struct OptimizeRegion {

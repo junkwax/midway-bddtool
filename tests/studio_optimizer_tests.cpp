@@ -159,6 +159,18 @@ int main(int argc, char **argv) {
         require(manual_report.find("shared payload families") != std::string::npos &&
                     manual_report.find("cells reused") != std::string::npos,
                 "Manual split report omitted shared-family evidence");
+        auto suggested_manual = suggest_manual_split(doc, 7);
+        require(suggested_manual.plan.verified && suggested_manual.tried > 0 &&
+                    suggested_manual.tried <= 128 &&
+                    (!suggested_manual.options.x_cuts.empty() ||
+                     !suggested_manual.options.y_cuts.empty()),
+                suggested_manual.error.empty() ? "Repeat-grid suggestion failed"
+                                               : suggested_manual.error);
+        std::set<int> suggested_images;
+        for (const auto &piece : suggested_manual.plan.changes[0].pieces)
+            suggested_images.insert(piece.image);
+        require(suggested_images.size() < suggested_manual.plan.changes[0].pieces.size(),
+                "Suggested grid did not actually reuse a payload");
         auto manual_doc = doc;
         require(manual_doc.apply_optimization(manual, error), error);
         require(manual_doc.undo() && manual_doc.state().objects.size() == doc.state().objects.size() &&

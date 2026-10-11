@@ -453,6 +453,9 @@ repeating-spike and mirrored-pillar cases without changing a pixel. Users can
 disable reuse when the resulting cells need independent artwork edits.
 The review reports cells versus stored payloads, mirror uses and payload bytes
 avoided. Selecting a shared-family chip outlines every cell using that payload.
+**Suggest repeat cuts** searches a bounded set of uniform X/Y strip grids and
+opens the best verified repeat or mirror result only when modeled video savings
+exceed the added placement-table cost.
 
 This replaces the useful part of the legacy split-object dialog without carrying
 over its separate global state, automatic palette deletion switches, or direct

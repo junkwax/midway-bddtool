@@ -109,6 +109,9 @@ for later painting; the review shows the extra image headers and video data.
 The reconstruction review summarizes cells versus stored payloads, mirrored and
 reused cells, and payload bytes avoided. Select a shared-family chip to outline
 every cell backed by that image, making repeat and mirror relationships visible.
+**Suggest repeat cuts** tries at most 128 uniform horizontal or vertical strip
+grids. It keeps only exact/mirrored reuse whose modeled video saving exceeds the
+added placement-table cost, then opens the best verified grid for guide editing.
 
 **Palette** edits the selected shared palette with RGB555 precision. Copy the
 palette for that artwork first when other images should retain their colors.

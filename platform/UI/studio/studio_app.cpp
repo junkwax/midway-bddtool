@@ -227,6 +227,7 @@ struct Tab {
     bool manual_split_plan = false;
     bool manual_split_reuse = true;
     std::vector<int> manual_split_x_cuts, manual_split_y_cuts;
+    std::string manual_split_error;
     bool compare_open = false, compare_pattern = false;
     CompareView compare;
     Point compare_camera;
@@ -2088,6 +2089,7 @@ class App {
             t.manual_split_x_cuts = selected->w >= 8 ? std::vector<int>{middle}
                                                      : std::vector<int>{};
             t.manual_split_y_cuts.clear();
+            t.manual_split_error.clear();
         }
         page = 3;
         t.optimize_mode = 0;
@@ -2331,6 +2333,28 @@ class App {
                                                                cut_settings_changed = true; break; }
                     }
                     ImGui::EndDisabled();
+                    ImGui::BeginDisabled(busy);
+                    if (ImGui::Button("Suggest repeat cuts")) {
+                        auto suggestion = suggest_manual_split(t.document, source);
+                        t.manual_split_error = suggestion.error;
+                        if (suggestion.plan.verified) {
+                            t.manual_split_x_cuts = std::move(suggestion.options.x_cuts);
+                            t.manual_split_y_cuts = std::move(suggestion.options.y_cuts);
+                            t.manual_split_reuse = true;
+                            t.optimize_plan = std::make_unique<OptimizationPlan>(
+                                std::move(suggestion.plan));
+                            t.manual_split_plan = true;
+                            t.heat_regions = optimization_regions(*t.optimize_plan);
+                            t.optimize_choice = 0;
+                            t.optimize_family_image = -1;
+                            cut_settings_changed = false;
+                        }
+                    }
+                    ImGui::EndDisabled();
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Try up to 128 uniform X/Y strip grids. Keep only exact or "
+                                          "mirrored reuse with net modeled savings.");
+                    ImGui::SameLine();
                     ImGui::BeginDisabled(busy ||
                                          (t.manual_split_x_cuts.empty() && t.manual_split_y_cuts.empty()));
                     if (ImGui::Button("Preview manual split")) {
@@ -2344,10 +2368,13 @@ class App {
                         t.heat_regions = optimization_regions(*t.optimize_plan);
                         t.optimize_choice = 0;
                         t.optimize_family_image = -1;
+                        t.manual_split_error.clear();
                         cut_settings_changed = false;
                     }
                     ImGui::EndDisabled(); ImGui::SameLine();
                     ImGui::TextDisabled("Creates %d exact pieces (16 max)", pieces);
+                    if (!t.manual_split_error.empty())
+                        ImGui::TextWrapped("%s", t.manual_split_error.c_str());
                     if (cut_settings_changed && t.manual_split_plan) {
                         t.optimize_plan.reset();
                         t.manual_split_plan = false;
