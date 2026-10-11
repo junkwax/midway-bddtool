@@ -451,6 +451,8 @@ with each guide removable before previewing or applying the proposal.
 Exact or X/Y-mirrored grid cells reuse one payload by default, which covers the
 repeating-spike and mirrored-pillar cases without changing a pixel. Users can
 disable reuse when the resulting cells need independent artwork edits.
+The review reports cells versus stored payloads, mirror uses and payload bytes
+avoided. Selecting a shared-family chip outlines every cell using that payload.
 
 This replaces the useful part of the legacy split-object dialog without carrying
 over its separate global state, automatic palette deletion switches, or direct

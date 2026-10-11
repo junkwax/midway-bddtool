@@ -106,6 +106,9 @@ pieces so object and image-table growth stays reviewable.
 exact X/Y mirrors share one stored image while each placement receives the flip
 needed to reconstruct the source. Disable it when the pieces must remain separate
 for later painting; the review shows the extra image headers and video data.
+The reconstruction review summarizes cells versus stored payloads, mirrored and
+reused cells, and payload bytes avoided. Select a shared-family chip to outline
+every cell backed by that image, making repeat and mirror relationships visible.
 
 **Palette** edits the selected shared palette with RGB555 precision. Copy the
 palette for that artwork first when other images should retain their colors.

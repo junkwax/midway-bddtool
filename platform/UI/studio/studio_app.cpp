@@ -222,7 +222,7 @@ struct Tab {
     std::future<OptimizationPlan> optimize_job;
     std::unique_ptr<OptimizationPlan> optimize_plan;
     std::unique_ptr<PaletteConsolidation> palette_plan;
-    int optimize_choice = 0, optimize_palette = 0;
+    int optimize_choice = 0, optimize_palette = 0, optimize_family_image = -1;
     bool optimize_static_palettes = false, palette_slots_reviewed = false, optimize_cuts = true;
     bool manual_split_plan = false;
     bool manual_split_reuse = true;
@@ -2080,6 +2080,7 @@ class App {
         t.optimize_options.palette_reuse_only = false;
         t.optimize_choice = 0;
         t.optimize_palette = 0;
+        t.optimize_family_image = -1;
         t.optimize_plan.reset();
         if (auto *selected = t.document.image(image)) {
             int middle = std::max(4, (selected->w / 8) * 4);
@@ -2342,6 +2343,7 @@ class App {
                         t.manual_split_plan = true;
                         t.heat_regions = optimization_regions(*t.optimize_plan);
                         t.optimize_choice = 0;
+                        t.optimize_family_image = -1;
                         cut_settings_changed = false;
                     }
                     ImGui::EndDisabled(); ImGui::SameLine();
@@ -2483,6 +2485,7 @@ class App {
             if (ImGui::Selectable(label, t.optimize_choice == (int)i)) {
                 t.optimize_choice = (int)i;
                 t.optimize_palette = 0;
+                t.optimize_family_image = -1;
             }
         }
         ImGui::EndChild();
@@ -2509,6 +2512,40 @@ class App {
             trimmed -= piece.w * piece.h;
         if (change.residual) ImGui::TextDisabled("Shared base + unique details; exact pixels retained");
         else ImGui::TextDisabled("%d transparent pixels trimmed from stored regions", trimmed);
+        std::map<int, int> family_uses;
+        uint64_t independent_bits = 0, unique_bits = 0;
+        int mirror_cells = 0;
+        for (const auto &piece : change.pieces) {
+            family_uses[piece.image]++;
+            const auto &after = plan.after.assets->data.images;
+            auto tile = std::find_if(after.begin(), after.end(),
+                                     [&](const auto &im) { return im.idx == piece.image; });
+            if (tile != after.end()) independent_bits += optimization_image_bits(*tile);
+            mirror_cells += piece.flip_x || piece.flip_y;
+        }
+        for (const auto &[image_id, count] : family_uses) {
+            const auto &after = plan.after.assets->data.images;
+            auto tile = std::find_if(after.begin(), after.end(),
+                                     [&](const auto &im) { return im.idx == image_id; });
+            if (tile != after.end()) unique_bits += optimization_image_bits(*tile);
+        }
+        int reused_cells = (int)change.pieces.size() - (int)family_uses.size();
+        if (reused_cells > 0) {
+            ImGui::TextColored(accent,
+                "%zu cells -> %zu stored payloads | %d reused | %d mirrored | %.1f KiB payload avoided",
+                change.pieces.size(), family_uses.size(), reused_cells, mirror_cells,
+                (independent_bits - unique_bits) / 8192.0);
+            ImGui::TextDisabled("Shared families:"); ImGui::SameLine();
+            for (const auto &[image_id, count] : family_uses) if (count > 1) {
+                ImGui::PushID(image_id);
+                char family[48]; std::snprintf(family, sizeof family, "Image %d x%d", image_id, count);
+                if (ImGui::Selectable(family, t.optimize_family_image == image_id,
+                                      ImGuiSelectableFlags_None, ImVec2(105, 0)))
+                    t.optimize_family_image = t.optimize_family_image == image_id ? -1 : image_id;
+                ImGui::PopID(); ImGui::SameLine();
+            }
+            ImGui::NewLine();
+        } else t.optimize_family_image = -1;
         float half = (ImGui::GetContentRegionAvail().x - 18) / 2;
         auto origin = ImGui::GetCursorScreenPos();
         float scale = std::min(half / it->w, 190.0f / it->h);
@@ -2557,7 +2594,9 @@ class App {
             if (t.optimize_cuts) {
                 ImU32 color = IM_COL32(70 + (p.image * 37) % 150, 110 + (p.image * 17) % 140,
                                        150 + (p.image * 11) % 100, 255);
-                draw->AddRect(lo, hi, color, 0, 0, 1.5f);
+                bool family_selected = t.optimize_family_image == p.image;
+                draw->AddRect(lo, hi, family_selected ? selection_color : color, 0, 0,
+                              family_selected ? 3.5f : 1.5f);
                 char tag[48];
                 std::snprintf(tag, sizeof tag, "%d:%db %s%s", p.image, bpp, p.flip_x ? "X" : "",
                               p.flip_y ? "Y" : "");
@@ -4614,6 +4653,7 @@ class App {
                     t->heat_fit = true;
                     t->optimize_choice = 0;
                     t->optimize_palette = 0;
+                    t->optimize_family_image = -1;
                 } catch (const std::exception &e) {
                     error = e.what();
                 }

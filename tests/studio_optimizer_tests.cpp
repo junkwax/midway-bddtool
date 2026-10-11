@@ -155,6 +155,10 @@ int main(int argc, char **argv) {
         }
         require(manual_images.size() == 1 && manual_flip,
                 "Equivalent manual pieces were not shared through exact flips");
+        auto manual_report = optimization_report(manual);
+        require(manual_report.find("shared payload families") != std::string::npos &&
+                    manual_report.find("cells reused") != std::string::npos,
+                "Manual split report omitted shared-family evidence");
         auto manual_doc = doc;
         require(manual_doc.apply_optimization(manual, error), error);
         require(manual_doc.undo() && manual_doc.state().objects.size() == doc.state().objects.size() &&

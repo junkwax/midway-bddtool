@@ -1726,10 +1726,14 @@ std::string optimization_report(const OptimizationPlan &p) {
     out << "Exact reconstruction: " << (p.verified ? "PASS" : "NOT VERIFIED") << "\n";
     for (const auto &c : p.changes) {
         std::set<int> tiles;
+        std::map<int, int> families;
         uint64_t covered = 0;
+        int mirrors = 0;
         for (const auto &piece : c.pieces) {
             tiles.insert(piece.image);
+            families[piece.image]++;
             covered += (uint64_t)piece.w * piece.h;
+            mirrors += piece.flip_x || piece.flip_y;
         }
         const auto &original = get_image(p.before, c.source_image);
         out << "Image " << c.source_image << ": " << c.pieces.size() << " pieces, " << c.uses
@@ -1738,6 +1742,12 @@ std::string optimization_report(const OptimizationPlan &p) {
                            : std::to_string((uint64_t)original.w * original.h - covered) +
                                  " transparent pixels trimmed")
             << "\n";
+        int shared_families = (int)std::count_if(families.begin(), families.end(),
+            [](const auto &family) { return family.second > 1; });
+        if (shared_families)
+            out << "  " << shared_families << " shared payload families; "
+                << c.pieces.size() - tiles.size() << " cells reused; " << mirrors
+                << " cells reconstructed with X/Y flips.\n";
         if (c.equivalent_indices)
             out << "  " << c.equivalent_indices << " equivalent opaque indices merged across all "
                 << "current palette variants.\n";
