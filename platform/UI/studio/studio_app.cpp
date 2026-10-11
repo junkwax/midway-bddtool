@@ -224,9 +224,8 @@ struct Tab {
     std::unique_ptr<PaletteConsolidation> palette_plan;
     int optimize_choice = 0, optimize_palette = 0;
     bool optimize_static_palettes = false, palette_slots_reviewed = false, optimize_cuts = true;
-    bool manual_split_x = true, manual_split_y = false;
     bool manual_split_plan = false;
-    int manual_split_x_at = 4, manual_split_y_at = 1;
+    std::vector<int> manual_split_x_cuts, manual_split_y_cuts;
     bool compare_open = false, compare_pattern = false;
     CompareView compare;
     Point compare_camera;
@@ -2082,9 +2081,11 @@ class App {
         t.optimize_palette = 0;
         t.optimize_plan.reset();
         if (auto *selected = t.document.image(image)) {
-            t.manual_split_x_at = std::max(4, (selected->w / 8) * 4);
-            if (t.manual_split_x_at >= selected->w) t.manual_split_x_at = selected->w - 4;
-            t.manual_split_y_at = std::max(1, selected->h / 2);
+            int middle = std::max(4, (selected->w / 8) * 4);
+            if (middle >= selected->w) middle = selected->w - 4;
+            t.manual_split_x_cuts = selected->w >= 8 ? std::vector<int>{middle}
+                                                     : std::vector<int>{};
+            t.manual_split_y_cuts.clear();
         }
         page = 3;
         t.optimize_mode = 0;
@@ -2265,39 +2266,83 @@ class App {
                 if (ImGui::CollapsingHeader("Manual cut lines")) {
                     ImGui::TextWrapped("Place a precise lossless grid on a visible seam. The proposal "
                                        "must still pass reconstruction and runtime-order checks.");
-                    ImGui::Checkbox("Vertical cut", &t.manual_split_x); ImGui::SameLine();
-                    ImGui::BeginDisabled(!t.manual_split_x || im->w < 8);
-                    ImGui::SetNextItemWidth(180);
-                    ImGui::SliderInt("X##manual-cut", &t.manual_split_x_at, 4,
-                                     std::max(4, im->w - 4), "%d px");
+                    bool cut_settings_changed = false;
+                    for (size_t i = 0; i < t.manual_split_x_cuts.size();) {
+                        ImGui::PushID((int)i + 1000); ImGui::SetNextItemWidth(210);
+                        cut_settings_changed |= ImGui::SliderInt(
+                            "Vertical X", &t.manual_split_x_cuts[i], 4,
+                            std::max(4, im->w - 4), "%d px");
+                        t.manual_split_x_cuts[i] = std::clamp(
+                            ((t.manual_split_x_cuts[i] + 2) / 4) * 4, 4,
+                            std::max(4, im->w - 4));
+                        ImGui::SameLine();
+                        bool remove = ImGui::SmallButton("Remove"); ImGui::PopID();
+                        if (remove) { t.manual_split_x_cuts.erase(t.manual_split_x_cuts.begin() + i);
+                                      cut_settings_changed = true; }
+                        else i++;
+                    }
+                    for (size_t i = 0; i < t.manual_split_y_cuts.size();) {
+                        ImGui::PushID((int)i + 2000); ImGui::SetNextItemWidth(210);
+                        cut_settings_changed |= ImGui::SliderInt(
+                            "Horizontal Y", &t.manual_split_y_cuts[i], 1,
+                            std::max(1, im->h - 1), "%d px");
+                        t.manual_split_y_cuts[i] = std::clamp(t.manual_split_y_cuts[i], 1,
+                                                              std::max(1, im->h - 1));
+                        ImGui::SameLine();
+                        bool remove = ImGui::SmallButton("Remove"); ImGui::PopID();
+                        if (remove) { t.manual_split_y_cuts.erase(t.manual_split_y_cuts.begin() + i);
+                                      cut_settings_changed = true; }
+                        else i++;
+                    }
+                    auto unique_cuts = [](auto &cuts) {
+                        std::sort(cuts.begin(), cuts.end());
+                        cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+                    };
+                    unique_cuts(t.manual_split_x_cuts);
+                    unique_cuts(t.manual_split_y_cuts);
+                    int pieces = ((int)t.manual_split_x_cuts.size() + 1) *
+                                 ((int)t.manual_split_y_cuts.size() + 1);
+                    bool can_add_x = im->w >= 8 &&
+                        t.manual_split_x_cuts.size() < (size_t)(im->w / 4 - 1) &&
+                        (t.manual_split_x_cuts.size() + 2) * (t.manual_split_y_cuts.size() + 1) <= 16;
+                    ImGui::BeginDisabled(!can_add_x);
+                    if (ImGui::SmallButton("+ Vertical guide")) {
+                        for (int x = 4; x < im->w; x += 4)
+                            if (std::find(t.manual_split_x_cuts.begin(), t.manual_split_x_cuts.end(), x) ==
+                                t.manual_split_x_cuts.end()) { t.manual_split_x_cuts.push_back(x);
+                                                               cut_settings_changed = true; break; }
+                    }
+                    ImGui::EndDisabled(); ImGui::SameLine();
+                    bool can_add_y = im->h >= 2 &&
+                        t.manual_split_y_cuts.size() < (size_t)(im->h - 1) &&
+                        (t.manual_split_x_cuts.size() + 1) * (t.manual_split_y_cuts.size() + 2) <= 16;
+                    ImGui::BeginDisabled(!can_add_y);
+                    if (ImGui::SmallButton("+ Horizontal guide")) {
+                        for (int y = 1; y < im->h; y++)
+                            if (std::find(t.manual_split_y_cuts.begin(), t.manual_split_y_cuts.end(), y) ==
+                                t.manual_split_y_cuts.end()) { t.manual_split_y_cuts.push_back(y);
+                                                               cut_settings_changed = true; break; }
+                    }
                     ImGui::EndDisabled();
-                    t.manual_split_x_at = std::clamp((t.manual_split_x_at / 4) * 4, 4,
-                                                     std::max(4, im->w - 4));
-                    ImGui::Checkbox("Horizontal cut", &t.manual_split_y); ImGui::SameLine();
-                    ImGui::BeginDisabled(!t.manual_split_y || im->h < 2);
-                    ImGui::SetNextItemWidth(180);
-                    ImGui::SliderInt("Y##manual-cut", &t.manual_split_y_at, 1,
-                                     std::max(1, im->h - 1), "%d px");
-                    ImGui::EndDisabled();
-                    t.manual_split_y_at = std::clamp(t.manual_split_y_at, 1,
-                                                     std::max(1, im->h - 1));
-                    ImGui::BeginDisabled(busy || (!t.manual_split_x && !t.manual_split_y) ||
-                                         (t.manual_split_x && im->w < 8) ||
-                                         (t.manual_split_y && im->h < 2));
+                    ImGui::BeginDisabled(busy ||
+                                         (t.manual_split_x_cuts.empty() && t.manual_split_y_cuts.empty()));
                     if (ImGui::Button("Preview manual split")) {
                         ManualSplitOptions split; split.image = source;
-                        if (t.manual_split_x) split.x_cuts.push_back(t.manual_split_x_at);
-                        if (t.manual_split_y) split.y_cuts.push_back(t.manual_split_y_at);
+                        split.x_cuts = t.manual_split_x_cuts;
+                        split.y_cuts = t.manual_split_y_cuts;
                         t.optimize_plan = std::make_unique<OptimizationPlan>(
                             preview_manual_split(t.document, split));
                         t.manual_split_plan = true;
                         t.heat_regions = optimization_regions(*t.optimize_plan);
                         t.optimize_choice = 0;
+                        cut_settings_changed = false;
                     }
                     ImGui::EndDisabled(); ImGui::SameLine();
-                    ImGui::TextDisabled("Creates %d exact pieces",
-                                        (t.manual_split_x ? 2 : 1) *
-                                            (t.manual_split_y ? 2 : 1));
+                    ImGui::TextDisabled("Creates %d exact pieces (16 max)", pieces);
+                    if (cut_settings_changed && t.manual_split_plan) {
+                        t.optimize_plan.reset();
+                        t.manual_split_plan = false;
+                    }
                 }
             }
         } else {
@@ -2470,14 +2515,14 @@ class App {
         if (tex)
             draw->AddImage((ImTextureID)(intptr_t)tex, a, b);
         if (t.manual_split_plan && change.source_image == t.optimize_options.source_image) {
-            if (t.manual_split_x) {
-                float x = a.x + t.manual_split_x_at * scale;
+            for (int cut : t.manual_split_x_cuts) {
+                float x = a.x + cut * scale;
                 draw->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), selection_color, 2.5f);
                 draw->AddTriangleFilled(ImVec2(x - 5, a.y), ImVec2(x + 5, a.y),
                                         ImVec2(x, a.y + 7), selection_color);
             }
-            if (t.manual_split_y) {
-                float y = a.y + t.manual_split_y_at * scale;
+            for (int cut : t.manual_split_y_cuts) {
+                float y = a.y + cut * scale;
                 draw->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), selection_color, 2.5f);
                 draw->AddTriangleFilled(ImVec2(a.x, y - 5), ImVec2(a.x, y + 5),
                                         ImVec2(a.x + 7, y), selection_color);
@@ -2524,22 +2569,34 @@ class App {
             ImGui::SetTooltip("Click or drag to move the nearest enabled cut line");
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 auto mouse = ImGui::GetIO().MousePos;
-                float dx = t.manual_split_x
-                               ? std::abs(mouse.x - (original_a.x + t.manual_split_x_at * scale))
-                               : std::numeric_limits<float>::max();
-                float dy = t.manual_split_y
-                               ? std::abs(mouse.y - (original_a.y + t.manual_split_y_at * scale))
-                               : std::numeric_limits<float>::max();
-                if (dx <= dy && t.manual_split_x && it->w >= 8) {
+                float distance = std::numeric_limits<float>::max();
+                int axis = -1, index = -1;
+                for (size_t i = 0; i < t.manual_split_x_cuts.size(); i++) {
+                    float d = std::abs(mouse.x -
+                                       (original_a.x + t.manual_split_x_cuts[i] * scale));
+                    if (d < distance) { distance = d; axis = 0; index = (int)i; }
+                }
+                for (size_t i = 0; i < t.manual_split_y_cuts.size(); i++) {
+                    float d = std::abs(mouse.y -
+                                       (original_a.y + t.manual_split_y_cuts[i] * scale));
+                    if (d < distance) { distance = d; axis = 1; index = (int)i; }
+                }
+                if (axis == 0 && index >= 0 && it->w >= 8) {
                     int pixel = (int)std::lround((mouse.x - original_a.x) / scale);
                     int snapped = std::clamp(((pixel + 2) / 4) * 4, 4, it->w - 4);
-                    reposition_manual = snapped != t.manual_split_x_at;
-                    t.manual_split_x_at = snapped;
-                } else if (t.manual_split_y && it->h >= 2) {
+                    bool duplicate = std::count(t.manual_split_x_cuts.begin(),
+                                                t.manual_split_x_cuts.end(), snapped) >
+                                     (snapped == t.manual_split_x_cuts[index] ? 1 : 0);
+                    reposition_manual = !duplicate && snapped != t.manual_split_x_cuts[index];
+                    if (reposition_manual) t.manual_split_x_cuts[index] = snapped;
+                } else if (axis == 1 && index >= 0 && it->h >= 2) {
                     int pixel = (int)std::lround((mouse.y - original_a.y) / scale);
                     int snapped = std::clamp(pixel, 1, it->h - 1);
-                    reposition_manual = snapped != t.manual_split_y_at;
-                    t.manual_split_y_at = snapped;
+                    bool duplicate = std::count(t.manual_split_y_cuts.begin(),
+                                                t.manual_split_y_cuts.end(), snapped) >
+                                     (snapped == t.manual_split_y_cuts[index] ? 1 : 0);
+                    reposition_manual = !duplicate && snapped != t.manual_split_y_cuts[index];
+                    if (reposition_manual) t.manual_split_y_cuts[index] = snapped;
                 }
             }
         }
@@ -2547,8 +2604,8 @@ class App {
         ImGui::EndChild();
         if (reposition_manual) {
             ManualSplitOptions split; split.image = change.source_image;
-            if (t.manual_split_x) split.x_cuts.push_back(t.manual_split_x_at);
-            if (t.manual_split_y) split.y_cuts.push_back(t.manual_split_y_at);
+            split.x_cuts = t.manual_split_x_cuts;
+            split.y_cuts = t.manual_split_y_cuts;
             t.optimize_plan = std::make_unique<OptimizationPlan>(
                 preview_manual_split(t.document, split));
             t.heat_regions = optimization_regions(*t.optimize_plan);

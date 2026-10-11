@@ -446,7 +446,8 @@ normal/X/Y/XY-flipped placements. They use the same reconstruction and runtime
 ordering proof as automatic splits and show both video-data and added table cost
 before the single undoable apply. Cut guides are visible on the original preview;
 clicking or dragging the artwork moves the nearest enabled guide and refreshes
-the proof and cost model.
+the proof and cost model. Multiple guides can form a grid of up to 16 pieces,
+with each guide removable before previewing or applying the proposal.
 
 This replaces the useful part of the legacy split-object dialog without carrying
 over its separate global state, automatic palette deletion switches, or direct

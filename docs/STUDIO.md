@@ -99,6 +99,9 @@ cost before **Apply verified proposal** makes one undoable edit.
 After creating the preview, click or drag on the original artwork to move the
 nearest enabled cut. The vertical guide snaps to four pixels and the verified
 reconstruction and budget figures refresh at the new seam.
+Use **+ Vertical guide** or **+ Horizontal guide** to build a grid with several
+seams. Guides can be removed individually; the workspace caps the grid at 16
+pieces so object and image-table growth stays reviewable.
 
 **Palette** edits the selected shared palette with RGB555 precision. Copy the
 palette for that artwork first when other images should retain their colors.

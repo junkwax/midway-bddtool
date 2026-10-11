@@ -154,6 +154,12 @@ int main(int argc, char **argv) {
                 "Manual split undo/redo failed");
         fs::create_directories(root / "manual-split");
         check_roundtrip(doc, manual, root / "manual-split");
+        manual_options.x_cuts = {16, 32, 48};
+        manual_options.y_cuts.clear();
+        auto multi_manual = preview_manual_split(doc, manual_options);
+        require(multi_manual.verified && multi_manual.changes[0].pieces.size() == 4,
+                multi_manual.error.empty() ? "Multiple same-axis cut guides failed"
+                                           : multi_manual.error);
         manual_options.x_cuts = {31};
         auto invalid_manual = preview_manual_split(doc, manual_options);
         require(!invalid_manual.verified &&
