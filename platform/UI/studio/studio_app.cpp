@@ -228,6 +228,8 @@ struct Tab {
     bool manual_split_reuse = true;
     std::vector<int> manual_split_x_cuts, manual_split_y_cuts;
     std::string manual_split_error;
+    std::future<ManualSplitSuggestion> manual_split_job;
+    std::shared_ptr<OptimizeProgress> manual_split_progress;
     bool compare_open = false, compare_pattern = false;
     CompareView compare;
     Point compare_camera;
@@ -2253,7 +2255,7 @@ class App {
             ImGui::EndChild();
             ImGui::PopStyleColor();
         }
-        bool busy = t.optimize_job.valid();
+        bool busy = t.optimize_job.valid() || t.manual_split_job.valid();
         int source = t.optimize_options.source_image;
         if (source >= 0) {
             auto *im = t.document.image(source);
@@ -2271,6 +2273,8 @@ class App {
                     ImGui::TextWrapped("Place a precise lossless grid on a visible seam. The proposal "
                                        "must still pass reconstruction and runtime-order checks.");
                     bool cut_settings_changed = false;
+                    bool suggesting = t.manual_split_job.valid();
+                    ImGui::BeginDisabled(suggesting);
                     cut_settings_changed |= ImGui::Checkbox(
                         "Reuse exact or mirrored pieces", &t.manual_split_reuse);
                     if (ImGui::IsItemHovered())
@@ -2335,20 +2339,14 @@ class App {
                     ImGui::EndDisabled();
                     ImGui::BeginDisabled(busy);
                     if (ImGui::Button("Suggest repeat cuts")) {
-                        auto suggestion = suggest_manual_split(t.document, source);
-                        t.manual_split_error = suggestion.error;
-                        if (suggestion.plan.verified) {
-                            t.manual_split_x_cuts = std::move(suggestion.options.x_cuts);
-                            t.manual_split_y_cuts = std::move(suggestion.options.y_cuts);
-                            t.manual_split_reuse = true;
-                            t.optimize_plan = std::make_unique<OptimizationPlan>(
-                                std::move(suggestion.plan));
-                            t.manual_split_plan = true;
-                            t.heat_regions = optimization_regions(*t.optimize_plan);
-                            t.optimize_choice = 0;
-                            t.optimize_family_image = -1;
-                            cut_settings_changed = false;
-                        }
+                        auto doc = t.document;
+                        t.manual_split_progress = std::make_shared<OptimizeProgress>();
+                        auto progress = t.manual_split_progress;
+                        t.manual_split_error.clear();
+                        t.manual_split_job = std::async(std::launch::async,
+                            [doc = std::move(doc), source, progress]() mutable {
+                                return suggest_manual_split(doc, source, progress.get());
+                            });
                     }
                     ImGui::EndDisabled();
                     if (ImGui::IsItemHovered())
@@ -2378,6 +2376,15 @@ class App {
                     if (cut_settings_changed && t.manual_split_plan) {
                         t.optimize_plan.reset();
                         t.manual_split_plan = false;
+                    }
+                    ImGui::EndDisabled();
+                    if (suggesting && t.manual_split_progress) {
+                        int done = t.manual_split_progress->done;
+                        int total = t.manual_split_progress->total;
+                        ImGui::ProgressBar(total ? (float)done / total : 0, ImVec2(260, 0));
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Cancel suggestion"))
+                            t.manual_split_progress->cancel = true;
                     }
                 }
             }
@@ -4671,6 +4678,26 @@ class App {
                 } catch (const std::exception &e) {
                     error = e.what();
                 }
+            }
+            if (t->manual_split_job.valid() &&
+                t->manual_split_job.wait_for(std::chrono::seconds(0)) ==
+                    std::future_status::ready) {
+                try {
+                    auto suggestion = t->manual_split_job.get();
+                    t->manual_split_error = suggestion.error;
+                    if (suggestion.plan.verified) {
+                        t->manual_split_x_cuts = std::move(suggestion.options.x_cuts);
+                        t->manual_split_y_cuts = std::move(suggestion.options.y_cuts);
+                        t->manual_split_reuse = true;
+                        t->optimize_plan = std::make_unique<OptimizationPlan>(
+                            std::move(suggestion.plan));
+                        t->manual_split_plan = true;
+                        t->heat_regions = optimization_regions(*t->optimize_plan);
+                        t->optimize_choice = 0;
+                        t->optimize_palette = 0;
+                        t->optimize_family_image = -1;
+                    }
+                } catch (const std::exception &e) { t->manual_split_error = e.what(); }
             }
             if (t->optimize_job.valid() &&
                 t->optimize_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {

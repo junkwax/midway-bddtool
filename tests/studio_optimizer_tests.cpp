@@ -171,6 +171,11 @@ int main(int argc, char **argv) {
             suggested_images.insert(piece.image);
         require(suggested_images.size() < suggested_manual.plan.changes[0].pieces.size(),
                 "Suggested grid did not actually reuse a payload");
+        OptimizeProgress cancelled_suggestion;
+        cancelled_suggestion.cancel = true;
+        auto cancelled_manual = suggest_manual_split(doc, 7, &cancelled_suggestion);
+        require(cancelled_manual.cancelled && cancelled_manual.tried == 0,
+                "Repeat-grid suggestion ignored cancellation");
         auto manual_doc = doc;
         require(manual_doc.apply_optimization(manual, error), error);
         require(manual_doc.undo() && manual_doc.state().objects.size() == doc.state().objects.size() &&

@@ -112,6 +112,8 @@ every cell backed by that image, making repeat and mirror relationships visible.
 **Suggest repeat cuts** tries at most 128 uniform horizontal or vertical strip
 grids. It keeps only exact/mirrored reuse whose modeled video saving exceeds the
 added placement-table cost, then opens the best verified grid for guide editing.
+The search runs in the background with bounded progress and can be cancelled;
+the current document remains editable and unchanged while it runs.
 
 **Palette** edits the selected shared palette with RGB555 precision. Copy the
 palette for that artwork first when other images should retain their colors.

@@ -1019,7 +1019,8 @@ OptimizationPlan preview_manual_split(const Document &document,
     return plan;
 }
 
-ManualSplitSuggestion suggest_manual_split(const Document &document, int image) {
+ManualSplitSuggestion suggest_manual_split(const Document &document, int image,
+                                           OptimizeProgress *progress) {
     ManualSplitSuggestion result;
     result.options.image = image;
     const auto *source = document.image(image);
@@ -1036,8 +1037,7 @@ ManualSplitSuggestion suggest_manual_split(const Document &document, int image) 
         }
         return std::vector<int>(values.begin(), values.end());
     };
-    int64_t best_score = 0;
-    int best_pieces = INT_MAX;
+    std::vector<ManualSplitOptions> candidates;
     for (int axis = 0; axis < 2; axis++) {
         int length = axis ? source->h : source->w;
         for (int span : spans(length, axis ? 1 : 4)) {
@@ -1045,21 +1045,31 @@ ManualSplitSuggestion suggest_manual_split(const Document &document, int image) 
             auto &cuts = axis ? options.y_cuts : options.x_cuts;
             for (int cut = span; cut < length; cut += span) cuts.push_back(cut);
             if (cuts.empty() || cuts.size() + 1 > 16) continue;
-            auto plan = preview_manual_split(document, options);
-            result.tried++;
-            if (!plan.verified || plan.changes.empty()) continue;
-            const auto &pieces = plan.changes.front().pieces;
-            std::set<int> images;
-            for (const auto &piece : pieces) images.insert(piece.image);
-            if (images.size() == pieces.size()) continue;
-            int64_t video_saved = (int64_t)plan.baseline.video_bits - plan.proposed.video_bits;
-            int64_t table_cost = std::max<int64_t>(0,
-                (int64_t)plan.proposed.table_bytes - plan.baseline.table_bytes) * 8;
-            int64_t score = video_saved - table_cost;
-            if (score > best_score || (score == best_score && (int)pieces.size() < best_pieces)) {
-                best_score = score; best_pieces = (int)pieces.size();
-                result.options = std::move(options); result.plan = std::move(plan);
-            }
+            candidates.push_back(std::move(options));
+        }
+    }
+    if (progress) { progress->done = 0; progress->total = (int)candidates.size(); }
+    int64_t best_score = 0;
+    int best_pieces = INT_MAX;
+    for (auto &options : candidates) {
+        if (progress && progress->cancel) {
+            result.cancelled = true; result.error = "Repeat-cut suggestion cancelled."; return result;
+        }
+        auto plan = preview_manual_split(document, options);
+        result.tried++;
+        if (progress) ++progress->done;
+        if (!plan.verified || plan.changes.empty()) continue;
+        const auto &pieces = plan.changes.front().pieces;
+        std::set<int> images;
+        for (const auto &piece : pieces) images.insert(piece.image);
+        if (images.size() == pieces.size()) continue;
+        int64_t video_saved = (int64_t)plan.baseline.video_bits - plan.proposed.video_bits;
+        int64_t table_cost = std::max<int64_t>(0,
+            (int64_t)plan.proposed.table_bytes - plan.baseline.table_bytes) * 8;
+        int64_t score = video_saved - table_cost;
+        if (score > best_score || (score == best_score && (int)pieces.size() < best_pieces)) {
+            best_score = score; best_pieces = (int)pieces.size();
+            result.options = options; result.plan = std::move(plan);
         }
     }
     if (!result.plan.verified)

@@ -455,7 +455,8 @@ The review reports cells versus stored payloads, mirror uses and payload bytes
 avoided. Selecting a shared-family chip outlines every cell using that payload.
 **Suggest repeat cuts** searches a bounded set of uniform X/Y strip grids and
 opens the best verified repeat or mirror result only when modeled video savings
-exceed the added placement-table cost.
+exceed the added placement-table cost. It runs off the UI thread with progress
+and cancellation and never changes the document until the reviewed plan is applied.
 
 This replaces the useful part of the legacy split-object dialog without carrying
 over its separate global state, automatic palette deletion switches, or direct
