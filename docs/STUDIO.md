@@ -96,6 +96,9 @@ four-pixel LOAD2 alignment. **Preview manual split** rebuilds every normal and
 flipped placement, then runs the same exact-pixel and runtime-order verifier as
 automatic proposals. The normal review reports video-data and placement-table
 cost before **Apply verified proposal** makes one undoable edit.
+After creating the preview, click or drag on the original artwork to move the
+nearest enabled cut. The vertical guide snaps to four pixels and the verified
+reconstruction and budget figures refresh at the new seam.
 
 **Palette** edits the selected shared palette with RGB555 precision. Copy the
 palette for that artwork first when other images should retain their colors.

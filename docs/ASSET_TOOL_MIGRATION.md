@@ -444,7 +444,9 @@ The focused workspace also provides reviewed vertical and horizontal cut lines.
 Manual cuts preserve the complete source rectangle, palette indices and all
 normal/X/Y/XY-flipped placements. They use the same reconstruction and runtime
 ordering proof as automatic splits and show both video-data and added table cost
-before the single undoable apply.
+before the single undoable apply. Cut guides are visible on the original preview;
+clicking or dragging the artwork moves the nearest enabled guide and refreshes
+the proof and cost model.
 
 This replaces the useful part of the legacy split-object dialog without carrying
 over its separate global state, automatic palette deletion switches, or direct

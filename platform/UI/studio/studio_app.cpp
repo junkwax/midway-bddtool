@@ -225,6 +225,7 @@ struct Tab {
     int optimize_choice = 0, optimize_palette = 0;
     bool optimize_static_palettes = false, palette_slots_reviewed = false, optimize_cuts = true;
     bool manual_split_x = true, manual_split_y = false;
+    bool manual_split_plan = false;
     int manual_split_x_at = 4, manual_split_y_at = 1;
     bool compare_open = false, compare_pattern = false;
     CompareView compare;
@@ -2050,6 +2051,7 @@ class App {
         ImGui::Separator();
     }
     void start_optimization(Tab &t, int mode = 0) {
+        t.manual_split_plan = false;
         t.optimize_progress = std::make_shared<OptimizeProgress>();
         auto progress = t.optimize_progress;
         auto doc = t.document;
@@ -2257,6 +2259,7 @@ class App {
                 if (ImGui::SmallButton("Scan whole stage")) {
                     t.optimize_options.source_image = -1;
                     t.optimize_plan.reset();
+                    t.manual_split_plan = false;
                 }
                 ImGui::TextDisabled("Every placement and palette variant is rebuilt together; palette indices are preserved by default.");
                 if (ImGui::CollapsingHeader("Manual cut lines")) {
@@ -2287,6 +2290,7 @@ class App {
                         if (t.manual_split_y) split.y_cuts.push_back(t.manual_split_y_at);
                         t.optimize_plan = std::make_unique<OptimizationPlan>(
                             preview_manual_split(t.document, split));
+                        t.manual_split_plan = true;
                         t.heat_regions = optimization_regions(*t.optimize_plan);
                         t.optimize_choice = 0;
                     }
@@ -2460,10 +2464,25 @@ class App {
         optimize_before_textures.renderer = optimize_after_textures.renderer = renderer;
         auto tex = optimize_before_textures.get(plan.before, (int)(it - images.begin()), pi);
         ImVec2 a(origin.x, origin.y + 20), b(a.x + it->w * scale, a.y + it->h * scale);
+        ImVec2 original_a = a, original_b = b;
         draw->AddText(origin, IM_COL32_WHITE, "Original");
         draw->AddRectFilled(a, b, IM_COL32(30, 35, 43, 255));
         if (tex)
             draw->AddImage((ImTextureID)(intptr_t)tex, a, b);
+        if (t.manual_split_plan && change.source_image == t.optimize_options.source_image) {
+            if (t.manual_split_x) {
+                float x = a.x + t.manual_split_x_at * scale;
+                draw->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), selection_color, 2.5f);
+                draw->AddTriangleFilled(ImVec2(x - 5, a.y), ImVec2(x + 5, a.y),
+                                        ImVec2(x, a.y + 7), selection_color);
+            }
+            if (t.manual_split_y) {
+                float y = a.y + t.manual_split_y_at * scale;
+                draw->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), selection_color, 2.5f);
+                draw->AddTriangleFilled(ImVec2(a.x, y - 5), ImVec2(a.x, y + 5),
+                                        ImVec2(a.x + 7, y), selection_color);
+            }
+        }
         origin.x += half + 18;
         a.x += half + 18;
         b.x += half + 18;
@@ -2498,8 +2517,43 @@ class App {
                 ImGui::SetTooltip("Shared tile %d | %d x %d | %d BPP\n%s%s", p.image, p.w, p.h, bpp,
                                   p.flip_x ? "X flip " : "", p.flip_y ? "Y flip" : "");
         }
+        bool reposition_manual = false;
+        if (t.manual_split_plan && change.source_image == t.optimize_options.source_image &&
+            ImGui::IsMouseHoveringRect(original_a, original_b)) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            ImGui::SetTooltip("Click or drag to move the nearest enabled cut line");
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                auto mouse = ImGui::GetIO().MousePos;
+                float dx = t.manual_split_x
+                               ? std::abs(mouse.x - (original_a.x + t.manual_split_x_at * scale))
+                               : std::numeric_limits<float>::max();
+                float dy = t.manual_split_y
+                               ? std::abs(mouse.y - (original_a.y + t.manual_split_y_at * scale))
+                               : std::numeric_limits<float>::max();
+                if (dx <= dy && t.manual_split_x && it->w >= 8) {
+                    int pixel = (int)std::lround((mouse.x - original_a.x) / scale);
+                    int snapped = std::clamp(((pixel + 2) / 4) * 4, 4, it->w - 4);
+                    reposition_manual = snapped != t.manual_split_x_at;
+                    t.manual_split_x_at = snapped;
+                } else if (t.manual_split_y && it->h >= 2) {
+                    int pixel = (int)std::lround((mouse.y - original_a.y) / scale);
+                    int snapped = std::clamp(pixel, 1, it->h - 1);
+                    reposition_manual = snapped != t.manual_split_y_at;
+                    t.manual_split_y_at = snapped;
+                }
+            }
+        }
         ImGui::Dummy(ImVec2(half * 2 + 18, 220));
         ImGui::EndChild();
+        if (reposition_manual) {
+            ManualSplitOptions split; split.image = change.source_image;
+            if (t.manual_split_x) split.x_cuts.push_back(t.manual_split_x_at);
+            if (t.manual_split_y) split.y_cuts.push_back(t.manual_split_y_at);
+            t.optimize_plan = std::make_unique<OptimizationPlan>(
+                preview_manual_split(t.document, split));
+            t.heat_regions = optimization_regions(*t.optimize_plan);
+            return; // References into the previous plan are invalid after replacement.
+        }
         if (ImGui::CollapsingHeader("Skipped artwork and model details"))
             ImGui::TextWrapped("%s", optimization_report(plan).c_str());
     }
