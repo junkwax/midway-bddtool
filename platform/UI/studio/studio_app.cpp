@@ -26,6 +26,7 @@
 #include "Core/studio_runtime_actors.h"
 #include "Core/studio_library_audit.h"
 #include "Core/studio_recent_files.h"
+#include "Core/studio_palette_cycle.h"
 #include "Core/app_version.h"
 #include <future>
 #include <fstream>
@@ -46,6 +47,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace studio {
@@ -153,6 +155,11 @@ struct Tab {
     PaletteAdjustment palette_adjustment;
     int palette_blend_target = -1;
     float palette_blend_amount = 0.0f;
+    bool palette_cycle = false;
+    int palette_cycle_first = 1, palette_cycle_last = 1;
+    float palette_cycle_hz = 8.f;
+    double palette_cycle_seconds = 0;
+    uint64_t palette_cycle_revision = 1;
     std::shared_ptr<const AssetBank> edit_original;
     State block_draft;
     std::vector<std::vector<uint8_t>> block_undo, block_redo;
@@ -278,14 +285,15 @@ struct TextureCache {
     SDL_Renderer *renderer = nullptr;
     bool palette_alpha = false; // Overlay masks only; authored indexed art stays opaque above zero.
     std::shared_ptr<const AssetBank> bank;
-    std::map<std::pair<int, int>, SDL_Texture *> values;
+    std::map<std::tuple<int, int, uint64_t>, SDL_Texture *> values;
     void clear() {
         for (auto kv : values)
             SDL_DestroyTexture(kv.second);
         values.clear();
         bank.reset();
     }
-    SDL_Texture *get(const State &s, int slot, int palette) {
+    SDL_Texture *get(const State &s, int slot, int palette,
+                     const BddCorePalette *override_palette = nullptr, uint64_t variant = 0) {
         if (bank != s.assets) {
             clear();
             bank = s.assets;
@@ -294,12 +302,12 @@ struct TextureCache {
             return nullptr;
         if (palette < 0 || palette >= (int)bank->data.palettes.size())
             return nullptr;
-        auto key = std::make_pair(slot, palette);
+        auto key = std::make_tuple(slot, palette, variant);
         auto found = values.find(key);
         if (found != values.end())
             return found->second;
         const auto &im = bank->data.images[slot];
-        const auto &pal = bank->data.palettes[palette];
+        const auto &pal = override_palette ? *override_palette : bank->data.palettes[palette];
         std::vector<uint8_t> rgba((size_t)im.w * im.h * 4);
         if (!bdd_core_indexed_to_rgba(im.pix.data(), im.w, im.h, pal.argb, pal.count, rgba.data(),
                                       rgba.size()))
@@ -704,7 +712,21 @@ class App {
     }
     void image(ImDrawList *draw, Tab &t, int slot, int palette, ImVec2 a, ImVec2 b,
                bool flipx = false, bool flipy = false, ImU32 tint = IM_COL32_WHITE) {
-        auto *tex = textures.get(t.document.state(), slot, palette);
+        BddCorePalette animated{}; const BddCorePalette *override_palette = nullptr;
+        uint64_t variant = 0;
+        if (t.palette_cycle && palette == t.edit_palette && palette >= 0 &&
+            palette < (int)t.document.state().assets->data.palettes.size()) {
+            uint64_t step = (uint64_t)std::max(0.0, std::floor(t.palette_cycle_seconds * t.palette_cycle_hz));
+            uint64_t phase = step % (uint64_t)std::max(1, t.palette_cycle_last - t.palette_cycle_first + 1);
+            std::string why;
+            if (palette_cycle_preview(t.document.state().assets->data.palettes[palette],
+                                      t.palette_cycle_first, t.palette_cycle_last, step,
+                                      animated, why)) {
+                override_palette = &animated;
+                variant = (t.palette_cycle_revision << 32) ^ (phase + 1);
+            }
+        }
+        auto *tex = textures.get(t.document.state(), slot, palette, override_palette, variant);
         if (!tex)
             return;
         draw->AddImage((ImTextureID)tex, a, b, ImVec2(flipx ? 1.0f : 0.0f, flipy ? 1.0f : 0.0f),
@@ -1360,6 +1382,7 @@ class App {
         ImGui::SetCursorScreenPos(cursor);
     }
     void canvas(Tab &t) {
+        if (t.palette_cycle) t.palette_cycle_seconds += ImGui::GetIO().DeltaTime;
         ImVec2 origin = ImGui::GetCursorScreenPos(), size = ImGui::GetContentRegionAvail();
         size.x = std::max(1.0f, size.x - 16);
         size.y = std::max(1.0f, size.y - 16);

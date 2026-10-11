@@ -12,6 +12,9 @@ void open_palette_editor(Tab &t, int palette = -1) {
     t.palette_adjustment = {};
     t.palette_blend_target = -1; t.palette_blend_amount = 0;
     t.edit_color = std::min(1, t.palette_draft.count - 1);
+    t.palette_cycle = false; t.palette_cycle_first = 1;
+    t.palette_cycle_last = std::max(1, std::min(31, t.palette_draft.count - 1));
+    t.palette_cycle_hz = 8; t.palette_cycle_seconds = 0; ++t.palette_cycle_revision;
     t.palette_requested = true;
 }
 void open_block_editor(Tab &t) {
@@ -365,6 +368,9 @@ void asset_dialogs(Tab &t) {
                     t.palette_adjust_base = t.palette_draft; t.palette_adjustment = {};
                     t.palette_blend_target = -1; t.palette_blend_amount = 0;
                     t.edit_color = std::min(1, t.palette_draft.count - 1);
+                    t.palette_cycle = false; t.palette_cycle_first = 1;
+                    t.palette_cycle_last = std::max(1, std::min(31, t.palette_draft.count - 1));
+                    t.palette_cycle_seconds = 0; ++t.palette_cycle_revision;
                 }
             }
             ImGui::EndCombo();
@@ -416,6 +422,22 @@ void asset_dialogs(Tab &t) {
         ImGui::TextDisabled("Import changes only this review draft; Apply palette commits it with undo.");
         ImGui::InputText("Name", t.palette_draft.name, sizeof t.palette_draft.name);
         ImGui::SliderInt("Color count", &t.palette_draft.count, 1, 256);
+        if (ImGui::CollapsingHeader("Palette cycle preview")) {
+            ImGui::TextWrapped("Preview a manual water/fire-style index cycle on the stage. This does not infer game timing or enter Save.");
+            ImGui::BeginDisabled(t.palette_draft.count < 3);
+            bool changed = ImGui::Checkbox("Preview on stage", &t.palette_cycle);
+            changed |= ImGui::SliderInt("First opaque index", &t.palette_cycle_first, 1,
+                                        std::max(1, t.palette_draft.count - 2));
+            t.palette_cycle_last = std::max(t.palette_cycle_last, t.palette_cycle_first + 1);
+            changed |= ImGui::SliderInt("Last index", &t.palette_cycle_last,
+                                        t.palette_cycle_first + 1,
+                                        std::max(t.palette_cycle_first + 1, t.palette_draft.count - 1));
+            changed |= ImGui::SliderFloat("Cycle speed", &t.palette_cycle_hz, 1.f, 60.f, "%.1f steps/sec");
+            ImGui::EndDisabled();
+            if (t.palette_draft.count < 3) t.palette_cycle = false;
+            if (changed) { t.palette_cycle_seconds = 0; ++t.palette_cycle_revision; }
+            ImGui::TextDisabled("Preview uses the saved palette. Apply color edits separately before judging their cycle.");
+        }
         if (ImGui::CollapsingHeader("Color adjustments", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::TextWrapped("Preview the whole palette at the game's RGB555 precision. Index 0 remains transparent.");
             bool changed = false;
@@ -507,10 +529,14 @@ void asset_dialogs(Tab &t) {
         ImGui::TextDisabled("Colors use the game's 5-bit RGB precision. Index 0 stays transparent.");
         if (ImGui::Button("Apply palette")) {
             if (t.document.state().assets != t.edit_original) error = "Artwork changed. Reopen the palette editor.";
-            else if (t.document.set_palette(t.edit_palette, t.palette_draft, error)) ImGui::CloseCurrentPopup();
+            else if (t.document.set_palette(t.edit_palette, t.palette_draft, error)) {
+                t.palette_cycle = false; textures.clear(); ImGui::CloseCurrentPopup();
+            }
         }
         palette_apply_point = item_center();
-        ImGui::SameLine(); if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        ImGui::SameLine(); if (ImGui::Button("Close")) {
+            t.palette_cycle = false; textures.clear(); ImGui::CloseCurrentPopup();
+        }
         if (!error.empty()) ImGui::TextWrapped("%s", error.c_str());
         ImGui::EndPopup();
     }

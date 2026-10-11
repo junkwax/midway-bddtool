@@ -120,6 +120,14 @@ and every swatch reports its pixel count on hover. This is analysis only; index
 remapping remains a separate reviewed optimization because other palette variants
 and runtime cycling can depend on index identity.
 
+The collapsed **Palette cycle preview** section rotates a chosen range of opaque
+indices at 1–60 steps per second on every stage placement using the palette being
+edited. It uses the saved RGB555 palette, leaving unapplied color drafts separate.
+The preview stops on Apply or Close and never changes the document, undo history,
+BDD/metadata, exports, ROM estimates or source game files. It is a manual visual
+check for water/fire-style cycling; actual game ranges, timing, palette swaps and
+callbacks still require source and runtime validation.
+
 **Assets → Export artwork sheet** creates a transparent PNG containing either
 the full BDD artwork library or only images used by visible placements. Choose
 the column count and cell padding; images are centered without resampling. A

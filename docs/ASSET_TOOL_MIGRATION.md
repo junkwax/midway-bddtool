@@ -493,7 +493,7 @@ smokes do not pollute the user's list.
 | IMG folders and LOD-driven imports | Migrated as explicit catalogs: IMG folders expose every frame; LOD review resolves dependencies and preselects `--->` references. Rewriting LOAD2 packing/runtime consumers remains deferred |
 | Palette unions, near-color grouping and delete-unused | Exact duplicate consolidation is now in Optimize; keep broader transformations deferred until consumer/reference checks can prove their scope |
 | Palette brightness/contrast, tone matching and blending | Brightness, contrast, saturation and index-preserving blend are now in the palette editor; automatic semantic tone matching remains deferred |
-| Palette export/import and palette-animation tooling | RGB555 palette exchange is migrated; runtime palette animation remains a separate workflow |
+| Palette export/import and palette-animation tooling | RGB555 exchange and bounded live cycle preview are migrated; inferred or authored runtime cycle integration remains separate |
 | Manual crop/split/merge controls | Lossless transparent trim/pad is migrated with flipped-placement compensation; verified Subframes handles splitting; arbitrary destructive crop/merge remains deferred |
 | Sprite-sheet/composite/TGA export | Migrated: resolved composites, metadata-backed artwork sheets, and lossless selected-image RGB555 indexed TGA |
 
