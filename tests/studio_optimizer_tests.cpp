@@ -230,7 +230,7 @@ int main(int argc, char **argv) {
         progress.cancel = true;
         require(find_lossless_savings(doc, options, &progress).cancelled, "Cancellation ignored");
         // Whole images shared through both axis flips, without changing palette indices.
-        BddCoreImage pair[2];
+        BddCoreImage pair[2]{};
         for (int i = 0; i < 2; i++) {
             pair[i].idx = 20 + i;
             pair[i].w = 32;
@@ -283,7 +283,7 @@ int main(int argc, char **argv) {
             return d;
         };
         // A partial edge cannot be found by equally dividing the entire image.
-        BddCoreImage strip;
+        BddCoreImage strip{};
         strip.w = 104;
         strip.h = 25;
         strip.pix.resize((size_t)strip.w * strip.h);
@@ -303,7 +303,7 @@ int main(int argc, char **argv) {
                 "Constant-size repeat with leftover edge was missed");
         check_roundtrip(repeats, repeated, root / "partial-repeat");
 
-        BddCoreImage islands;
+        BddCoreImage islands{};
         islands.w = 92;
         islands.h = 48;
         islands.pix.resize((size_t)islands.w * islands.h);
@@ -490,7 +490,7 @@ int main(int argc, char **argv) {
         // Shared opaque pixels across translated, XY-mirrored images with unique central shading.
         auto reuse_root = root / "residuals";
         fs::create_directories(reuse_root);
-        BddCoreImage bases[2];
+        BddCoreImage bases[2]{};
         bases[0].idx = 40;
         bases[0].w = 128;
         bases[0].h = 64;
@@ -571,7 +571,7 @@ int main(int argc, char **argv) {
         // Unknown 12-pixel period: discover it without supplying a group size.
         auto discovery_root = root / "pattern-discovery";
         fs::create_directories(discovery_root);
-        BddCoreImage periodic;
+        BddCoreImage periodic{};
         periodic.idx = 7;
         periodic.w = 192;
         periodic.h = 24;
@@ -717,7 +717,7 @@ int main(int argc, char **argv) {
                 for (int c : {3, 11, 19, 27}) variants[p].rgb555[c] = (uint16_t)(800 + p);
                 for (int c = 0; c < 64; c++) variants[p].argb[c] = bdd_core_rgb555_to_argb(variants[p].rgb555[c]);
             }
-            BddCoreImage colored[2];
+            BddCoreImage colored[2]{};
             for (int i = 0; i < 2; i++) {
                 colored[i].idx = 7 + i;
                 colored[i].w = 96; colored[i].h = 32;

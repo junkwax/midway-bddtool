@@ -236,7 +236,8 @@ AnimationLibrary inspect_animation_lod(const std::string &path_text) {
             while (!value.empty() && (std::isspace((unsigned char)value.back()) || value.back() == '"' || value.back() == '\'' || value.back() == ',')) value.pop_back();
             return value;
         };
-        auto resolve = [&](const std::string &token) {
+        auto resolve = [&](std::string token) {
+            std::replace(token.begin(), token.end(), '\\', '/');
             auto raw = fs::u8path(token), base = raw.filename();
             std::vector<fs::path> candidates;
             if (raw.is_absolute()) candidates.push_back(raw);

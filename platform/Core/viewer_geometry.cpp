@@ -650,13 +650,13 @@ static int bdd_bgnd_root_has_source(const char *root)
 {
     char path[512];
     if (!root || !root[0]) return 0;
-    path_join(path, sizeof path, root, "src-refactor\\src\\BGND.ASM");
+    path_join(path, sizeof path, root, "src-refactor/src/BGND.ASM");
     if (stage_file_exists(path)) return 1;
-    path_join(path, sizeof path, root, "src\\BGND.ASM");
+    path_join(path, sizeof path, root, "src/BGND.ASM");
     if (stage_file_exists(path)) return 1;
-    path_join(path, sizeof path, root, "src-refactor\\src\\BGND.LST");
+    path_join(path, sizeof path, root, "src-refactor/src/BGND.LST");
     if (stage_file_exists(path)) return 1;
-    path_join(path, sizeof path, root, "src\\BGND.LST");
+    path_join(path, sizeof path, root, "src/BGND.LST");
     return stage_file_exists(path) ? 1 : 0;
 }
 
@@ -731,16 +731,16 @@ static int bdd_read_bgnd_stage_start_camera(const char *label,
     bdd_stage_root_from_loaded_path(root, sizeof root);
     if (!root[0]) return 0;
 
-    if (bdd_try_bgnd_camera_candidate(root, "src-refactor\\src\\BGND.LST",
+    if (bdd_try_bgnd_camera_candidate(root, "src-refactor/src/BGND.LST",
                                       label, 1, camera_x, camera_y))
         return 1;
-    if (bdd_try_bgnd_camera_candidate(root, "src\\BGND.LST",
+    if (bdd_try_bgnd_camera_candidate(root, "src/BGND.LST",
                                       label, 1, camera_x, camera_y))
         return 1;
-    if (bdd_try_bgnd_camera_candidate(root, "src\\BGND.ASM",
+    if (bdd_try_bgnd_camera_candidate(root, "src/BGND.ASM",
                                       label, 0, camera_x, camera_y))
         return 1;
-    if (bdd_try_bgnd_camera_candidate(root, "src-refactor\\src\\BGND.ASM",
+    if (bdd_try_bgnd_camera_candidate(root, "src-refactor/src/BGND.ASM",
                                       label, 0, camera_x, camera_y))
         return 1;
     return 0;
@@ -752,16 +752,16 @@ static int bdd_read_bgnd_stage_ground_y(const char *label, int *ground_y)
     bdd_stage_root_from_loaded_path(root, sizeof root);
     if (!root[0]) return 0;
 
-    if (bdd_try_bgnd_ground_candidate(root, "src-refactor\\src\\BGND.LST",
+    if (bdd_try_bgnd_ground_candidate(root, "src-refactor/src/BGND.LST",
                                       label, 1, ground_y))
         return 1;
-    if (bdd_try_bgnd_ground_candidate(root, "src\\BGND.LST",
+    if (bdd_try_bgnd_ground_candidate(root, "src/BGND.LST",
                                       label, 1, ground_y))
         return 1;
-    if (bdd_try_bgnd_ground_candidate(root, "src\\BGND.ASM",
+    if (bdd_try_bgnd_ground_candidate(root, "src/BGND.ASM",
                                       label, 0, ground_y))
         return 1;
-    if (bdd_try_bgnd_ground_candidate(root, "src-refactor\\src\\BGND.ASM",
+    if (bdd_try_bgnd_ground_candidate(root, "src-refactor/src/BGND.ASM",
                                       label, 0, ground_y))
         return 1;
     return 0;
@@ -775,16 +775,16 @@ static int bdd_read_bgnd_stage_scroll_limits(const char *label,
     bdd_stage_root_from_loaded_path(root, sizeof root);
     if (!root[0]) return 0;
 
-    if (bdd_try_bgnd_scroll_limits_candidate(root, "src-refactor\\src\\BGND.LST",
+    if (bdd_try_bgnd_scroll_limits_candidate(root, "src-refactor/src/BGND.LST",
                                              label, 1, scroll_left, scroll_right))
         return 1;
-    if (bdd_try_bgnd_scroll_limits_candidate(root, "src\\BGND.LST",
+    if (bdd_try_bgnd_scroll_limits_candidate(root, "src/BGND.LST",
                                              label, 1, scroll_left, scroll_right))
         return 1;
-    if (bdd_try_bgnd_scroll_limits_candidate(root, "src\\BGND.ASM",
+    if (bdd_try_bgnd_scroll_limits_candidate(root, "src/BGND.ASM",
                                              label, 0, scroll_left, scroll_right))
         return 1;
-    if (bdd_try_bgnd_scroll_limits_candidate(root, "src-refactor\\src\\BGND.ASM",
+    if (bdd_try_bgnd_scroll_limits_candidate(root, "src-refactor/src/BGND.ASM",
                                              label, 0, scroll_left, scroll_right))
         return 1;
     return 0;
@@ -1371,9 +1371,9 @@ static int bdd_resolve_bgnd_asm_path(const char *root, char *out, size_t outsz)
         return 1;
     }
     if (!root || !root[0]) return 0;
-    path_join(path, sizeof path, root, "src\\BGND.ASM");
+    path_join(path, sizeof path, root, "src/BGND.ASM");
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
-    path_join(path, sizeof path, root, "src-refactor\\src\\BGND.ASM");
+    path_join(path, sizeof path, root, "src-refactor/src/BGND.ASM");
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
     return 0;
 }
@@ -1795,9 +1795,9 @@ static int bdd_resolve_mkbgani_tbl(char *out, size_t outsz)
     if (!out || outsz == 0) return 0;
     bdd_stage_root_from_loaded_path(root, sizeof root);
     if (!root[0]) return 0;
-    path_join(path, sizeof path, root, "src\\MKBGANI.TBL");
+    path_join(path, sizeof path, root, "src/MKBGANI.TBL");
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
-    path_join(path, sizeof path, root, "src-refactor\\src\\MKBGANI.TBL");
+    path_join(path, sizeof path, root, "src-refactor/src/MKBGANI.TBL");
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
     return 0;
 }
@@ -1872,9 +1872,9 @@ static int bdd_resolve_bgndtbl_path(char *out, size_t outsz)
     if (!out || outsz == 0) return 0;
     bdd_stage_root_from_loaded_path(root, sizeof root);
     if (!root[0]) return 0;
-    path_join(path, sizeof path, root, "src\\BGNDTBL.ASM");
+    path_join(path, sizeof path, root, "src/BGNDTBL.ASM");
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
-    path_join(path, sizeof path, root, "src-refactor\\src\\BGNDTBL.ASM");
+    path_join(path, sizeof path, root, "src-refactor/src/BGNDTBL.ASM");
     if (stage_file_exists(path)) { snprintf(out, outsz, "%s", path); return 1; }
     return 0;
 }

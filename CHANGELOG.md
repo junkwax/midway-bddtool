@@ -180,6 +180,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explanation was a "Click to dismiss this tip" tooltip, so they flagged
   something without ever saying what.
 
+## [1.0.31] - 2026-11-20
+
+### Added
+
+- Studio is the default stage editor, with per-document history, camera and floor
+  previews, editable runtime actor sidecars, and a reviewed game export workflow.
+- Board-based MK2 stage checks and a live camera budget overlay for T-unit and
+  Wolf. The overlay highlights the five most expensive blocks in frame.
+- Verified lossless artwork subdivision, manual cut grids, repeat and mirror
+  reuse, and before/after stage comparisons.
+- A resizable asset tray with multi-select sprite sheet export, alongside
+  full-stage composite PNG, indexed TGA, and reviewed artwork import.
+- Recent stages and separate last-folder history for file and folder pickers.
+
+### Fixed
+
+- A plain click selects only the clicked placement before deletion. The layer
+  tree can locate artwork outside module bounds and move artwork between layers.
+- Layer stack and artwork draw order can be edited in place. Saved tabs use
+  their filenames.
+- Release archives include the executables and scripts needed for library audits
+  and reviewed ROM verification.
+
 ## [1.0.30] - 2026-08-11
 
 ### Fixed

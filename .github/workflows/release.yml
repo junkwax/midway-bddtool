@@ -71,12 +71,13 @@ jobs:
           cp build/bddview "${root}/bin/"
           cp build/bddtool "${root}/bin/"
           cp build/studio_savings_audit "${root}/bin/"
-          cp -R build/tools "${root}/bin/"
+          cp build/bdd_rom_verify "${root}/bin/"
+          cp -R build/tools build/verified_build "${root}/bin/"
           cp README.md CHANGELOG.md "${root}/"
           if [ -d build/assets ]; then
             cp -R build/assets "${root}/bin/"
           fi
-          chmod +x "${root}/bin/bddview" "${root}/bin/bddtool" "${root}/bin/studio_savings_audit"
+          chmod +x "${root}/bin/bddview" "${root}/bin/bddtool" "${root}/bin/studio_savings_audit" "${root}/bin/bdd_rom_verify"
 
           if [ "${RUNNER_OS}" = "macOS" ]; then
             mkdir -p "${root}/Frameworks"
@@ -171,12 +172,16 @@ jobs:
           $package = "midway-bddtool-$env:GITHUB_REF_NAME-$platform"
           $root = Join-Path 'dist' $package
           $bin = Join-Path $root 'bin'
+          $built = Join-Path $env:RUNNER_TEMP 'bddview-build\build\Release'
           New-Item -ItemType Directory -Force -Path $bin | Out-Null
-          Copy-Item build-win\Release\bddview.exe, build-win\Release\bddtool.exe, build-win\Release\studio_savings_audit.exe, build-win\Release\SDL2.dll -Destination $bin -Force
-          Copy-Item build-win\Release\tools -Destination $bin -Recurse -Force
+          $executables = 'bddview.exe', 'bddtool.exe', 'studio_savings_audit.exe', 'bdd_rom_verify.exe', 'SDL2.dll'
+          foreach ($file in $executables) {
+            Copy-Item (Join-Path $built $file) -Destination $bin -Force
+          }
+          Copy-Item (Join-Path $built 'tools'), (Join-Path $built 'verified_build') -Destination $bin -Recurse -Force
           Copy-Item README.md, CHANGELOG.md -Destination $root -Force
-          if (Test-Path build-win\Release\assets) {
-            Copy-Item build-win\Release\assets -Destination $bin -Recurse -Force
+          if (Test-Path (Join-Path $built 'assets')) {
+            Copy-Item (Join-Path $built 'assets') -Destination $bin -Recurse -Force
           }
           Compress-Archive -Path $root -DestinationPath "dist\$package.zip" -Force
 
