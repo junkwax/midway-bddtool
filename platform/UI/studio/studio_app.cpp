@@ -171,6 +171,7 @@ struct Tab {
     State block_draft;
     std::vector<std::vector<uint8_t>> block_undo, block_redo;
     bool fit = true, source = false, camera_preview = false, move_layer = false, hand_tool = false;
+    bool show_budget = false;
     Point camera;
     int camera_ground = 230;
     double next_recovery = 0;
@@ -426,6 +427,9 @@ class App {
     Point export_check_point, export_review_point;
     float export_section_y = 0;
     Point check_locate_point, check_artwork_point, check_report_point, camera_scan_point, camera_jump_point;
+    Point smoke_budget_toggle;
+    double smoke_budget_ms = 0;
+    size_t smoke_budget_outlines = 0;
     std::map<int, Point> smoke_layer_rows;
     std::map<ObjectId, Point> smoke_placement_rows, smoke_outside_rows;
     Point floor_open_point, floor_asset_point, floor_add_point, floor_close_point;
@@ -1503,6 +1507,60 @@ class App {
         }
         ImGui::SetCursorScreenPos(cursor);
     }
+    void draw_camera_budget(Tab &t, Point camera, ImVec2 origin, Point mouse, bool hover) {
+        const auto budget = estimate_camera_budget(t.document.state(), camera, t.camera_check_options.all_raw);
+        if (!smoke_dir.empty()) {
+            smoke_budget_ms = budget.ms[0];
+            smoke_budget_outlines = budget.largest.size();
+        }
+        auto *draw = ImGui::GetWindowDrawList();
+        const auto screen = [&](Point p) { return vec(t.view.to_screen(p, point(origin))); };
+        const CameraBudget::Contributor *under_mouse = nullptr;
+        for (auto it = budget.largest.rbegin(); it != budget.largest.rend(); ++it) {
+            const auto &r = it->rect;
+            const Point lo{std::max(0.0, r.x), std::max(0.0, r.y)};
+            const Point hi{std::min(400.0, r.x + r.w), std::min(254.0, r.y + r.h)};
+            const ImVec2 a = screen(lo), b = screen(hi);
+            const ImU32 color = it->editor_hidden ? IM_COL32(242, 187, 91, 135) : IM_COL32(242, 187, 91, 230);
+            draw->AddRect(a, b, color, 0, 0, 2.0f);
+            if (hover && Rect{lo.x, lo.y, hi.x - lo.x, hi.y - lo.y}.contains(mouse))
+                under_mouse = &*it;
+        }
+
+        const bool approximate = budget.unresolved || !t.document.state().runtime_profile.empty();
+        const char *heading = approximate ? "Stage art estimate*" : "Stage art estimate";
+        char lines[2][48];
+        float width = ImGui::CalcTextSize(heading).x;
+        for (int board = 0; board < 2; ++board) {
+            std::snprintf(lines[board], sizeof lines[board], "%s %.2f / %.1f ms",
+                          kStageBudgetBoards[board].name, budget.ms[board], kStageArtWarnMs);
+            width = std::max(width, ImGui::CalcTextSize(lines[board]).x);
+        }
+        const float line = ImGui::GetTextLineHeight() + 3;
+        const ImVec2 panel(origin.x + 8, origin.y + 8), end(panel.x + width + 16, panel.y + line * 3 + 12);
+        draw->AddRectFilled(panel, end, IM_COL32(17, 20, 25, 235), 4);
+        draw->AddText({panel.x + 8, panel.y + 6}, IM_COL32(208, 218, 227, 255), heading);
+        for (int board = 0; board < 2; ++board) {
+            const double ms = budget.ms[board];
+            const ImU32 color = ms > kStageArtOverMs ? IM_COL32(250, 122, 107, 255)
+                              : ms > kStageArtWarnMs ? IM_COL32(242, 187, 91, 255)
+                              : IM_COL32(135, 220, 167, 255);
+            draw->AddText({panel.x + 8, panel.y + 6 + (board + 1) * line}, color, lines[board]);
+        }
+        if (hover && Rect{panel.x, panel.y, end.x - panel.x, end.y - panel.y}.contains(point(ImGui::GetIO().MousePos))) {
+            ImGui::SetTooltip("%d static blocks in the game frame. Editor-hidden artwork counts.\n"
+                              "Target %.1f ms. Late frames from about %.1f ms.\n"
+                              "%s. Runtime actors and animation require a packed-build check.%s",
+                              budget.blocks, kStageArtWarnMs, kStageArtOverMs,
+                              t.camera_check_options.all_raw ? "All blocks assumed raw" : "Conservative zero-compressed estimate",
+                              approximate ? "\n* Some runtime mapping is unverified." : "");
+        } else if (under_mouse) {
+            ImGui::SetTooltip("Image %d, placement %llu%s\nT-unit %.2f ms  |  Wolf %.2f ms",
+                              under_mouse->image, (unsigned long long)under_mouse->placement,
+                              under_mouse->editor_hidden ? " (editor-hidden)" : "",
+                              under_mouse->ms[0], under_mouse->ms[1]);
+        }
+    }
     void canvas(Tab &t) {
         if (t.palette_cycle) t.palette_cycle_seconds += ImGui::GetIO().DeltaTime;
         ImVec2 origin = ImGui::GetCursorScreenPos(), size = ImGui::GetContentRegionAvail();
@@ -1879,6 +1937,8 @@ class App {
         if (items.empty())
             draw->AddText(ImVec2(origin.x + 32, origin.y + 42), IM_COL32(143, 159, 175, 255),
                           "Drag artwork from Assets into the selected layer.");
+        if (t.show_budget && t.camera_preview && !t.source && t.document.state().has_bdb)
+            draw_camera_budget(t, cam, origin, world, hovered && !dragging && !panning && !marquee);
         draw->PopClipRect();
     }
     void assets(Tab &t, bool full) {
@@ -4429,6 +4489,17 @@ class App {
             t.fit = true;
         }
         ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(t.source || !t.document.state().has_bdb);
+        if (ImGui::Checkbox("Budget overlay", &t.show_budget) && t.show_budget && !t.camera_preview) {
+            cancel_gesture();
+            t.camera_preview = true;
+            t.fit = true;
+        }
+        if (!smoke_dir.empty()) smoke_budget_toggle = item_center();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Show the current camera's T-unit and Wolf estimates and outline its five highest-cost static blocks.");
+        ImGui::EndDisabled();
         if (ImGui::Button("Floor...")) open_floor(t);
         floor_open_point = item_center();
         ImGui::SameLine();
@@ -4959,6 +5030,7 @@ class App {
 #include "studio_export_checks_smoke.inc"
 #include "studio_stage_editing_smoke.inc"
 #include "studio_asset_tray_smoke.inc"
+#include "studio_budget_overlay_smoke.inc"
 
 struct InteractionSmoke {
     ObjectId id = 0;
@@ -5321,6 +5393,8 @@ int run(int argc, char **argv) {
     bool test_stage_editing = smoke && argc >= 5 && std::string(argv[4]) == "--stage-editing";
     AssetTraySmoke asset_tray_smoke;
     bool test_asset_tray = smoke && argc >= 5 && std::string(argv[4]) == "--asset-tray";
+    BudgetOverlaySmoke budget_overlay_smoke;
+    bool test_budget_overlay = smoke && argc >= 5 && std::string(argv[4]) == "--budget-overlay";
     bool test_checks = smoke && argc >= 5 && std::string(argv[4]) == "--checks";
     bool test_batch_import = smoke && argc >= 5 && std::string(argv[4]) == "--batch-import";
     bool test_asset_tools = smoke && argc >= 5 && std::string(argv[4]) == "--asset-tools";
@@ -5500,6 +5574,7 @@ int run(int argc, char **argv) {
         if (test_camera_checks) camera_checks_smoke.input(app, frames);
         if (test_stage_editing) stage_editing_smoke.input(app, frames);
         if (test_asset_tray) asset_tray_smoke.input(app, frames);
+        if (test_budget_overlay) budget_overlay_smoke.input(app, frames);
         if (test_checks) checks_smoke.input(app, frames);
         if (test_asset_tools) asset_smoke.input(app, frames);
         if (test_batch_import) batch_smoke.input(app, frames);
@@ -5524,6 +5599,7 @@ int run(int argc, char **argv) {
         if (test_camera_checks && !camera_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_stage_editing && !stage_editing_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_asset_tray && !asset_tray_smoke.check(app, frames)) { rc = 1; app.running = false; }
+        if (test_budget_overlay && !budget_overlay_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_checks && !checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_batch_import && !batch_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_asset_tools && !asset_smoke.check(app, frames)) { rc = 1; app.running = false; }
@@ -5822,7 +5898,7 @@ int run(int argc, char **argv) {
                     } else t.receipt_before = std::make_unique<RomReceipt>(*t.receipt_after);
                 }
             }
-            if (test_stage_editing || test_asset_tray) {
+            if (test_stage_editing || test_asset_tray || test_budget_overlay) {
                 if (frames >= 30) app.running = false;
                 continue;
             }

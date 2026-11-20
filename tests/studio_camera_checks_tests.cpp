@@ -48,6 +48,20 @@ int main() {
             auto clipped = fixture(100, 100); place(clipped, -50);
             r = check_camera_range(clipped, b);
             require(std::abs(r.budget[0].ms - .612) < 1e-9, "Partly visible block was undercounted");
+            place(clipped, 400);
+            clipped.objects.front().hidden = true;
+            clipped.planes.front().scroll = .5;
+            auto live = estimate_camera_budget(clipped, {}, false);
+            require(live.blocks == 1 && live.largest.size() == 1 &&
+                    live.largest.front().placement == clipped.objects.front().id &&
+                    live.largest.front().editor_hidden && live.largest.front().rect.x == -50 &&
+                    live.ms[0] == r.budget[0].ms && live.ms[1] == r.budget[1].ms,
+                    "Live totals or highlight do not match the range scan");
+            live = estimate_camera_budget(clipped, {1.5, 2}, true);
+            require(live.blocks == 2 && live.largest.front().rect.x == -50.75 &&
+                    live.largest.front().rect.y == -2 &&
+                    std::abs(live.ms[0] - 1.044) < 1e-9,
+                    "Live estimate missed a fractional camera edge, jump, or raw packing");
             auto small = fixture(4, 4);
             for (int i = 0; i < 501; ++i) place(small, 0);
             r = check_camera_range(small, b);

@@ -30,6 +30,21 @@ struct StageBudgetPeak {
     struct Block { int image = -1, width = 0, height = 0; double ms = 0; };
     std::vector<Block> largest;   // dearest visible blocks at that camera
 };
+struct CameraBudget {
+    struct Contributor {
+        ObjectId placement = 0;
+        int image = -1;
+        Rect rect;
+        double ms[2] = {};
+        bool editor_hidden = false;
+    };
+    double ms[2] = {};
+    int blocks = 0, unresolved = 0;
+    std::vector<Contributor> largest;
+};
+// Estimates static stage art in the 400x254 game frame at one camera position.
+// Includes editor-hidden artwork, like the camera range scan.
+CameraBudget estimate_camera_budget(const State &state, Point camera, bool all_raw);
 struct CameraCheckOptions {
     int min_x = 0, max_x = 0, min_y = 0, max_y = 0;
     int step = 16, reserve = BDD_CORE_MK2_DISPLAY_OBJECT_RUNTIME_RESERVE;

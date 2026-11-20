@@ -8,6 +8,94 @@
 #include <tuple>
 
 namespace studio {
+namespace {
+struct BudgetBlock {
+    Rect rect;
+    double scroll;
+    int palette, image;
+    ObjectId placement;
+    bool editor_hidden;
+};
+
+std::vector<BudgetBlock> camera_blocks(const State &state, int &unresolved) {
+    std::map<int, const BddCoreImage *> images;
+    std::set<int> duplicate_ids;
+    for (const auto &im : state.assets->data.images)
+        if (!images.emplace(im.idx, &im).second) duplicate_ids.insert(im.idx);
+    std::vector<BudgetBlock> blocks;
+    blocks.reserve(state.objects.size());
+    for (const auto &p : state.objects) {
+        auto it = images.find(p.object.ii);
+        if (it == images.end() || duplicate_ids.count(p.object.ii) || p.plane < 0 || p.plane >= (int)state.planes.size()) {
+            ++unresolved; continue;
+        }
+        const auto &im = *it->second;
+        const auto &plane = state.planes[p.plane];
+        if (im.w <= 0 || im.h <= 0 || im.w > 4096 || im.h > 4096 || !std::isfinite(plane.scroll)) {
+            ++unresolved; continue;
+        }
+        bool palette_valid = p.object.fl >= 0 && p.object.fl < (int)state.assets->data.palettes.size();
+        if (!plane.bound || !palette_valid) ++unresolved;
+        blocks.push_back({{double(p.object.depth) + p.runtime_dx + double(plane.x) - plane.source.x1,
+                           double(p.object.sy) + double(plane.y) - plane.source.y1,
+                           double(im.w), double(im.h)}, plane.scroll, palette_valid ? p.object.fl : -1,
+                          im.idx, p.id, p.hidden || plane.hidden});
+    }
+    return blocks;
+}
+
+Rect project_block(const BudgetBlock &block, Point camera) {
+    auto rect = block.rect;
+    rect.x -= camera.x * block.scroll;
+    rect.y -= camera.y;
+    return rect;
+}
+
+bool touches_frame(Rect rect) {
+    return rect.x < 400 && rect.x + rect.w > 0 && rect.y < 254 && rect.y + rect.h > 0;
+}
+
+double block_cost_us(const BudgetBlock &block, int board, bool all_raw) {
+    // MKDISP culls off-screen blocks and queues the full programmed size of those touching the frame.
+    return stage_block_cost_us(kStageBudgetBoards[board], block.rect.w, block.rect.h, all_raw);
+}
+
+void rank_largest(std::vector<const BudgetBlock *> &blocks) {
+    const size_t count = std::min<size_t>(5, blocks.size());
+    std::partial_sort(blocks.begin(), blocks.begin() + count, blocks.end(),
+        [](const BudgetBlock *a, const BudgetBlock *b) {
+            const double a_area = a->rect.w * a->rect.h, b_area = b->rect.w * b->rect.h;
+            return a_area != b_area ? a_area > b_area : a->placement < b->placement;
+        });
+}
+} // namespace
+
+CameraBudget estimate_camera_budget(const State &state, Point camera, bool all_raw) {
+    CameraBudget result;
+    if (!state.assets || !state.has_bdb || !std::isfinite(camera.x) || !std::isfinite(camera.y))
+        return result;
+    const auto blocks = camera_blocks(state, result.unresolved);
+    std::vector<const BudgetBlock *> visible;
+    double cost_us[2] = {};
+    for (const auto &block : blocks) {
+        if (!touches_frame(project_block(block, camera))) continue;
+        visible.push_back(&block);
+        for (int board = 0; board < 2; ++board)
+            cost_us[board] += block_cost_us(block, board, all_raw);
+    }
+    result.blocks = (int)visible.size();
+    for (int board = 0; board < 2; ++board)
+        result.ms[board] = cost_us[board] / 1000;
+    rank_largest(visible);
+    for (size_t i = 0; i < 5 && i < visible.size(); ++i) {
+        const auto &block = *visible[i];
+        result.largest.push_back({block.placement, block.image, project_block(block, camera),
+            {block_cost_us(block, 0, all_raw) / 1000, block_cost_us(block, 1, all_raw) / 1000},
+            block.editor_hidden});
+    }
+    return result;
+}
+
 bool CameraCheckOptions::operator==(const CameraCheckOptions &o) const {
     return std::tie(min_x, max_x, min_y, max_y, step, reserve, all_raw) ==
            std::tie(o.min_x, o.max_x, o.min_y, o.max_y, o.step, o.reserve, o.all_raw);
@@ -37,49 +125,26 @@ CameraCheck check_camera_range(const State &state, const CameraCheckOptions &o, 
         return result;
     }
     if (progress) { progress->done = 0; progress->total = (int)(xs.size() * ys.size()); }
-    struct Block { double x, y, w, h, scroll; int palette, image; };
-    std::vector<Block> blocks;
-    std::map<int, const BddCoreImage *> images;
-    std::set<int> duplicate_ids;
-    for (const auto &im : state.assets->data.images)
-        if (!images.emplace(im.idx, &im).second) duplicate_ids.insert(im.idx);
-    for (const auto &p : state.objects) {
-        auto it = images.find(p.object.ii);
-        if (it == images.end() || duplicate_ids.count(p.object.ii) || p.plane < 0 || p.plane >= (int)state.planes.size()) {
-            ++result.unresolved; continue;
-        }
-        const auto &im = *it->second;
-        const auto &plane = state.planes[p.plane];
-        if (im.w <= 0 || im.h <= 0 || im.w > 4096 || im.h > 4096 || !std::isfinite(plane.scroll)) {
-            ++result.unresolved; continue;
-        }
-        bool palette_valid = p.object.fl >= 0 && p.object.fl < (int)state.assets->data.palettes.size();
-        if (!plane.bound || !palette_valid) ++result.unresolved;
-        blocks.push_back({double(p.object.depth) + p.runtime_dx + double(plane.x) - plane.source.x1,
-                          double(p.object.sy) + double(plane.y) - plane.source.y1,
-                          double(im.w), double(im.h), plane.scroll, palette_valid ? p.object.fl : -1, im.idx});
-    }
+    const auto blocks = camera_blocks(state, result.unresolved);
     result.object_camera = result.palette_camera = result.gap_camera = {double(o.min_x), double(o.min_y)};
     for (int cy : ys) for (int cx : xs) {
         if (progress && progress->cancel) { result.cancelled = true; return result; }
         int objects = 0;
         std::set<int> palettes;
         std::vector<std::pair<double, double>> spans;
-        std::vector<const Block *> visible;
+        std::vector<const BudgetBlock *> visible;
         double cost_us[2] = {};
+        Point camera{double(cx), double(cy)};
         for (const auto &b : blocks) {
-            double x = b.x - cx * b.scroll, y = b.y - cy;
-            if (x >= 400 || x + b.w <= 0 || y >= 254 || y + b.h <= 0) continue;
+            const auto rect = project_block(b, camera);
+            if (!touches_frame(rect)) continue;
             ++objects;
             if (b.palette >= 0) palettes.insert(b.palette);
-            spans.emplace_back(std::max(0.0, x), std::min(400.0, x + b.w));
-            // MKDISP culls off-screen blocks and queues the original size for
-            // blocks touching the viewport, including ones cut by its edge.
+            spans.emplace_back(std::max(0.0, rect.x), std::min(400.0, rect.x + rect.w));
             visible.push_back(&b);
             for (int board = 0; board < 2; ++board)
-                cost_us[board] += stage_block_cost_us(kStageBudgetBoards[board], b.w, b.h, o.all_raw);
+                cost_us[board] += block_cost_us(b, board, o.all_raw);
         }
-        Point camera{double(cx), double(cy)};
         bool ranked = false;
         for (int board = 0; board < 2; ++board) {
             auto &peak = result.budget[board];
@@ -90,14 +155,12 @@ CameraCheck check_camera_range(const State &state, const CameraCheckOptions &o, 
             peak.largest.clear();
             const size_t count = std::min<size_t>(5, visible.size());
             if (!ranked) {
-                std::partial_sort(visible.begin(), visible.begin() + count, visible.end(),
-                    [](const Block *a, const Block *b) { return a->w * a->h > b->w * b->h; });
+                rank_largest(visible);
                 ranked = true;
             }
             for (size_t i = 0; i < count; ++i) {
                 const auto &b = *visible[i];
-                peak.largest.push_back({b.image, int(b.w), int(b.h),
-                                        stage_block_cost_us(kStageBudgetBoards[board], b.w, b.h, o.all_raw) / 1000});
+                peak.largest.push_back({b.image, int(b.rect.w), int(b.rect.h), block_cost_us(b, board, o.all_raw) / 1000});
             }
         }
         if (objects > result.peak_objects) { result.peak_objects = objects; result.object_camera = camera; }
