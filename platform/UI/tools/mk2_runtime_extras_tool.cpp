@@ -466,7 +466,7 @@ static void draw_tower_runtime_guide_editor(void)
         changed |= ImGui::InputText("LOD / Source", e->source, sizeof e->source);
         if (ImGui::Button("Browse Selected Source...")) {
             char path[512] = "";
-            if (file_dialog_open("Select Runtime Source",
+            if (file_dialog_open("Select Source for Existing Runtime Extra",
                 "Runtime Sources\0*.LOD;*.lod;*.IMG;*.img\0All Files\0*.*\0",
                 path, sizeof path))
             {

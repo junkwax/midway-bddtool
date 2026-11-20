@@ -1,6 +1,8 @@
 #ifndef NATIVE_FILE_DIALOGS_H
 #define NATIVE_FILE_DIALOGS_H
 
+/* Titles identify browse actions for last-folder history. Share a title when
+   multiple buttons invoke the same action. */
 bool file_dialog_open(const char *title, const char *filter, char *out, int outsz);
 bool file_dialog_save(const char *title, const char *filter, char *out, int outsz);
 /* Same as file_dialog_save, but appends default_ext (no leading dot, e.g. "BDB")

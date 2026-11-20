@@ -153,7 +153,7 @@ void set_project_save_paths_from_any(const char *path)
 
 /* Name the Save dialog opens with: the current file when the project has one,
    otherwise the placeholder name a new project was created with, or the world
-   name. Anchored paths also make the dialog open in the project's folder. */
+   name. An anchored path supplies the initial folder when there is no history. */
 static void suggested_save_name(char *out, size_t outsz)
 {
     const char *current = g_bdb_path[0] ? g_bdb_path : g_bdd_path;

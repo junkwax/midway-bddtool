@@ -25,6 +25,34 @@ bool finding(const CameraCheck &c, const char *text) {
 }
 int main() {
     try {
+        {   // Stage art budget: per-block cost, minimum cost, edge culling and findings.
+            require(stage_block_cost_us(kStageBudgetBoards[0], 16, 16) == 62 &&
+                    stage_block_cost_us(kStageBudgetBoards[1], 16, 16) == 40, "Small-block floor wrong");
+            require(std::abs(stage_block_cost_us(kStageBudgetBoards[0], 100, 100) - 612) < 1e-9, "Rectangle cost wrong");
+            CameraCheckOptions b; b.reserve = 0;
+            auto big = fixture(100, 100);
+            for (int i = 0; i < 16; ++i) place(big, 0);
+            auto r = check_camera_range(big, b);
+            require(std::abs(r.budget[0].ms - 9.792) < 1e-9 && !finding(r, "stage art"), "Stage under budget misreported");
+            b.all_raw = true;
+            require(!camera_check_current(r, big, b), "Packing assumption change left the estimate current");
+            r = check_camera_range(big, b);
+            require(std::abs(r.budget[0].ms - 8.352) < 1e-9, "Raw stage cost wrong");
+            b.all_raw = false;
+            for (int i = 0; i < 2; ++i) place(big, 0);
+            r = check_camera_range(big, b);
+            require(finding(r, "T-unit stage art near budget") && r.budget[0].largest.size() == 5, "Near-budget finding missing");
+            for (int i = 0; i < 2; ++i) place(big, 0);
+            r = check_camera_range(big, b);
+            require(finding(r, "T-unit stage art over budget"), "Over-budget finding missing");
+            auto clipped = fixture(100, 100); place(clipped, -50);
+            r = check_camera_range(clipped, b);
+            require(std::abs(r.budget[0].ms - .612) < 1e-9, "Partly visible block was undercounted");
+            auto small = fixture(4, 4);
+            for (int i = 0; i < 501; ++i) place(small, 0);
+            r = check_camera_range(small, b);
+            require(finding(r, "DMA queue demand"), "Stage alone exceeds queue capacity without a finding");
+        }
         CameraCheckOptions o; o.reserve = 0;
         auto s = fixture(); place(s, 0); place(s, 200);
         auto original = s.assets;

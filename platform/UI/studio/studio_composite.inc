@@ -67,32 +67,54 @@ void composite_dialog(Tab &t) {
     ImGui::EndPopup();
 }
 
+void request_sprite_sheet(Tab &t) {
+    t.sheet_image_ids.clear();
+    for (const auto &im : t.document.state().assets->data.images)
+        if (t.selected_assets.count(im.idx))
+            t.sheet_image_ids.push_back(im.idx);
+    t.sheet_scope = t.sheet_image_ids.empty() ? 2 : 0;
+    t.sheet_requested = true;
+}
+
 void sprite_sheet_dialog(Tab &t) {
     if (t.sheet_requested) { cancel_gesture(); error.clear(); ImGui::OpenPopup("Export artwork sheet"); t.sheet_requested = false; }
     asset_modal_size(550, 380);
     if (!ImGui::BeginPopupModal("Export artwork sheet", nullptr, ImGuiWindowFlags_NoResize)) return;
-    ImGui::TextUnformatted("Arrange artwork into a transparent, evenly spaced PNG sheet.");
-    ImGui::TextWrapped("The companion JSON identifies every image, palette, pixel rectangle and cell rectangle.");
-    ImGui::Spacing();
-    ImGui::Checkbox("Only artwork used by visible placements", &t.sheet_placed_only);
+    ImGui::BeginDisabled(t.sheet_image_ids.empty());
+    const auto selection = "Selected assets (" + std::to_string(t.sheet_image_ids.size()) + ")";
+    ImGui::RadioButton(selection.c_str(), &t.sheet_scope, 0);
+    ImGui::EndDisabled();
+    ImGui::RadioButton("Artwork used by visible placements", &t.sheet_scope, 1);
+    ImGui::RadioButton("Entire asset library", &t.sheet_scope, 2);
     ImGui::SetNextItemWidth(180); ImGui::SliderInt("Columns", &t.sheet_columns, 1, 32);
     ImGui::SetNextItemWidth(180); ImGui::SliderInt("Cell padding", &t.sheet_padding, 0, 16, "%d px");
-    ImGui::Checkbox("Write companion cell JSON", &t.sheet_metadata);
-    ImGui::TextDisabled("Artwork is centered in cells using its effective placement or default palette.");
+    bool &metadata_enabled = t.sheet_scope == 0 ? t.sheet_selection_metadata : t.sheet_metadata;
+    ImGui::Checkbox("Write companion cell JSON", &metadata_enabled);
+    ImGui::TextDisabled("PNG cells have a transparent background.");
     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-    if (ImGui::Button("Export...", {120, 0})) {
-        SpriteSheetRequest request; request.placed_only = t.sheet_placed_only;
+    bool export_clicked = ImGui::Button("Export...", {120, 0});
+    if (!smoke_dir.empty()) smoke_sheet_export = item_center();
+    if (export_clicked) {
+        SpriteSheetRequest request; request.placed_only = t.sheet_scope == 1;
+        if (t.sheet_scope == 0) request.image_ids = t.sheet_image_ids;
         request.columns = t.sheet_columns; request.padding = t.sheet_padding;
         auto result = render_sprite_sheet(t.document.state(), request);
         if (!result.ready) error = result.error;
         else {
-            std::string stem = t.document.state().name.empty() ? "artwork_sheet.png" : t.document.state().name + "_artwork_sheet.png";
+            std::string stem = document_title(t.document) + "_artwork_sheet.png";
             for (char &c : stem) if (!std::isalnum((unsigned char)c) && c != '-' && c != '_' && c != '.') c = '_';
             char path[1024] = {}; std::snprintf(path, sizeof path, "%s", stem.c_str());
-            if (file_dialog_save_ext("Export artwork sheet", "PNG image\0*.png\0", "png", path, sizeof path)) {
+            bool destination_chosen = false;
+            if (!smoke_dir.empty()) {
+                const auto output = (fs::u8path(smoke_dir) / stem).u8string();
+                std::snprintf(path, sizeof path, "%s", output.c_str());
+                destination_chosen = true;
+            } else
+                destination_chosen = file_dialog_save_ext("Export artwork sheet", "PNG image\0*.png\0", "png", path, sizeof path);
+            if (destination_chosen) {
                 bool png_ok = stbi_write_png(path, result.width, result.height, 4, result.rgba.data(), result.width * 4) != 0;
                 bool json_ok = true;
-                if (png_ok && t.sheet_metadata) {
+                if (png_ok && metadata_enabled) {
                     fs::path metadata = fs::u8path(path); metadata.replace_extension(".json");
                     std::ofstream output(metadata, std::ios::binary | std::ios::trunc);
                     output << result.metadata; output.close(); json_ok = bool(output);

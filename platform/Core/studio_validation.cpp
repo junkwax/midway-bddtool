@@ -46,10 +46,30 @@ std::vector<Issue> Document::validate() const {
         else
             used_palettes.insert(p.object.fl);
     }
-    for (size_t i = 0; i < data.palettes.size(); ++i)
+    std::map<std::string, int> palette_names;
+    for (size_t i = 0; i < data.palettes.size(); ++i) {
+        const auto &palette = data.palettes[i];
+        std::string name(palette.name, strnlen(palette.name, sizeof palette.name));
+        for (char &c : name) if (c >= 'a' && c <= 'z') c -= 32;
+        if (!name.empty() && !palette_names.emplace(name, (int)i).second)
+            add(IssueGroup::Load2, true, "Duplicate stage palette name: " + name,
+                "Rename the duplicate before game export. Keep the BDD and stage palette list in the same order.",
+                0, -1, (int)i);
+    }
+    const auto oversized_stage_palette = [&](int count) {
+        return count > BDD_CORE_MK2_STAGE_FADE_COLORS && count <= 256;
+    };
+    const auto large_palettes = std::count_if(used_palettes.begin(), used_palettes.end(),
+        [&](int palette) { return oversized_stage_palette(data.palettes[palette].count); });
+    for (size_t i = 0; i < data.palettes.size(); ++i) {
         if (data.palettes[i].count < 1 || data.palettes[i].count > 256)
             add(IssueGroup::Artwork, true, "Palette " + std::to_string(i) + ": invalid color count",
                 "Restore a palette with 1 to 256 colors before editing or exporting.", 0, -1, (int)i);
+        else if (large_palettes > 1 && used_palettes.count((int)i) && oversized_stage_palette(data.palettes[i].count))
+            add(IssueGroup::Artwork, false, "Palette " + std::to_string(i) + ": exceeds the 94-color stage fade buffer",
+                "Only one larger palette can fade at a time. Check which of these palettes are visible together during the fatality dim.",
+                0, -1, (int)i);
+    }
 
     for (size_t i = 0; i < data.images.size(); ++i) {
         const auto &im = data.images[i];

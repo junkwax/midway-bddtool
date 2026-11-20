@@ -4,9 +4,10 @@ bool apply_layout_review(Tab &t) {
     t.camera_ground = t.document.state().ground;
     t.camera_preview = true; t.source = false; t.solo = -1; t.fit = true;
     t.selected.clear(); t.focus_object = 0;
-    t.camera_check_options.min_x = t.document.state().start_x;
+    t.camera_check_options.min_x = std::min(0, t.document.state().start_x);
     t.camera_check_options.max_x = std::max(t.document.state().start_x, t.document.state().world_w - 400);
-    t.camera_check_options.min_y = t.camera_check_options.max_y = t.document.state().start_y;
+    t.camera_check_options.max_y = t.document.state().start_y;
+    t.camera_check_options.min_y = t.camera_check_options.max_y - BDD_CORE_MK2_STAGE_JUMP_HEADROOM;
     auto folder = fs::u8path(t.document.path()).parent_path().u8string();
     if (t.layout_remember && !folder.empty()) layout_sources[folder] = t.mk3_layout.source;
     reload_floor(t); t.show_floor = true;

@@ -36,6 +36,13 @@ void validation_tests() {
     for (auto &p : state.objects) if (p.object.ii == im.idx) { p.object.fl = 1; p.hidden = true; }
     im.pix[0] = 3;
     require(count("exceeds palette 1") == 1, "Hidden/repeated palette variant escaped validation or duplicated findings");
+    state.objects.front().object.fl = 0;
+    state.objects.back().object.fl = 1;
+    bank->data.palettes[0].count = 94;
+    bank->data.palettes[1].count = 95;
+    require(count("stage fade buffer") == 0, "One oversized palette should fit the shared fade buffer");
+    bank->data.palettes[0].count = 95;
+    require(count("stage fade buffer") == 2, "Multiple oversized palettes escaped fade validation");
     auto orphan = state.objects.front(); orphan.id = 9999; orphan.object.ii = 60000;
     orphan.object.fl = -2; orphan.plane = (int)state.planes.size(); state.objects.push_back(orphan);
     require(count("missing image 60000") == 1 && count("missing palette -2") == 1 &&

@@ -1,5 +1,6 @@
 #pragma once
 #include "Core/studio_document.h"
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -8,6 +9,7 @@ struct SpriteSheetRequest {
     bool placed_only = false;
     int columns = 8;
     int padding = 2;
+    std::optional<std::vector<int>> image_ids; // Explicit selection, in library order on export.
 };
 struct SpriteSheetExport {
     bool ready = false;

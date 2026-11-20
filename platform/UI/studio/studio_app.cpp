@@ -70,6 +70,10 @@ Point item_center() {
 bool has(const std::vector<ObjectId> &ids, ObjectId id) {
     return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
+std::string document_title(const Document &document) {
+    return document.path().empty() ? document.state().name :
+           fs::u8path(document.path()).stem().u8string();
+}
 // Before/after review settings shared by stage comparison and artwork replacement.
 enum class CompareMode { SideBySide, Wipe, Toggle, Blink, Overlay, Difference };
 struct CompareView {
@@ -93,8 +97,9 @@ struct Tab {
     bool share_requested = false, share_show_result = false;
     bool composite_requested = false, composite_metadata = true, composite_backdrop = false;
     int composite_scope = 2;
-    bool sheet_requested = false, sheet_placed_only = false, sheet_metadata = true;
-    int sheet_columns = 8, sheet_padding = 2;
+    bool sheet_requested = false, sheet_metadata = true, sheet_selection_metadata = false;
+    int sheet_scope = 2, sheet_columns = 8, sheet_padding = 2;
+    std::vector<int> sheet_image_ids;
     std::future<ShareBundle> share_job;
     std::unique_ptr<ShareBundle> share_bundle;
     std::shared_ptr<const AssetBank> info_assets;
@@ -117,6 +122,8 @@ struct Tab {
     Viewport view;
     std::vector<ObjectId> selected;
     int plane = 0, solo = -1, asset = 0;
+    std::set<int> selected_assets;
+    int asset_anchor = -1;
     std::unique_ptr<AnimationLibrary> import_library;
     std::vector<uint8_t> import_selected;
     ImGuiTextFilter import_filter;
@@ -381,6 +388,9 @@ class App {
     int active = -1, page = 0, select_tab = -1;
     uint64_t next_tab = 1;
     bool running = true, grid = false, snap = true, tray = true, quit_pending = false;
+    float tray_height = 0, tray_drag_start = 0;
+    Point smoke_tray_grip, smoke_sheet_button, smoke_sheet_export;
+    std::map<int, Point> smoke_asset_tiles;
     int close_pending = -1;
     bool show_recovery = false;
     bool library_audit_open = false, library_audit_incomplete = false, library_audit_active = false;
@@ -403,6 +413,7 @@ class App {
     struct ScrollDrag { double low = 0, high = 0, offset = 0; } scroll_drag[2];
     Rect canvas_scrollbars[2];
     int drag_plane = -1;
+    ObjectId clicked_object = 0;
     Point drag_start, drag_last;
     std::vector<ObjectId> drag_selection;
     Rect canvas_rect;
@@ -415,6 +426,8 @@ class App {
     Point export_check_point, export_review_point;
     float export_section_y = 0;
     Point check_locate_point, check_artwork_point, check_report_point, camera_scan_point, camera_jump_point;
+    std::map<int, Point> smoke_layer_rows;
+    std::map<ObjectId, Point> smoke_placement_rows, smoke_outside_rows;
     Point floor_open_point, floor_asset_point, floor_add_point, floor_close_point;
     Point floor_library_next_point, floor_library_restore_point, floor_library_art_point;
     Point floor_library_selector_point, floor_library_second_point;
@@ -448,9 +461,10 @@ class App {
         }
         t->camera = {(double)t->document.state().start_x, (double)t->document.state().start_y};
         t->camera_ground = t->document.state().ground;
-        t->camera_check_options.min_x = t->document.state().start_x;
+        t->camera_check_options.min_x = std::min(0, t->document.state().start_x);
         t->camera_check_options.max_x = std::max(t->document.state().start_x, t->document.state().world_w - 400);
-        t->camera_check_options.min_y = t->camera_check_options.max_y = t->document.state().start_y;
+        t->camera_check_options.max_y = t->document.state().start_y;
+        t->camera_check_options.min_y = t->camera_check_options.max_y - BDD_CORE_MK2_STAGE_JUMP_HEADROOM;
         t->visibility_options = {t->document.state().start_x,
             std::max(t->document.state().start_x, t->document.state().world_w - 400),
             t->document.state().start_y, t->document.state().start_y};
@@ -636,6 +650,7 @@ class App {
             tab()->document.cancel();
         dragging = marquee = moved = panning = false;
         drag_plane = -1;
+        clicked_object = 0;
         drag_last = {};
     }
     void clean_selection() {
@@ -649,6 +664,15 @@ class App {
             t.plane = (int)t.document.state().planes.size() - 1;
         if (t.solo >= (int)t.document.state().planes.size())
             t.solo = -1;
+    }
+    void delete_selection(Tab &t) {
+        if (dragging && !moved && clicked_object)
+            t.selected = {clicked_object};
+        if (t.selected.empty())
+            return;
+        cancel_gesture();
+        if (t.document.erase(t.selected))
+            t.selected.clear();
     }
     void shortcuts() {
         auto &io = ImGui::GetIO();
@@ -667,6 +691,11 @@ class App {
         auto *t = tab();
         if (!t)
             return;
+        if (page == 0 && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift &&
+            !ImGui::GetDragDropPayload() && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+            delete_selection(*t);
+            return;
+        }
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))
             save(*t, io.KeyShift);
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) {
@@ -694,10 +723,6 @@ class App {
             t->fit = true;
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_W))
             close_pending = active;
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-            cancel_gesture();
-            t->document.erase(t->selected);
-        }
         if (!dragging && !t->source) {
             int dx = (ImGui::IsKeyPressed(ImGuiKey_RightArrow) ? 1 : 0) -
                      (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) ? 1 : 0);
@@ -960,7 +985,7 @@ class App {
                 if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, t && !t->selected.empty()))
                     t->selected = t->document.duplicate(t->selected);
                 if (ImGui::MenuItem("Delete", "Delete", false, t && !t->selected.empty()))
-                    t->document.erase(t->selected);
+                    delete_selection(*t);
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("View")) {
@@ -984,7 +1009,7 @@ class App {
                 if (ImGui::MenuItem("Trim or pad selected canvas...", nullptr, false, available)) open_canvas_resize(*t);
                 if (ImGui::MenuItem("Export selected artwork as PNG...", nullptr, false, available)) export_asset_png(*t);
                 if (ImGui::MenuItem("Export selected artwork as indexed TGA...", nullptr, false, available)) export_asset_tga(*t);
-                if (ImGui::MenuItem("Export artwork sheet...", nullptr, false, available)) t->sheet_requested = true;
+                if (ImGui::MenuItem("Export artwork sheet...", nullptr, false, available)) request_sprite_sheet(*t);
                 ImGui::EndMenu();
             }
             bool help_menu = ImGui::BeginMenu("Help");
@@ -1064,7 +1089,8 @@ class App {
             for (size_t i = 0; i < tabs.size(); i++) {
                 auto &t = *tabs[i];
                 bool open = true;
-                std::string name = t.document.state().name + "###doc" + std::to_string(t.id);
+                const auto &path = t.document.path();
+                std::string name = document_title(t.document) + "###doc" + std::to_string(t.id);
                 ImGuiTabItemFlags flags =
                     t.document.dirty() ? ImGuiTabItemFlags_UnsavedDocument : 0;
                 if (select_tab == (int)i)
@@ -1076,6 +1102,8 @@ class App {
                     }
                     ImGui::EndTabItem();
                 }
+                if (!path.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+                    ImGui::SetTooltip("%s", path.c_str());
                 if (!open)
                     close_pending = (int)i;
             }
@@ -1083,7 +1111,59 @@ class App {
             ImGui::EndTabBar();
         }
     }
+    void focus_placement(Tab &t, const Placement &p) {
+        t.selected = {p.id};
+        t.plane = p.plane;
+        t.solo = -1;
+        t.camera_preview = false;
+        t.source = false;
+        t.move_layer = false;
+        t.focus_object = p.id;
+    }
+    void placement_row(Tab &t, const Placement &p, bool locate_on_click) {
+        size_t slot = 0;
+        auto *im = t.document.image(p.object.ii, &slot);
+        std::string label = im ? image_name(t, (int)slot) : "Missing image";
+        if (locate_on_click)
+            label += " #" + std::to_string(p.id);
+        label += "###placement";
+        ImGui::PushID((int)p.id);
+        bool clicked = ImGui::Selectable(label.c_str(), has(t.selected, p.id), ImGuiSelectableFlags_AllowDoubleClick);
+        if (!smoke_dir.empty())
+            (locate_on_click ? smoke_outside_rows : smoke_placement_rows)[p.id] = item_center();
+        if (clicked) {
+            const auto &io = ImGui::GetIO();
+            if (locate_on_click || ImGui::IsMouseDoubleClicked(0))
+                focus_placement(t, p);
+            else {
+                if (!io.KeyCtrl && !io.KeyShift)
+                    t.selected.clear();
+                if (!has(t.selected, p.id))
+                    t.selected.push_back(p.id);
+                t.plane = p.plane;
+                t.move_layer = false;
+            }
+        }
+        const auto &planes = t.document.state().planes;
+        const bool locked = p.locked || (p.plane >= 0 && p.plane < (int)planes.size() && planes[p.plane].locked);
+        if (!locked && ImGui::BeginDragDropSource()) {
+            if (!has(t.selected, p.id))
+                t.selected = {p.id};
+            ImGui::SetDragDropPayload("STUDIO_PLACEMENT", &p.id, sizeof p.id);
+            ImGui::Text("%zu placement%s", t.selected.size(), t.selected.size() == 1 ? "" : "s");
+            ImGui::EndDragDropSource();
+        }
+        if (ImGui::BeginPopupContextItem()) {
+            if (ImGui::MenuItem("Locate on canvas"))
+                focus_placement(t, p);
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+    }
     void tree(Tab &t) {
+        smoke_layer_rows.clear();
+        smoke_placement_rows.clear();
+        smoke_outside_rows.clear();
         heading("STAGE", "Layers and artwork");
         if (ImGui::Button("+ Layer")) {
             t.plane = t.document.add_plane();
@@ -1099,12 +1179,35 @@ class App {
             t.solo = -1;
         }
         ImGui::Spacing();
+        const auto &state = t.document.state();
+        std::map<int, const BddCoreImage *> images;
+        for (const auto &image : state.assets->data.images)
+            images.emplace(image.idx, &image);
+        std::vector<const Placement *> outside;
+        for (const auto &placement : state.objects) {
+            if (placement.plane < 0 || placement.plane >= (int)state.planes.size()) {
+                outside.push_back(&placement);
+                continue;
+            }
+            auto im = images.find(placement.object.ii);
+            if (im != images.end() && !bdd_core_object_fits_module(&placement.object,
+                &state.planes[placement.plane].source, im->second->w, im->second->h))
+                outside.push_back(&placement);
+        }
+        if (!outside.empty() && ImGui::TreeNodeEx("outside", ImGuiTreeNodeFlags_DefaultOpen,
+                                                  "Outside module bounds (%zu)", outside.size())) {
+            for (const auto *placement : outside)
+                placement_row(t, *placement, true);
+            ImGui::TreePop();
+        }
         std::vector<int> order;
         for (size_t i = 0; i < t.document.state().planes.size(); i++)
             order.push_back((int)i);
-        std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
-            return t.document.state().planes[a].rank > t.document.state().planes[b].rank;
+        std::sort(order.begin(), order.end(), [&](int a, int b) {
+            return std::tie(state.planes[a].rank, a) > std::tie(state.planes[b].rank, b);
         });
+        int target = -1, moved_layer = -1;
+        ObjectId moved_object = 0;
         for (int i : order) {
             auto p = t.document.state().planes[i];
             ImGui::PushID(i);
@@ -1114,10 +1217,29 @@ class App {
                 flags |= ImGuiTreeNodeFlags_Selected;
             bool expanded = ImGui::TreeNodeEx("layer", flags, "%s%s", p.hidden ? "(hidden) " : "",
                                               p.name.c_str());
+            if (!smoke_dir.empty())
+                smoke_layer_rows[i] = item_center();
             if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
                 t.plane = i;
                 t.selected.clear();
                 t.move_layer = true;
+            }
+            if (!p.locked && ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload("STUDIO_LAYER", &i, sizeof i);
+                ImGui::TextUnformatted(p.name.c_str());
+                ImGui::EndDragDropSource();
+            }
+            if (ImGui::BeginDragDropTarget()) {
+                if (!p.locked)
+                    if (const auto *payload = ImGui::AcceptDragDropPayload("STUDIO_PLACEMENT")) {
+                        moved_object = *static_cast<const ObjectId *>(payload->Data);
+                        target = i;
+                    }
+                if (const auto *payload = ImGui::AcceptDragDropPayload("STUDIO_LAYER")) {
+                    moved_layer = *static_cast<const int *>(payload->Data);
+                    target = i;
+                }
+                ImGui::EndDragDropTarget();
             }
             if (ImGui::BeginPopupContextItem()) {
                 if (ImGui::MenuItem(p.hidden ? "Show" : "Hide"))
@@ -1140,40 +1262,22 @@ class App {
                 int count = 0;
                 for (const auto &object : t.document.state().objects)
                     if (object.plane == i) {
-                        size_t slot = 0;
-                        t.document.image(object.object.ii, &slot);
-                        ImGui::PushID((int)object.id);
-                        std::string label = image_name(t, (int)slot);
-                        if (ImGui::Selectable(label.c_str(), has(t.selected, object.id))) {
-                            if (!ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift)
-                                t.selected.clear();
-                            if (!has(t.selected, object.id))
-                                t.selected.push_back(object.id);
-                            t.plane = i;
-                        }
-                        ImGui::PopID();
+                        placement_row(t, object, false);
                         count++;
                     }
                 if (!count)
-                    ImGui::TextDisabled("Drop artwork here");
+                    ImGui::TextDisabled("Drop artwork on the layer name");
                 ImGui::TreePop();
             }
             ImGui::PopID();
         }
-        bool orphan = false;
-        for (const auto &p : t.document.state().objects)
-            if (p.plane < 0)
-                orphan = true;
-        if (orphan && ImGui::TreeNodeEx("Unassigned", ImGuiTreeNodeFlags_DefaultOpen)) {
-            for (const auto &p : t.document.state().objects)
-                if (p.plane < 0) {
-                    std::string name = "Object " + std::to_string(p.id);
-                    if (ImGui::Selectable(name.c_str(), has(t.selected, p.id))) {
-                        t.selected = {p.id};
-                        t.plane = -1;
-                    }
-                }
-            ImGui::TreePop();
+        if (moved_object && has(t.selected, moved_object) && t.document.assign_plane(t.selected, target)) {
+            t.plane = target;
+            if (t.solo >= 0) t.solo = target;
+            toast("Moved artwork to " + state.planes[target].name);
+        } else if (moved_layer >= 0 &&
+                   t.document.set_plane_stack_position(moved_layer, t.document.plane_stack_position(target))) {
+            t.plane = moved_layer;
         }
     }
     void inspector(Tab &t) {
@@ -1211,7 +1315,7 @@ class App {
                     t.asset = (int)slot; open_canvas_resize(t);
                 }
             }
-            const Plane *plane = p.plane >= 0 ? &s.planes[p.plane] : nullptr;
+            const Plane *plane = p.plane >= 0 && p.plane < (int)s.planes.size() ? &s.planes[p.plane] : nullptr;
             bool locked = false;
             for (auto id : t.selected) if (const auto *selected = doc.object(id)) {
                 const Plane *selected_plane = selected->plane >= 0 && selected->plane < (int)s.planes.size()
@@ -1258,6 +1362,12 @@ class App {
             changed |= ImGui::Checkbox("Flip Y", &fy);
             if (changed)
                 doc.set_object(p.id, xy[0], xy[1], palette, fx, fy);
+            int z = (p.object.wx >> 8) & 0xff;
+            ImGui::SetNextItemWidth(110);
+            if (ImGui::InputInt("Artwork Z", &z, 1, 16))
+                doc.set_object_z(t.selected, std::clamp(z, 0, 255));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Higher values draw in front within a layer.");
             ImGui::Spacing();
             ImGui::SetNextItemWidth(-1);
             if (ImGui::BeginCombo("##palette",
@@ -1277,9 +1387,11 @@ class App {
             ImGui::SetNextItemWidth(-1);
             if (ImGui::BeginCombo("##layer", plane ? plane->name.c_str() : "Assign to layer")) {
                 for (size_t i = 0; i < s.planes.size(); i++)
-                    if (ImGui::Selectable(s.planes[i].name.c_str(), p.plane == (int)i)) {
-                        doc.assign_plane(t.selected, (int)i);
+                    if (ImGui::Selectable(s.planes[i].name.c_str(), p.plane == (int)i,
+                                          s.planes[i].locked ? ImGuiSelectableFlags_Disabled : 0) &&
+                        doc.assign_plane(t.selected, (int)i)) {
                         t.plane = (int)i;
+                        if (t.solo >= 0) t.solo = t.plane;
                     }
                 ImGui::EndCombo();
             }
@@ -1290,10 +1402,8 @@ class App {
                 open_save_group(t);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Save this arrangement so it can be dragged from Assets as mirrored or repeated copies.");
-            if (ImGui::Button("Delete artwork", ImVec2(-1, 0))) {
-                doc.erase(t.selected);
-                t.selected.clear();
-            }
+            if (ImGui::Button("Delete artwork", ImVec2(-1, 0)))
+                delete_selection(t);
             ImGui::EndDisabled();
             ImGui::Spacing();
             ImGui::TextDisabled("Arrow keys: 1 px / Shift: 10 px");
@@ -1317,8 +1427,15 @@ class App {
             ImGui::TextDisabled("Parallax (1.0 = follows camera)");
             if (changed)
                 doc.set_plane(t.plane, name, xy[0], xy[1], scroll);
+            int stack = doc.plane_stack_position(t.plane);
+            ImGui::SetNextItemWidth(110);
+            if (ImGui::InputInt("Layer Z", &stack, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue))
+                doc.set_plane_stack_position(t.plane, std::clamp(stack, 0, (int)s.planes.size() - 1));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 is the back layer. Higher layers draw in front.");
             if (ImGui::Button("Move forward"))
                 doc.reorder_plane(t.plane, 1);
+            ImGui::SameLine();
             if (ImGui::Button("Move backward"))
                 doc.reorder_plane(t.plane, -1);
             ImGui::EndDisabled();
@@ -1328,8 +1445,7 @@ class App {
             if (ImGui::Checkbox("Locked", &locked))
                 doc.set_plane_flags(t.plane, p.hidden, locked);
             ImGui::Separator();
-            ImGui::TextWrapped("Select this layer, then drag its artwork to move the entire layer. "
-                               "Select a child in the tree to move one piece.");
+            ImGui::TextWrapped("Drag a layer name to restack it. Drag artwork onto a layer name to move it there.");
             ImGui::Spacing();
             ImGui::TextDisabled("%s",
                                 p.bound ? "Runtime placement imported" : "Estimated placement");
@@ -1508,7 +1624,7 @@ class App {
                                          t.selected.end());
                     else
                         t.selected.push_back(hit);
-                } else if (!has(t.selected, hit) && !layer_drag)
+                } else if ((!has(t.selected, hit) && !layer_drag) || t.source)
                     t.selected = {hit};
                 if (object->plane >= 0)
                     t.plane = object->plane;
@@ -1517,6 +1633,7 @@ class App {
                     drag_plane = layer_drag ? t.plane : -1;
                     drag_selection = t.selected;
                     dragging = true;
+                    clicked_object = !io.KeyShift && !io.KeyAlt ? hit : 0;
                     drag_start = world;
                     drag_last = {};
                     moved = false;
@@ -1599,6 +1716,11 @@ class App {
         }
         if (dragging && !ImGui::IsMouseDown(0)) {
             t.document.commit();
+            if (!moved && clicked_object) {
+                t.selected = {clicked_object};
+                t.move_layer = false;
+            }
+            clicked_object = 0;
             dragging = false;
             drag_plane = -1;
             drag_last = {};
@@ -1760,6 +1882,18 @@ class App {
         draw->PopClipRect();
     }
     void assets(Tab &t, bool full) {
+        const auto bank = t.document.state().assets;
+        const auto &images = bank->data.images;
+        t.asset = std::clamp(t.asset, 0, std::max(0, (int)images.size() - 1));
+        if (!t.selected_assets.empty()) {
+            std::set<int> available_ids;
+            for (const auto &im : images) available_ids.insert(im.idx);
+            for (auto it = t.selected_assets.begin(); it != t.selected_assets.end();) {
+                if (!available_ids.count(*it)) it = t.selected_assets.erase(it);
+                else ++it;
+            }
+        }
+        smoke_asset_tiles.clear();
         ImGui::TextUnformatted("ASSETS");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(180);
@@ -1774,9 +1908,17 @@ class App {
             ImGui::EndPopup();
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("Drag to place");
+        ImGui::BeginDisabled(images.empty());
+        if (ImGui::Button("Export sheet...")) request_sprite_sheet(t);
+        if (!smoke_dir.empty()) smoke_sheet_button = item_center();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (t.selected_assets.empty())
+            ImGui::TextDisabled("Ctrl-click or Shift-click to select");
+        else
+            ImGui::TextDisabled("%zu selected", t.selected_assets.size());
         if (full) {
-            bool available = !t.document.state().assets->data.images.empty();
+            bool available = !images.empty();
             ImGui::BeginDisabled(!available);
             if (ImGui::Button("Edit block...")) open_block_editor(t);
             ImGui::SameLine();
@@ -1793,32 +1935,54 @@ class App {
             ImGui::SameLine(); ImGui::TextDisabled("Double-click artwork to edit its pixels");
         }
         groups_strip(t, full);
-        const auto bank = t.document.state().assets;
+        auto fold = [](std::string value) {
+            for (char &c : value)
+                if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+            return value;
+        };
+        const std::string filter = fold(search);
+        std::vector<size_t> visible;
+        for (size_t i = 0; i < images.size(); ++i)
+            if (filter.empty() || fold(image_name(t, (int)i)).find(filter) != std::string::npos)
+                visible.push_back(i);
         int cols = std::max(1, (int)(ImGui::GetContentRegionAvail().x / 124));
         if (ImGui::BeginTable("assetgrid", cols, ImGuiTableFlags_SizingStretchSame)) {
-            for (size_t i = 0; i < bank->data.images.size(); i++) {
-                std::string name = image_name(t, (int)i), filter = search;
-                auto fold = [](std::string v) {
-                    for (char &c : v)
-                        if (c >= 'A' && c <= 'Z')
-                            c += 'a' - 'A';
-                    return v;
-                };
-                if (!filter.empty() && fold(name).find(fold(filter)) == std::string::npos)
-                    continue;
+            for (auto tile = visible.begin(); tile != visible.end(); ++tile) {
+                const size_t i = *tile;
+                const std::string name = image_name(t, (int)i);
                 ImGui::TableNextColumn();
                 ImGui::PushID((int)i);
-                auto &im = bank->data.images[i];
+                const auto &im = images[i];
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 float width = ImGui::GetContentRegionAvail().x, height = full ? 114.0f : 84.0f;
-                bool click =
-                    ImGui::Selectable("##asset", t.asset == (int)i, 0, ImVec2(width, height));
+                const bool marked = t.selected_assets.count(im.idx) != 0;
+                bool click = ImGui::Selectable("##asset", marked, 0, ImVec2(width, height));
+                if (!smoke_dir.empty()) smoke_asset_tiles[im.idx] = item_center();
                 if (full && t.reveal_asset && t.asset == (int)i) {
                     ImGui::SetScrollHereY(.5f); t.reveal_asset = false;
                 }
-                if (click)
+                const auto &io = ImGui::GetIO();
+                if (click) {
                     t.asset = (int)i;
-                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    if (io.KeyShift) {
+                        auto anchor = std::find_if(visible.begin(), visible.end(),
+                            [&](size_t slot) { return images[slot].idx == t.asset_anchor; });
+                        if (anchor == visible.end()) {
+                            anchor = tile;
+                            t.asset_anchor = im.idx;
+                        }
+                        if (!io.KeyCtrl) t.selected_assets.clear();
+                        for (auto entry = std::min(anchor, tile); entry <= std::max(anchor, tile); ++entry)
+                            t.selected_assets.insert(images[*entry].idx);
+                    } else {
+                        t.asset_anchor = im.idx;
+                        if (!io.KeyCtrl) t.selected_assets.clear();
+                        if (io.KeyCtrl && marked) t.selected_assets.erase(im.idx);
+                        else t.selected_assets.insert(im.idx);
+                    }
+                }
+                if (!io.KeyCtrl && !io.KeyShift && ImGui::IsItemHovered() &&
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     t.asset = (int)i; open_block_editor(t);
                 }
                 if (ImGui::BeginPopupContextItem("asset-tools")) {
@@ -4330,8 +4494,13 @@ class App {
         actor_toolbar(t);
         ImGui::TextDisabled("Drag empty space to pan | Shift-drag to select | Wheel to zoom");
         float avail = ImGui::GetContentRegionAvail().y;
-        float tray_h = tray ? std::min(164.0f, avail * .28f) : 0;
-        float body_h = std::max(120.0f, avail - tray_h - 43);
+        constexpr float grip_height = 8, min_tray_height = 96, min_body_height = 120, camera_height = 43;
+        const float divider_space = tray ? grip_height + ImGui::GetStyle().ItemSpacing.y : 0;
+        const float tray_max = std::max(min_tray_height, avail - min_body_height - camera_height - divider_space);
+        const float default_tray_height = std::min(164.0f, avail * .28f);
+        const float tray_h = tray ? std::clamp(tray_height > 0 ? tray_height : default_tray_height,
+                                              min_tray_height, tray_max) : 0;
+        const float body_h = std::max(min_body_height, avail - tray_h - camera_height - divider_space);
         float width = ImGui::GetContentRegionAvail().x;
         float left = width < 1000 ? 185.0f : 218.0f, right = width < 1000 ? 240.0f : 276.0f,
               center = std::max(180.0f, width - left - right - 16);
@@ -4373,6 +4542,19 @@ class App {
             t.source = false; t.camera_preview = true;
         }
         if (tray) {
+            ImGui::InvisibleButton("Resize asset tray", {ImGui::GetContentRegionAvail().x, grip_height});
+            if (!smoke_dir.empty()) smoke_tray_grip = item_center();
+            if (ImGui::IsItemActivated()) tray_drag_start = tray_h;
+            const bool resizing = ImGui::IsItemActive();
+            const bool hovered = ImGui::IsItemHovered();
+            if (resizing)
+                tray_height = std::clamp(tray_drag_start - ImGui::GetMouseDragDelta(0, 0).y,
+                                         min_tray_height, tray_max);
+            if (hovered || resizing) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            const auto center = item_center();
+            ImGui::GetWindowDrawList()->AddLine({float(center.x) - 22, float(center.y)},
+                {float(center.x) + 22, float(center.y)},
+                ImGui::GetColorU32(hovered || resizing ? ImGuiCol_SeparatorActive : ImGuiCol_TextDisabled), 2);
             ImGui::BeginChild("assettray", ImVec2(0, tray_h), ImGuiChildFlags_Border);
             assets(t, false);
             ImGui::EndChild();
@@ -4775,6 +4957,8 @@ class App {
 #include "studio_camera_checks_smoke.inc"
 #include "studio_help_share_smoke.inc"
 #include "studio_export_checks_smoke.inc"
+#include "studio_stage_editing_smoke.inc"
+#include "studio_asset_tray_smoke.inc"
 
 struct InteractionSmoke {
     ObjectId id = 0;
@@ -5133,6 +5317,10 @@ int run(int argc, char **argv) {
     bool test_help_share = smoke && argc >= 5 && std::string(argv[4]) == "--help-share";
     CameraChecksSmoke camera_checks_smoke;
     bool test_camera_checks = smoke && argc >= 5 && std::string(argv[4]) == "--camera-checks";
+    StageEditingSmoke stage_editing_smoke;
+    bool test_stage_editing = smoke && argc >= 5 && std::string(argv[4]) == "--stage-editing";
+    AssetTraySmoke asset_tray_smoke;
+    bool test_asset_tray = smoke && argc >= 5 && std::string(argv[4]) == "--asset-tray";
     bool test_checks = smoke && argc >= 5 && std::string(argv[4]) == "--checks";
     bool test_batch_import = smoke && argc >= 5 && std::string(argv[4]) == "--batch-import";
     bool test_asset_tools = smoke && argc >= 5 && std::string(argv[4]) == "--asset-tools";
@@ -5310,6 +5498,8 @@ int run(int argc, char **argv) {
         if (test_layout) layout_smoke.input(app, frames);
         if (test_help_share) help_share_smoke.input(app, frames);
         if (test_camera_checks) camera_checks_smoke.input(app, frames);
+        if (test_stage_editing) stage_editing_smoke.input(app, frames);
+        if (test_asset_tray) asset_tray_smoke.input(app, frames);
         if (test_checks) checks_smoke.input(app, frames);
         if (test_asset_tools) asset_smoke.input(app, frames);
         if (test_batch_import) batch_smoke.input(app, frames);
@@ -5332,6 +5522,8 @@ int run(int argc, char **argv) {
         if (test_layout && !layout_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_help_share && !help_share_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_camera_checks && !camera_checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
+        if (test_stage_editing && !stage_editing_smoke.check(app, frames)) { rc = 1; app.running = false; }
+        if (test_asset_tray && !asset_tray_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_checks && !checks_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_batch_import && !batch_smoke.check(app, frames)) { rc = 1; app.running = false; }
         if (test_asset_tools && !asset_smoke.check(app, frames)) { rc = 1; app.running = false; }
@@ -5629,6 +5821,10 @@ int run(int argc, char **argv) {
                         std::fprintf(stderr, "Receipt UI failed: %s\n", t.receipt_after ? t.receipt_after->error.c_str() : "missing result"); rc = 1;
                     } else t.receipt_before = std::make_unique<RomReceipt>(*t.receipt_after);
                 }
+            }
+            if (test_stage_editing || test_asset_tray) {
+                if (frames >= 30) app.running = false;
+                continue;
             }
             if (frames == 4 && !test_asset_tools && !test_batch_import && !test_checks && !test_camera_checks && !test_help_share && !test_export_checks && !test_floors && !test_layout && !test_background && !test_palettes) {
                 SDL_SetWindowSize(app.window, 1000, 720);

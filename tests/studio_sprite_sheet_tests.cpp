@@ -22,6 +22,22 @@ int main() {
         require(opaque && transparent, "Sheet lost artwork or transparency");
         State hidden = state; for (auto &p : hidden.objects) p.hidden = true;
         require(!render_sprite_sheet(hidden, request).ready, "Hidden-only placed sheet was accepted");
+        const int first = state.assets->data.images[0].idx, second = state.assets->data.images[1].idx,
+                  third = state.assets->data.images[2].idx;
+        request.image_ids = {third, first, third};
+        auto selection = render_sprite_sheet(hidden, request);
+        auto metadata_id = [](int id) { return "\"id\": " + std::to_string(id) + ","; };
+        require(selection.ready && selection.width == 2 * selection.cell_width &&
+                selection.height == selection.cell_height, "Selected sheet has the wrong number of cells");
+        require(selection.metadata.find(metadata_id(first)) < selection.metadata.find(metadata_id(third)) &&
+                selection.metadata.find(metadata_id(third)) != std::string::npos &&
+                selection.metadata.find(metadata_id(second)) == std::string::npos,
+                "Selected IDs were not exported once in library order");
+        request.image_ids = {first, -1};
+        require(!render_sprite_sheet(state, request).ready, "Stale selection was silently exported");
+        request.image_ids = std::vector<int>{};
+        require(!render_sprite_sheet(state, request).ready, "Empty selection fell back to the entire library");
+        request.image_ids.reset();
         request.placed_only = false; request.columns = 0; request.padding = 99;
         require(render_sprite_sheet(state, request).ready, "Safe option clamping failed");
         std::cout << "Artwork sheet layout, metadata, palettes, transparency and visibility passed\n";

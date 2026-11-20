@@ -150,6 +150,7 @@ class Document {
     bool arrange(const std::vector<ObjectId> &ids, ArrangeMode mode, std::string &error);
     bool set_object(ObjectId id, int local_x, int local_y, int palette, bool flip_x, bool flip_y);
     bool assign_plane(const std::vector<ObjectId> &ids, int plane);
+    bool set_object_z(const std::vector<ObjectId> &ids, int z);
     std::vector<ObjectId> duplicate(const std::vector<ObjectId> &ids, int dx = 16, int dy = 0);
     // Saves visible selected placements as a named group; one undoable edit.
     bool add_group(const std::vector<ObjectId> &ids, const std::string &name, std::string &error);
@@ -161,6 +162,8 @@ class Document {
     bool set_plane(int index, const std::string &name, int x, int y, double scroll);
     bool set_plane_flags(int index, bool hidden, bool locked);
     bool reorder_plane(int index, int direction);
+    int plane_stack_position(int index) const;
+    bool set_plane_stack_position(int index, int position);
     int add_plane();
     bool set_start(int x, int y, int ground);
     bool set_backdrop(int rgb555);

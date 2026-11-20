@@ -22,6 +22,9 @@ enum {
     BDD_CORE_MK2_RUNTIME_PALETTE_SLOTS = 16,
     BDD_CORE_MK2_DISPLAY_OBJECT_CAP = 358,
     BDD_CORE_MK2_DISPLAY_OBJECT_WARN = 300,
+    BDD_CORE_MK2_DMA_QUEUE_CAP = 500,
+    BDD_CORE_MK2_STAGE_FADE_COLORS = 94,
+    BDD_CORE_MK2_STAGE_JUMP_HEADROOM = 18,
     /* Display objects the runtime spends on things NOT in the BDD that share
      * the same getobj pool as background blocks (nobj=358 in DISPEQU.ASM):
      * the 2 fighters + their fx/blood/shadows, plus stage-spawned actors such

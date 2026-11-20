@@ -86,6 +86,8 @@
     }
     void camera_check_controls(Tab &t) {
         bool busy = t.camera_check_job.valid();
+        const bool current = t.camera_check &&
+            camera_check_current(*t.camera_check, t.document.state(), t.camera_check_options);
         ImGui::BeginDisabled(busy || !t.document.state().has_bdb);
         if (ImGui::Button("Scan camera range")) start_camera_check(t);
         camera_scan_point = item_center();
@@ -94,12 +96,26 @@
         if (busy) {
             if (ImGui::SmallButton("Cancel scan")) t.camera_check_progress->cancel = true;
         } else if (!t.camera_check) ImGui::TextDisabled("Camera / resource estimates: not scanned");
-        else if (t.camera_check->complete && !camera_check_current(*t.camera_check, t.document.state(), t.camera_check_options))
+        else if (t.camera_check->complete && !current)
             ImGui::TextColored(accent, "Scan is stale. Run again for this document/range.");
         else if (t.camera_check->complete)
             ImGui::TextDisabled("%d samples | peak %d objects + %d reserve | %d palettes",
                 t.camera_check->samples, t.camera_check->peak_objects, t.camera_check->options.reserve, t.camera_check->peak_palettes);
         else ImGui::TextDisabled("Scan incomplete");
+        if (current && !busy) {
+            for (int board = 0; board < 2; ++board) {
+                double ms = t.camera_check->budget[board].ms;
+                float used = float(ms / kStageArtWarnMs);
+                ImVec4 color = ms > kStageArtOverMs ? ImVec4(.98f, .48f, .42f, 1) : ms > kStageArtWarnMs ? ImVec4(.85f, .73f, .47f, 1) : ImVec4(.45f, .78f, .52f, 1);
+                char label[96];
+                snprintf(label, sizeof label, "%s peak %.2f ms | target %.1f ms",
+                         kStageBudgetBoards[board].name, ms, kStageArtWarnMs);
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, color);
+                ImGui::ProgressBar(used > 1 ? 1 : used, ImVec2(-FLT_MIN, 0), label);
+                ImGui::PopStyleColor();
+            }
+            ImGui::TextDisabled("Static art estimate | late frames from about %.1f ms", kStageArtOverMs);
+        }
         if (!t.camera_check_error.empty()) ImGui::TextWrapped("%s", t.camera_check_error.c_str());
         if (t.camera_check && !t.camera_check->error.empty()) ImGui::TextWrapped("%s", t.camera_check->error.c_str());
         if (t.camera_check && t.camera_check->cancelled) ImGui::TextDisabled("Scan cancelled; no partial findings used.");
@@ -113,8 +129,9 @@
             if (ImGui::InputInt2("Camera Y min / max", y)) { o.min_y = y[0]; o.max_y = y[1]; }
             ImGui::SetNextItemWidth(160); ImGui::InputInt("Sample step (px)", &o.step);
             ImGui::SetNextItemWidth(160); ImGui::InputInt("Reserve for fighters / effects / actors", &o.reserve);
+            ImGui::Checkbox("Assume all stage blocks are packed raw", &o.all_raw);
             ImGui::EndDisabled();
-            ImGui::TextWrapped("Initial range uses the authored start and world width, not verified gameplay limits. Samples include both endpoints (up to 2048 positions). Hidden placements count toward export costs. Bounds only: no transparency/occlusion analysis, animation or allocation lifetime. The 56-object default reserve is adjustable; scan results are estimates.");
+            ImGui::TextWrapped("The initial range uses the authored start, world width and %d px of jump headroom. Samples include both endpoints (up to 2048 positions). Timing charges full visible block rectangles, including editor-hidden placements. Use the default zero-compressed rate for mixed or unknown packing. Runtime actors and animation require a packed-build check.", BDD_CORE_MK2_STAGE_JUMP_HEADROOM);
             ImGui::TreePop();
         }
         // Option edits invalidate findings immediately, not one render later.

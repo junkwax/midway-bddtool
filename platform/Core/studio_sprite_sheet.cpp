@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace studio {
 namespace {
@@ -20,11 +21,26 @@ SpriteSheetExport render_sprite_sheet(const State &state, const SpriteSheetReque
     int columns = std::clamp(request.columns, 1, 64);
     int padding = std::clamp(request.padding, 0, 32);
     std::unordered_map<size_t, int> placed_palettes;
-    for (const auto &item : scene_items(state)) if (!placed_palettes.count(item.image_slot))
-        placed_palettes[item.image_slot] = item.palette;
+    std::unordered_map<int, int> thumbnail_palettes;
+    std::unordered_set<int> selected;
+    if (request.image_ids) {
+        selected.insert(request.image_ids->begin(), request.image_ids->end());
+        for (const auto &p : state.objects)
+            if (selected.count(p.object.ii))
+                thumbnail_palettes.try_emplace(p.object.ii, p.object.fl);
+    } else {
+        for (const auto &item : scene_items(state))
+            placed_palettes.try_emplace(item.image_slot, item.palette);
+    }
     std::vector<size_t> slots;
-    for (size_t i = 0; i < state.assets->data.images.size(); ++i)
-        if (!request.placed_only || placed_palettes.count(i)) slots.push_back(i);
+    for (size_t i = 0; i < state.assets->data.images.size(); ++i) {
+        if (request.image_ids ? selected.count(state.assets->data.images[i].idx) != 0
+                              : (!request.placed_only || placed_palettes.count(i) != 0))
+            slots.push_back(i);
+    }
+    if (request.image_ids && (slots.empty() || slots.size() != selected.size())) {
+        out.error = "Select artwork that is still in the library."; return out;
+    }
     if (slots.empty()) { out.error = request.placed_only ? "No visible placed artwork is available." : "The artwork library is empty."; return out; }
     int max_w = 1, max_h = 1;
     for (size_t slot : slots) {
@@ -47,8 +63,11 @@ SpriteSheetExport render_sprite_sheet(const State &state, const SpriteSheetReque
          << "],\n  \"padding\": " << padding << ",\n  \"images\": [\n";
     for (size_t n = 0; n < slots.size(); ++n) {
         size_t slot = slots[n]; const auto &im = state.assets->data.images[slot];
-        int palette = placed_palettes.count(slot) ? placed_palettes[slot] :
-            (slot < state.assets->default_palettes.size() ? state.assets->default_palettes[slot] : 0);
+        int palette = slot < state.assets->default_palettes.size() ? state.assets->default_palettes[slot] : 0;
+        auto thumbnail = thumbnail_palettes.find(im.idx);
+        auto placed = placed_palettes.find(slot);
+        if (thumbnail != thumbnail_palettes.end()) palette = thumbnail->second;
+        if (placed != placed_palettes.end()) palette = placed->second;
         if (palette < 0 || palette >= (int)state.assets->data.palettes.size()) { out.error = "Artwork has an invalid default palette."; out.rgba.clear(); return out; }
         const auto &pal = state.assets->data.palettes[palette];
         int cell_x = int(n % columns) * out.cell_width, cell_y = int(n / columns) * out.cell_height;

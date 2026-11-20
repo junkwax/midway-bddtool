@@ -323,7 +323,8 @@ const BddCoreImage *Document::image(int id, size_t *slot) const {
     return nullptr;
 }
 bool Document::editable(const Placement &p) const {
-    return !p.locked && !(p.plane >= 0 && state_.planes[p.plane].locked);
+    return !p.locked && !(p.plane >= 0 && p.plane < (int)state_.planes.size() &&
+                         state_.planes[p.plane].locked);
 }
 std::vector<SceneItem> Document::scene(Point camera, bool source, int solo) const {
     return scene_items(state_, camera, source, solo);
@@ -541,13 +542,13 @@ bool Document::set_object(ObjectId id, int x, int y, int palette, bool fx, bool 
     return true;
 }
 bool Document::assign_plane(const std::vector<ObjectId> &ids, int target) {
-    if (target < 0 || target >= (int)state_.planes.size() || state_.planes[target].locked)
+    if (active_ || target < 0 || target >= (int)state_.planes.size() || state_.planes[target].locked)
         return false;
     begin("Assign layer");
     const auto &dest = state_.planes[target];
     for (auto &p : state_.objects)
         if (selected(ids, p.id) && editable(p) && p.plane != target) {
-            if (p.plane >= 0) {
+            if (p.plane >= 0 && p.plane < (int)state_.planes.size()) {
                 const auto &old = state_.planes[p.plane];
                 p.object.depth += old.x - old.source.x1;
                 p.object.sy += old.y - old.source.y1;
@@ -560,6 +561,20 @@ bool Document::assign_plane(const std::vector<ObjectId> &ids, int target) {
     bool ok = changed_;
     commit();
     return ok;
+}
+bool Document::set_object_z(const std::vector<ObjectId> &ids, int z) {
+    if (active_ || z < 0 || z > 255)
+        return false;
+    begin("Restack artwork");
+    for (auto &p : state_.objects) {
+        if (selected(ids, p.id) && editable(p) && ((p.object.wx >> 8) & 0xff) != z) {
+            p.object.wx = (p.object.wx & ~0xff00) | (z << 8);
+            touch();
+        }
+    }
+    bool changed = changed_;
+    commit();
+    return changed;
 }
 std::vector<ObjectId> Document::duplicate(const std::vector<ObjectId> &ids, int dx, int dy) {
     std::vector<Placement> copies;
@@ -587,6 +602,8 @@ std::vector<ObjectId> Document::duplicate(const std::vector<ObjectId> &ids, int 
     return result;
 }
 bool Document::erase(const std::vector<ObjectId> &ids) {
+    if (active_ || ids.empty())
+        return false;
     begin("Delete artwork");
     size_t n = state_.objects.size();
     state_.objects.erase(
@@ -648,19 +665,33 @@ bool Document::set_plane_flags(int i, bool hidden, bool locked) {
     return true;
 }
 bool Document::reorder_plane(int i, int direction) {
-    if (i < 0 || i >= (int)state_.planes.size() || state_.planes[i].locked)
+    int from = plane_stack_position(i);
+    return from >= 0 && set_plane_stack_position(i, from + direction);
+}
+int Document::plane_stack_position(int i) const {
+    if (i < 0 || i >= (int)state_.planes.size())
+        return -1;
+    int position = 0;
+    for (int j = 0; j < (int)state_.planes.size(); ++j)
+        if (std::tie(state_.planes[j].rank, j) < std::tie(state_.planes[i].rank, i))
+            ++position;
+    return position;
+}
+bool Document::set_plane_stack_position(int i, int to) {
+    if (active_ || i < 0 || i >= (int)state_.planes.size() || state_.planes[i].locked ||
+        to < 0 || to >= (int)state_.planes.size())
         return false;
     std::vector<int> order;
     for (size_t j = 0; j < state_.planes.size(); j++)
         order.push_back((int)j);
     std::stable_sort(order.begin(), order.end(),
                      [&](int a, int b) { return state_.planes[a].rank < state_.planes[b].rank; });
-    int from = (int)(std::find(order.begin(), order.end(), i) - order.begin()),
-        to = from + direction;
-    if (to < 0 || to >= (int)order.size())
+    auto from = std::find(order.begin(), order.end(), i);
+    if (from == order.begin() + to)
         return false;
     begin("Reorder layer");
-    std::swap(order[from], order[to]);
+    order.erase(from);
+    order.insert(order.begin() + to, i);
     for (size_t j = 0; j < order.size(); j++)
         state_.planes[order[j]].rank = (int)j;
     touch();
@@ -968,6 +999,13 @@ BddCoreStage Document::export_stage(std::vector<Plane> &planes) const {
 
 bool Document::save_game_sources(const std::string &path, std::string &report,
                                  std::string &error) const {
+    // A clean source write must not hide a known-invalid game export.
+    for (const auto &issue : validate()) {
+        if (issue.error) {
+            error = "Game source export blocked: " + issue.message;
+            return false;
+        }
+    }
     Document copy = *this;
     // Each module receives a constant translation during repacking, so sorting
     // source X here also sorts the generated X table within every module.

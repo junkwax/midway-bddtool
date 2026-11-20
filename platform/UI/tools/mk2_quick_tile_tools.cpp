@@ -7,7 +7,7 @@ void draw_mk2_quick_tile_tools(void)
 {
     if (ImGui::Button("Import PNG...", ImVec2(-1.0f, 0.0f))) {
         char path[512] = "";
-        if (file_dialog_open("Import PNG", "PNG Files\0*.PNG;*.png\0All Files\0*.*\0", path, sizeof path)) {
+        if (file_dialog_open("Import PNG for quick tiling", "PNG Files\0*.PNG;*.png\0All Files\0*.*\0", path, sizeof path)) {
             import_png(path);
         }
     }
